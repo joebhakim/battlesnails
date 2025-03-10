@@ -110,10 +110,10 @@ export class UI {
     this.countdownElement.className = 'countdown';
     this.levelCompleteMessage.appendChild(this.countdownElement);
     
-    // Add music toggle button (default to off)
+    // Add music toggle button (default to on)
     this.musicButton = document.createElement('button');
     this.musicButton.className = 'music-button';
-    this.musicButton.textContent = '🔇'; // Start with mute icon
+    this.musicButton.textContent = '🔊'; // Start with sound icon
     document.body.appendChild(this.musicButton);
     
     // Add CSS
@@ -292,22 +292,27 @@ export class UI {
       }
       
       .music-button {
-        position: absolute;
+        position: fixed;
         bottom: 20px;
         right: 20px;
-        width: 40px;
-        height: 40px;
-        background-color: rgba(0, 0, 0, 0.6);
+        width: 50px;
+        height: 50px;
+        background-color: rgba(0, 0, 0, 0.7);
         color: white;
-        border: none;
+        border: 2px solid rgba(255, 255, 255, 0.5);
         border-radius: 50%;
-        font-size: 20px;
+        font-size: 24px;
         cursor: pointer;
-        z-index: 100;
+        z-index: 9999;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.5);
       }
       
       .music-button:hover {
-        background-color: rgba(0, 0, 0, 0.8);
+        background-color: rgba(0, 0, 0, 0.9);
+        transform: scale(1.05);
       }
     `;
     document.head.appendChild(style);

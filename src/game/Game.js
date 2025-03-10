@@ -25,7 +25,7 @@ export class Game {
     
     // Set up camera
     this.camera = new THREE.PerspectiveCamera(
-      90, // Field of view (increased from 75 to 90 for wider FOV)
+      160, // Field of view (increased from 75 to 90 for wider FOV)
       window.innerWidth / window.innerHeight, // Aspect ratio
       0.1, // Near clipping plane
       1000 // Far clipping plane
@@ -102,8 +102,11 @@ export class Game {
     // Handle window resize
     window.addEventListener('resize', this.onWindowResize.bind(this));
     
-    // Initialize audio controller (but don't start music automatically)
+    // Initialize audio controller
     this.audio = new AudioController();
+    
+    // Start background music automatically
+    this.audio.startMusic();
     
     // Set up music toggle button
     this.ui.setupMusicButton(this.toggleMusic.bind(this));
@@ -292,6 +295,11 @@ export class Game {
     this.ui.setLevelInfo(this.currentLevel, npcName);
     this.ui.updateEnemyHealth(this.npcSnail.health, this.npcSnail.maxHealth);
     this.ui.hideLevelCompleteMessage();
+    
+    // Change music sequence for the new level
+    if (this.audio && this.audio.isPlaying) {
+      this.audio.changeSequence();
+    }
     
     // Reset transition flag
     this.isLevelTransitioning = false;
