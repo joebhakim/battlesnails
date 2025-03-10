@@ -77,6 +77,9 @@ export class Game {
     // Explicitly make sure the enemy health bar is at full
     this.ui.updateEnemyHealth(this.npcSnail.health, this.npcSnail.maxHealth);
     
+    // Initialize player health display
+    this.ui.updatePlayerHealth(this.playerSnail.health, this.playerSnail.maxHealth);
+    
     // Set up event listeners
     this.setupEvents();
     
@@ -130,8 +133,19 @@ export class Game {
       
       if (npcStrikeResult) {
         console.log('Player hit by NPC snail!');
-        // Implement player damage here if you want to add player health
-        // For now, just log the hit
+        
+        // Try to damage the player (will be ignored if invincible)
+        const damageApplied = this.playerSnail.takeDamage(1);
+        
+        // Update UI if damage was applied
+        if (damageApplied) {
+          this.ui.updatePlayerHealth(this.playerSnail.health, this.playerSnail.maxHealth);
+          
+          // Check if game is over
+          if (this.playerSnail.health <= 0) {
+            this.gameOver(false);
+          }
+        }
       }
     }
   }
