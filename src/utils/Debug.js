@@ -35,10 +35,12 @@ export class Debug {
     this.game.scene.scene.add(this.helpers);
     
     // Player hitbox visualization
-    this.playerHitbox = null;
+    this.playerBodyHitbox = null;
+    this.playerShellHitbox = null;
     
     // NPC hitbox visualization
-    this.npcHitbox = null;
+    this.npcBodyHitbox = null;
+    this.npcShellHitbox = null;
     
     // Eye stalk lines
     this.playerStalkLine = null;
@@ -47,6 +49,10 @@ export class Debug {
     // Eye stalk tip markers
     this.playerTipMarker = null;
     this.npcTipMarker = null;
+    
+    // Oriented bounding boxes
+    this.playerOrientedBox = null;
+    this.npcOrientedBox = null;
     
     // Bind event listeners
     this.setupEventListeners();
@@ -100,29 +106,52 @@ export class Debug {
     // Clear any existing helpers
     this.clearDebugHelpers();
     
-    // Create player hitbox visualization
-    const playerHitboxGeometry = new THREE.SphereGeometry(1, 16, 16);
-    const wireframeMaterial = new THREE.MeshBasicMaterial({ 
-      color: 0x00ff00, 
+    // Create wireframe materials with different colors
+    // Player colors - green family
+    const playerBodyWireframeMaterial = new THREE.MeshBasicMaterial({ 
+      color: 0x00ff00, // Bright green for body
       wireframe: true 
     });
     
-    this.playerHitbox = new THREE.Mesh(playerHitboxGeometry, wireframeMaterial);
-    this.helpers.add(this.playerHitbox);
-    
-    // Create NPC hitbox visualization
-    const npcHitboxGeometry = new THREE.SphereGeometry(
-      this.game.npcSnail.bodyRadius, 
-      16, 
-      16
-    );
-    const npcWireframeMaterial = new THREE.MeshBasicMaterial({ 
-      color: 0xff0000, 
+    const playerShellWireframeMaterial = new THREE.MeshBasicMaterial({ 
+      color: 0x009900, // Darker green for shell
       wireframe: true 
     });
     
-    this.npcHitbox = new THREE.Mesh(npcHitboxGeometry, npcWireframeMaterial);
-    this.helpers.add(this.npcHitbox);
+    // NPC colors - red family
+    const npcBodyWireframeMaterial = new THREE.MeshBasicMaterial({ 
+      color: 0xff0000, // Bright red for body
+      wireframe: true 
+    });
+    
+    const npcShellWireframeMaterial = new THREE.MeshBasicMaterial({ 
+      color: 0x990000, // Darker red for shell
+      wireframe: true 
+    });
+    
+    // Create player hitbox visualizations - separate geometries for body and shell
+    // Player body (capsule)
+    const playerBodyGeometry = new THREE.CapsuleGeometry(1.1, 2.2, 8, 8); // Slightly larger than actual
+    this.playerBodyHitbox = new THREE.Mesh(playerBodyGeometry, playerBodyWireframeMaterial);
+    this.playerBodyHitbox.rotation.x = Math.PI / 2; // Match player body rotation
+    this.helpers.add(this.playerBodyHitbox);
+    
+    // Player shell (hemisphere)
+    const playerShellGeometry = new THREE.SphereGeometry(1.3, 16, 8, 0, Math.PI * 2, 0, Math.PI / 2);
+    this.playerShellHitbox = new THREE.Mesh(playerShellGeometry, playerShellWireframeMaterial);
+    this.helpers.add(this.playerShellHitbox);
+    
+    // Create NPC hitbox visualizations - separate geometries for body and shell
+    // NPC body (capsule)
+    const npcBodyGeometry = new THREE.CapsuleGeometry(1.1, 2.2, 8, 8); // Slightly larger than actual
+    this.npcBodyHitbox = new THREE.Mesh(npcBodyGeometry, npcBodyWireframeMaterial);
+    this.npcBodyHitbox.rotation.x = Math.PI / 2; // Match NPC body rotation
+    this.helpers.add(this.npcBodyHitbox);
+    
+    // NPC shell (hemisphere)
+    const npcShellGeometry = new THREE.SphereGeometry(1.3, 16, 8, 0, Math.PI * 2, 0, Math.PI / 2);
+    this.npcShellHitbox = new THREE.Mesh(npcShellGeometry, npcShellWireframeMaterial);
+    this.helpers.add(this.npcShellHitbox);
     
     // Add eye stalk tip marker for player
     const tipMarkerGeometry = new THREE.SphereGeometry(0.1, 8, 8);
@@ -171,8 +200,11 @@ export class Debug {
       this.helpers.remove(this.helpers.children[0]);
     }
     
-    this.playerHitbox = null;
-    this.npcHitbox = null;
+    // Reset all references
+    this.playerBodyHitbox = null;
+    this.playerShellHitbox = null;
+    this.npcBodyHitbox = null;
+    this.npcShellHitbox = null;
     this.playerStalkLine = null;
     this.npcStalkLine = null;
     this.playerTipMarker = null;
@@ -192,28 +224,91 @@ export class Debug {
   }
   
   updateVisualHelpers() {
-    if (this.playerHitbox && this.npcHitbox) {
-      // Update player hitbox position
+    // Update player hitbox components
+    if (this.playerBodyHitbox && this.playerShellHitbox) {
+      // We need to create groups to handle the rotation correctly
+      if (!this.playerHitboxGroup) {
+        this.playerHitboxGroup = new THREE.Group();
+        this.helpers.add(this.playerHitboxGroup);
+        
+        // Move hitboxes to the group (if they're not already there)
+        if (this.playerBodyHitbox.parent !== this.playerHitboxGroup) {
+          this.helpers.remove(this.playerBodyHitbox);
+          this.helpers.remove(this.playerShellHitbox);
+          this.playerHitboxGroup.add(this.playerBodyHitbox);
+          this.playerHitboxGroup.add(this.playerShellHitbox);
+          
+          // Reset the body hitbox position within the group
+          this.playerBodyHitbox.position.set(0, 0, 0);
+          
+          // Position the shell relative to the body within the group
+          this.playerShellHitbox.position.set(0, 0.5, -0.8);
+        }
+      }
+      
+      // Get player position
       const playerPosition = this.game.playerSnail.mesh.position.clone();
-      this.playerHitbox.position.copy(playerPosition);
       
-      // Update NPC hitbox position
-      const npcPosition = this.game.npcSnail.getBodyPosition();
-      this.npcHitbox.position.copy(npcPosition);
-      
-      // Update eye stalk tip markers
-      if (this.playerTipMarker) {
-        const playerStalkTipPos = this.game.playerSnail.getEyeStalkPosition();
-        this.playerTipMarker.position.copy(playerStalkTipPos);
+      // Update the group position and rotation
+      this.playerHitboxGroup.position.copy(playerPosition);
+      this.playerHitboxGroup.rotation.y = this.game.playerSnail.mesh.rotation.y;
+    }
+    
+    // Update NPC hitbox components
+    if (this.npcBodyHitbox && this.npcShellHitbox) {
+      // We need to create groups to handle the rotation correctly
+      if (!this.npcHitboxGroup) {
+        this.npcHitboxGroup = new THREE.Group();
+        this.helpers.add(this.npcHitboxGroup);
+        
+        // Move hitboxes to the group (if they're not already there)
+        if (this.npcBodyHitbox.parent !== this.npcHitboxGroup) {
+          this.helpers.remove(this.npcBodyHitbox);
+          this.helpers.remove(this.npcShellHitbox);
+          this.npcHitboxGroup.add(this.npcBodyHitbox);
+          this.npcHitboxGroup.add(this.npcShellHitbox);
+          
+          // Reset the body hitbox position within the group
+          this.npcBodyHitbox.position.set(0, 0, 0);
+          
+          // Position the shell relative to the body within the group
+          this.npcShellHitbox.position.set(0, 0.5, -0.8);
+        }
       }
       
-      if (this.npcTipMarker) {
-        const npcStalkPos = this.game.npcSnail.getEyeStalkPosition();
-        this.npcTipMarker.position.copy(npcStalkPos);
-      }
+      // Get NPC position
+      const npcPosition = this.game.npcSnail.mesh.position.clone();
       
-      // Update eye stalk lines
-      this.updateEyeStalkLines();
+      // Update the group position and rotation
+      this.npcHitboxGroup.position.copy(npcPosition);
+      this.npcHitboxGroup.rotation.y = this.game.npcSnail.mesh.rotation.y;
+    }
+    
+    // Update eye stalk tip markers
+    if (this.playerTipMarker) {
+      const playerStalkTipPos = this.game.playerSnail.getEyeStalkPosition();
+      this.playerTipMarker.position.copy(playerStalkTipPos);
+    }
+    
+    if (this.npcTipMarker) {
+      const npcStalkPos = this.game.npcSnail.getEyeStalkPosition();
+      this.npcTipMarker.position.copy(npcStalkPos);
+    }
+    
+    // Update eye stalk lines
+    this.updateEyeStalkLines();
+    
+    // For the NPC snail
+    if (this.npcBodyHitbox && this.npcShellHitbox) {
+      const npcScaleFactor = this.game.npcSnail.scaleFactor || 1;
+      
+      // Update body hitbox
+      this.npcBodyHitbox.scale.set(npcScaleFactor, npcScaleFactor, npcScaleFactor);
+      this.npcBodyHitbox.position.set(0, 0, 0);
+      
+      // Update shell hitbox
+      this.npcShellHitbox.scale.set(npcScaleFactor, npcScaleFactor, npcScaleFactor);
+      this.npcShellHitbox.position.set(0, 0.5, -0.8);
     }
   }
   
@@ -292,13 +387,30 @@ export class Debug {
     // Check collision using the same logic as in the game
     const isColliding = this.game.collisionDetection.checkEyeStalkCollision(
       this.game.playerSnail.getEyeStalkPosition(),
-      this.game.npcSnail.getBodyPosition(),
-      this.game.npcSnail.getBodyRadius()
+      this.game.npcSnail
     );
+    
+    // Extract the detailed collision data
+    const details = this.game.collisionDetection.lastCollisionDetails;
+    let collisionType = '';
+    
+    if (isColliding) {
+      // Determine which part was hit
+      const bodyCollision = details.distanceToBody < details.bodyRadius;
+      const shellCollision = details.distanceToShell < details.shellRadius;
+      
+      if (bodyCollision && shellCollision) {
+        collisionType = 'BOTH BODY & SHELL';
+      } else if (bodyCollision) {
+        collisionType = 'BODY';
+      } else if (shellCollision) {
+        collisionType = 'SHELL';
+      }
+    }
     
     // If collision is newly detected, log it as an event
     if (isColliding && this.lastCollisionStatus !== true) {
-      this.addEvent("Collision detected!");
+      this.addEvent(`Collision detected! Hit ${collisionType}`);
       
       // If NPC is invincible during collision, log that too
       if (this.game.npcSnail.isInvincible) {
@@ -310,7 +422,11 @@ export class Debug {
     this.lastCollisionStatus = isColliding;
     
     // Update the collision status display
-    this.collisionStatus.textContent = isColliding ? 'COLLISION DETECTED!' : 'No collision';
+    if (isColliding) {
+      this.collisionStatus.textContent = `COLLISION DETECTED! (${collisionType})`;
+    } else {
+      this.collisionStatus.textContent = 'No collision';
+    }
     this.collisionStatus.className = isColliding ? 'collision-true' : '';
   }
   

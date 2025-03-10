@@ -3,9 +3,9 @@ import * as THREE from 'three';
 export class NPCSnail {
   constructor() {
     // NPC snail properties
-    this.speed = 8.0;
-    this.health = 3;
-    this.maxHealth = 3;
+    this.speed = 10.0;
+    this.health = 6;
+    this.maxHealth = 6;
     this.bodyRadius = 1.5; // For collision detection
     
     // Create the snail mesh
@@ -34,6 +34,10 @@ export class NPCSnail {
     this.bodyCenter.position.set(0, 0, 0); // Center of the body
     this.body.add(this.bodyCenter);
     
+    // Create a bounding box helper to better fit the snail's body and shell
+    this.boundingBox = new THREE.Box3();
+    this.tempVector = new THREE.Vector3();
+    
     // Create the shell
     const shellGeometry = new THREE.SphereGeometry(1.2, 32, 16, 0, Math.PI * 2, 0, Math.PI / 2);
     const shellMaterial = new THREE.MeshStandardMaterial({
@@ -56,6 +60,8 @@ export class NPCSnail {
     });
     
     this.eyeStalk = new THREE.Mesh(stalkGeometry, stalkMaterial);
+    // Move origin to bottom of cylinder instead of center
+    stalkGeometry.translate(0, 0.75, 0);
     this.eyeStalk.position.set(0.4, 0.5, 1.5);
     this.eyeStalk.castShadow = true;
     
@@ -68,7 +74,7 @@ export class NPCSnail {
     });
     
     this.eye = new THREE.Mesh(eyeGeometry, eyeMaterial);
-    this.eye.position.set(0, 0.6, 0);
+    this.eye.position.set(0, 1.5, 0);
     
     // Create the pupil
     const pupilGeometry = new THREE.SphereGeometry(0.1, 16, 16);
@@ -112,22 +118,42 @@ export class NPCSnail {
     // For AI behavior
     this.aiState = 'approach'; // 'approach' or 'flee'
     this.stateTimer = 0;
-    this.nextStateTime = this._getRandomTime(1, 3); // Random time between 1-3 seconds
+    this.nextStateTime = this._getRandomTime(0.5, 1.5); // Quicker state changes
+    this.erraticMovement = true; // Enable erratic movement
+    this.erraticTimer = 0;
+    this.erraticInterval = 0.3; // How often to make erratic movements
+    this.erraticIntensity = 0.4; // How much to deviate from the direct path
     
     // For eye stalk thrashing
-    this.isThrashing = false;
+    this.isThrashing = true; // Always thrashing now
     this.thrashTimer = 0;
     this.thrashCooldown = 0;
-    this.thrashDuration = 0.5; // How long a thrash lasts
-    this.thrashCooldownTime = this._getRandomTime(0.5, 2); // Random cooldown between thrashes
+    this.thrashDuration = 2.0; // Longer thrash duration for more sustained movement
+    this.thrashCooldownTime = 0.1; // Almost no cooldown between thrashes
+    this.thrashIntensity = 1.5; // Multiplier for thrash movement range
     this.targetStalkRotation = new THREE.Euler();
+    
+    // New sinusoidal movement properties
+    this.sinusoidTimer = 0;
+    this.sinusoidFrequency = 6.0; // Complete cycles per second
+    this.sinusoidAmplitude = Math.PI; // Maximum rotation (180 degrees)
     
     // For striking
     this.isStriking = false;
     this.strikeTime = 0;
-    this.strikeDuration = 0.5; // In seconds
-    this.strikeDistance = 0.8; // How far forward the eye stalk extends during strike
-    this.strikeChance = 0.01; // 1% chance per frame to strike during thrashing
+    this.strikeDuration = 0.3; // Faster strikes
+    this.strikeDistance = 1.2; // Longer strikes
+    this.strikeChance = 0.05; // 5% chance per frame to strike during thrashing (much higher)
+    this.strikeMaxCooldown = 0.6; // Maximum time between strikes
+    this.strikeCooldown = 0; // Current cooldown timer
+    
+    // Add velocity tracking for damage calculation
+    this.eyeStalkVelocity = 0;
+    this.prevEyeStalkRotation = new THREE.Euler(0, 0, 0); // Initialize with zeros
+    this.firstFrameUpdate = true; // Flag for first frame
+    
+    // Add eye stalk swing speed
+    this.eyeStalkSwingSpeed = 1.0; // Default speed multiplier (will be increased with level)
   }
   
   /**
@@ -152,7 +178,7 @@ export class NPCSnail {
     this._updateAIState(delta, playerPosition);
     
     // Update eye stalk thrashing
-    this._updateEyeStalkThrashing(delta);
+    this._updateEyeStalkThrashing(delta, playerPosition);
     
     // Update movement based on current AI state
     this.updateMovement(delta, bodyCollision, playerPosition);
@@ -184,6 +210,69 @@ export class NPCSnail {
         this.body.material.color.copy(this.originalBodyColor);
       }
     }
+    
+    // Calculate eye stalk velocity based on rotation change
+    const currentRotation = this.eyeStalk.rotation.clone();
+    
+    // Skip velocity calculation on first frame or if delta is too small
+    if (this.firstFrameUpdate) {
+      this.firstFrameUpdate = false;
+      this.prevEyeStalkRotation.copy(currentRotation);
+      return; // Exit early on first frame
+    }
+    
+    // Safe delta value to prevent division by zero
+    const safeDelta = Math.max(delta, 0.001);
+    
+    // Calculate rotation difference
+    const rotationDelta = new THREE.Vector2(
+      Math.abs(currentRotation.x - this.prevEyeStalkRotation.x),
+      Math.abs(currentRotation.y - this.prevEyeStalkRotation.y)
+    );
+    
+    // Calculate velocity as the magnitude of rotation change per second
+    const rotationSpeed = rotationDelta.length() / safeDelta;
+    
+    // Apply smoothing to avoid spikes
+    this.eyeStalkVelocity = THREE.MathUtils.lerp(
+      this.eyeStalkVelocity, 
+      rotationSpeed, 
+      0.5 // Smoothing factor
+    );
+    
+    // Store current rotation for next frame
+    this.prevEyeStalkRotation.copy(currentRotation);
+    
+    // Look at player with eye stalk
+    if (playerPosition) {
+      // Calculate direction to player
+      const direction = new THREE.Vector3().subVectors(playerPosition, this.mesh.position);
+      
+      // Convert to local space relative to the NPC's orientation
+      const localDirection = direction.clone().applyAxisAngle(
+        new THREE.Vector3(0, 1, 0), -this.mesh.rotation.y
+      );
+      
+      // Calculate angles for x and y rotation
+      // For x rotation (up/down): Use the angle in the y-z plane
+      const verticalAngle = Math.atan2(localDirection.y, localDirection.z);
+      
+      // For y rotation (left/right): Use the angle in the x-z plane
+      const horizontalAngle = Math.atan2(localDirection.x, localDirection.z);
+      
+      // Set rotations with a small random deviation to make it not perfect
+      this.targetStalkRotation.x = verticalAngle + (Math.random() * 0.2 - 0.1);
+      this.targetStalkRotation.y = horizontalAngle + (Math.random() * 0.2 - 0.1);
+      
+      // Apply eye stalk movement with level-based speed scaling
+      // Slower horizontal tracking
+      this.eyeStalk.rotation.y += (this.targetStalkRotation.y - this.eyeStalk.rotation.y) * 
+        (2.5 * delta * this.eyeStalkSwingSpeed);
+      
+      // Faster vertical tracking
+      this.eyeStalk.rotation.x += (this.targetStalkRotation.x - this.eyeStalk.rotation.x) * 
+        (4.0 * delta * this.eyeStalkSwingSpeed);
+    }
   }
   
   /**
@@ -199,6 +288,9 @@ export class NPCSnail {
     // Update state timer
     this.stateTimer += delta;
     
+    // Update erratic movement timer
+    this.erraticTimer += delta;
+    
     // Check if it's time to transition to the next state
     if (this.stateTimer >= this.nextStateTime) {
       // Toggle state between approach and flee
@@ -206,10 +298,18 @@ export class NPCSnail {
       
       // Reset timer and set new random duration
       this.stateTimer = 0;
-      this.nextStateTime = this._getRandomTime(1, 3);
+      this.nextStateTime = this._getRandomTime(0.5, 1.5);
       
       // Log for debugging
       console.log(`NPC switched to ${this.aiState} state for ${this.nextStateTime.toFixed(2)}s`);
+    }
+    
+    // Add occasional spontaneous state changes for unpredictability
+    if (Math.random() < 0.005) { // 0.5% chance per frame to suddenly change state
+      this.aiState = this.aiState === 'approach' ? 'flee' : 'approach';
+      this.stateTimer = 0;
+      this.nextStateTime = this._getRandomTime(0.5, 1.5);
+      console.log(`NPC spontaneously switched to ${this.aiState} state!`);
     }
   }
   
@@ -217,42 +317,81 @@ export class NPCSnail {
    * Update the eye stalk thrashing behavior
    * @private
    * @param {number} delta - Time delta since last frame
+   * @param {THREE.Vector3} playerPosition - Optional player position for targeted attacks
    */
-  _updateEyeStalkThrashing(delta) {
-    if (this.isThrashing) {
-      // If currently thrashing
-      this.thrashTimer += delta;
+  _updateEyeStalkThrashing(delta, playerPosition = null) {
+    // Always thrashing now
+    this.thrashTimer += delta;
+    
+    // Update sinusoidal timer
+    this.sinusoidTimer += delta;
+    
+    // Track if we should aim at player before striking
+    let shouldAimHorizontal = false;
+    
+    // Handle strike cooldown
+    if (!this.isStriking) {
+      this.strikeCooldown -= delta;
       
-      // Randomly move the eye stalk during thrashing
-      if (Math.random() < 0.2) { // 20% chance each frame to change direction
-        this._setRandomEyeStalkRotation();
-      }
-      
-      // Random chance to strike while thrashing
-      if (!this.isStriking && Math.random() < this.strikeChance) {
+      // If we're getting close to being able to strike again, consider aiming horizontally
+      if (this.strikeCooldown <= 0.1 && playerPosition && Math.random() < 0.6) {
+        shouldAimHorizontal = true;
+        
+        // If we're already aimed somewhat horizontally and player is in front, high chance to strike
+        const isNearHorizontal = Math.abs(this.eyeStalk.rotation.x) < 0.3;
+        if (isNearHorizontal && Math.random() < 0.4) {
+          this.strike();
+          this.strikeCooldown = this.strikeMaxCooldown;
+        }
+      } 
+      // Random chance to strike while thrashing, if not in cooldown
+      else if (this.strikeCooldown <= 0 && Math.random() < this.strikeChance) {
         this.strike();
+        this.strikeCooldown = this.strikeMaxCooldown;
       }
-      
-      // Apply smooth rotation towards target
-      this._updateEyeStalkRotation(delta);
-      
-      // End thrashing after duration
-      if (this.thrashTimer >= this.thrashDuration) {
-        this.isThrashing = false;
-        this.thrashTimer = 0;
-        this.thrashCooldown = 0;
-        this.thrashCooldownTime = this._getRandomTime(0.5, 2);
-      }
+    }
+    
+    // Calculate sinusoidal vertical motion (x rotation)
+    // Add Math.PI/2 offset to make it oscillate around horizontal instead of vertical
+    const verticalAngle = Math.sin(this.sinusoidTimer * this.sinusoidFrequency * Math.PI * 2) * this.sinusoidAmplitude + Math.PI/2;
+    
+    // Set the target rotation
+    if (shouldAimHorizontal && playerPosition) {
+      // When aiming to strike, prioritize aiming at player horizontally
+      this._aimAtPlayer(playerPosition);
+      // But override the vertical with sinusoidal motion
+      this.targetStalkRotation.x = verticalAngle;
     } else {
-      // If in cooldown
-      this.thrashCooldown += delta;
+      // Normal sinusoidal sweeping with some horizontal variation
+      this.targetStalkRotation.x = verticalAngle;
       
-      // Start new thrash after cooldown
-      if (this.thrashCooldown >= this.thrashCooldownTime) {
-        this.isThrashing = true;
-        this.thrashTimer = 0;
-        this._setRandomEyeStalkRotation();
+      // Horizontal rotation: if we have player position, face that direction with some randomness
+      if (playerPosition) {
+        // Calculate direction vector to player
+        const direction = new THREE.Vector3().subVectors(playerPosition, this.mesh.position);
+        
+        // Convert to local space relative to the NPC's orientation
+        const localDirection = direction.clone().applyAxisAngle(
+          new THREE.Vector3(0, 1, 0), -this.mesh.rotation.y
+        );
+        
+        // Calculate angle in the x-z plane (horizontal)
+        const horizontalAngle = Math.atan2(localDirection.x, localDirection.z);
+        
+        // Add slight randomness to the horizontal aiming
+        this.targetStalkRotation.y = horizontalAngle + (Math.random() * 0.3 - 0.15);
+      } else {
+        // If no player position, just add some random horizontal movement
+        this.targetStalkRotation.y += (Math.random() * 0.1 - 0.05);
       }
+    }
+    
+    // Apply smooth rotation towards target
+    this._updateEyeStalkRotation(delta);
+    
+    // Reset thrash timer for continuous thrashing
+    if (this.thrashTimer >= this.thrashDuration) {
+      this.thrashTimer = 0;
     }
     
     // Update strike animation if striking
@@ -260,7 +399,7 @@ export class NPCSnail {
       this.strikeTime += delta;
       
       if (this.strikeTime < this.strikeDuration / 2) {
-        // Strike forward
+        // Strike forward - faster and more aggressive
         const progress = this.strikeTime / (this.strikeDuration / 2);
         this.eyeStalk.scale.z = 1 + progress * this.strikeDistance;
       } else if (this.strikeTime < this.strikeDuration) {
@@ -277,14 +416,31 @@ export class NPCSnail {
   }
   
   /**
-   * Set a random rotation for the eye stalk
+   * Aim the eye stalk directly at the player for a more targeted attack
    * @private
+   * @param {THREE.Vector3} playerPosition - The player's position
    */
-  _setRandomEyeStalkRotation() {
-    // Random rotation within reasonable limits
-    const maxTilt = Math.PI / 3;
-    this.targetStalkRotation.x = (Math.random() * 2 - 1) * maxTilt;
-    this.targetStalkRotation.y = (Math.random() * 2 - 1) * maxTilt;
+  _aimAtPlayer(playerPosition) {
+    // Calculate direction vector to player
+    const direction = new THREE.Vector3().subVectors(playerPosition, this.mesh.position);
+    
+    // Convert to local space relative to the NPC's orientation
+    const localDirection = direction.clone().applyAxisAngle(
+      new THREE.Vector3(0, 1, 0), -this.mesh.rotation.y
+    );
+    
+    // Calculate angles for x and y rotation
+    // For x rotation (up/down): Use the angle in the y-z plane
+    const verticalAngle = Math.atan2(localDirection.y, localDirection.z);
+    
+    // For y rotation (left/right): Use the angle in the x-z plane
+    const horizontalAngle = Math.atan2(localDirection.x, localDirection.z);
+    
+    // Set rotations with a small random deviation to make it not perfect
+    this.targetStalkRotation.x = verticalAngle + (Math.random() * 0.2 - 0.1);
+    this.targetStalkRotation.y = horizontalAngle + (Math.random() * 0.2 - 0.1);
+    
+    console.log("NPC aiming directly at player!");
   }
   
   /**
@@ -293,17 +449,20 @@ export class NPCSnail {
    * @param {number} delta - Time delta since last frame
    */
   _updateEyeStalkRotation(delta) {
+    // More responsive/faster rotation - increased from 8 to 12
+    const interpolationSpeed = 12; 
+    
     // Apply smooth rotation towards target
     this.eyeStalk.rotation.x = THREE.MathUtils.lerp(
       this.eyeStalk.rotation.x,
       this.targetStalkRotation.x,
-      8 * delta
+      interpolationSpeed * delta
     );
     
     this.eyeStalk.rotation.y = THREE.MathUtils.lerp(
       this.eyeStalk.rotation.y,
       this.targetStalkRotation.y,
-      8 * delta
+      interpolationSpeed * delta
     );
   }
   
@@ -396,7 +555,22 @@ export class NPCSnail {
       .normalize();
     
     // Calculate angle to player in the XZ plane (ground plane)
-    const angleToPlayer = Math.atan2(directionToPlayer.x, directionToPlayer.z);
+    let angleToPlayer = Math.atan2(directionToPlayer.x, directionToPlayer.z);
+    
+    // Apply erratic movement if enabled
+    if (this.erraticMovement && this.erraticTimer >= this.erraticInterval) {
+      // Reset timer
+      this.erraticTimer = 0;
+      
+      // Add random angle deviation for erratic movement
+      const erraticAngle = (Math.random() * 2 - 1) * Math.PI * this.erraticIntensity;
+      angleToPlayer += erraticAngle;
+      
+      // Occasionally make very sharp turns
+      if (Math.random() < 0.1) { // 10% chance
+        angleToPlayer += (Math.random() > 0.5 ? 1 : -1) * Math.PI * 0.5; // 90-degree turn
+      }
+    }
     
     // If approaching, go toward player; if fleeing, go away from player
     if (this.aiState === 'approach') {
@@ -433,32 +607,32 @@ export class NPCSnail {
     }
   }
   
+  /**
+   * Handle taking damage from the player
+   * @param {number} amount - Amount of damage to take
+   * @returns {boolean} Whether damage was successfully applied
+   */
   takeDamage(amount) {
-    // Don't take damage if invincible
+    // Can't take damage if invincible
     if (this.isInvincible) {
-      return;
+      return false;
     }
     
-    // Store the previous health for logging
-    const previousHealth = this.health;
+    // Apply fractional damage
+    this.health = Math.max(0, this.health - amount);
     
-    // Reduce health
-    this.health -= amount;
-    
-    // Clamp health
-    this.health = Math.max(0, this.health);
-    
-    // Start damage visual effect
+    // Set damage visual effect
     this.isDamaged = true;
     this.damageEffectTime = 0;
-    this.body.material.color.set(0xFF0000); // Bright red to indicate damage
+    this.body.material.color.set(this.damageColor);
     
-    // Force movement change when damaged
-    this.timeSinceLastMovement = 3;
-    
-    // Apply invincibility
+    // Set invincibility period
     this.isInvincible = true;
     this.invincibilityTime = 0;
+    
+    console.log(`NPC took ${amount.toFixed(2)} damage! Health: ${this.health.toFixed(2)}/${this.maxHealth}`);
+    
+    return true;
   }
   
   getBodyPosition() {
@@ -468,8 +642,34 @@ export class NPCSnail {
     return position;
   }
   
+  /**
+   * Get the body radius for collision detection
+   * @returns {number} The collision radius
+   */
   getBodyRadius() {
-    return this.bodyRadius;
+    // For collision purposes, we use a composite radius that encompasses
+    // both the body and shell. This approximates the true shape better than
+    // the bounding box approach while still keeping collision detection simple.
+    
+    // Get positions in world space
+    const bodyPosition = new THREE.Vector3();
+    this.body.getWorldPosition(bodyPosition);
+    
+    const shellPosition = new THREE.Vector3();
+    this.shell.getWorldPosition(shellPosition);
+    
+    // The body is roughly a capsule with radius 1.0 and length 2.0
+    const bodyRadius = 1.0;
+    
+    // The shell is roughly a hemisphere with radius 1.2
+    const shellRadius = 1.2;
+    
+    // Measure distance between body and shell centers
+    const bodyShellDistance = bodyPosition.distanceTo(shellPosition);
+    
+    // Return the maximum reach from the body center to the furthest point on the shell
+    // This is the body radius plus the distance to the shell center plus the shell radius
+    return Math.max(bodyRadius, bodyShellDistance + shellRadius);
   }
   
   getEyeStalkPosition() {
@@ -504,5 +704,29 @@ export class NPCSnail {
     
     return this.strikeTime >= halfDuration - tolerance && 
            this.strikeTime <= halfDuration + tolerance;
+  }
+  
+  /**
+   * Get the current eye stalk velocity (for damage calculation)
+   * @returns {number} The current velocity
+   */
+  getEyeStalkVelocity() {
+    // Ensure we always return a valid number
+    return isNaN(this.eyeStalkVelocity) ? 0 : this.eyeStalkVelocity;
+  }
+  
+  /**
+   * Calculate potential damage based on current velocity
+   * @returns {number} The potential damage
+   */
+  getPotentialDamage() {
+    // Get a safe velocity value
+    const safeVelocity = this.getEyeStalkVelocity();
+    
+    // Convert velocity to damage with explicit validation
+    const damage = safeVelocity / 5;
+    
+    // Ensure the result is a valid number
+    return isNaN(damage) ? 0 : damage;
   }
 } 

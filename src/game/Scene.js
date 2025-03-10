@@ -27,18 +27,40 @@ export class Scene {
     this.scene.add(directionalLight);
     
     // Create a ground plane
-    const groundGeometry = new THREE.PlaneGeometry(100, 100);
+    const groundSize = 100;
+    const gridDivisions = 50; // Smallish grid size
+    
+    // Create a grid helper for reference
+    const gridHelper = new THREE.GridHelper(groundSize, gridDivisions);
+    gridHelper.position.y = -2; // Same height as the ground
+    
+    // Customize the grid colors - alternating between two shades of green
+    const lightGreen = new THREE.Color(0x7CFC00); // Lawn green
+    const darkGreen = new THREE.Color(0x228B22); // Forest green
+    
+    // Set colors for the grid lines
+    gridHelper.material.color.set(darkGreen);
+    // Larger grid lines
+    gridHelper.material.linewidth = 6;
+    gridHelper.material.vertexColors = false;
+    
+    // Rotate grid to lie flat on XZ plane (it's already in this orientation by default)
+    
+    // Create actual ground plane with a texture
+    const groundGeometry = new THREE.PlaneGeometry(groundSize, groundSize);
     const groundMaterial = new THREE.MeshStandardMaterial({ 
-      color: 0x7CFC00, // Lawn green
-      roughness: 1,
-      metalness: 0
+      color: lightGreen,
+      roughness: 0.8,
+      metalness: 0.1
     });
     
     const ground = new THREE.Mesh(groundGeometry, groundMaterial);
     ground.rotation.x = -Math.PI / 2; // Rotate to be horizontal
-    ground.position.y = -2; // Position slightly below the origin
+    ground.position.y = -2.01; // Slightly below the grid to prevent z-fighting
     ground.receiveShadow = true;
     
+    // Add both the grid and the ground plane
+    this.scene.add(gridHelper);
     this.scene.add(ground);
   }
   

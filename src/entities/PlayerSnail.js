@@ -7,8 +7,8 @@ export class PlayerSnail {
     this.rotationSpeed = 10.0;
     
     // Health system
-    this.health = 5;
-    this.maxHealth = 5;
+    this.health = 500;
+    this.maxHealth = 500;
     this.isInvincible = false;
     this.invincibilityTime = 0;
     this.invincibilityDuration = 1.0; // 1 second of invincibility after being hit
@@ -65,6 +65,8 @@ export class PlayerSnail {
     });
     
     this.eyeStalk = new THREE.Mesh(stalkGeometry, stalkMaterial);
+    // Move origin to bottom of cylinder instead of center
+    stalkGeometry.translate(0, 0.75, 0);
     this.eyeStalk.position.set(0.4, 0.5, 1.5);
     this.eyeStalk.castShadow = true;
     
@@ -77,7 +79,7 @@ export class PlayerSnail {
     });
     
     this.eye = new THREE.Mesh(eyeGeometry, eyeMaterial);
-    this.eye.position.set(0, 0.8, 0);
+    this.eye.position.set(0, 1.5, 0);
     
     // Create the pupil
     const pupilGeometry = new THREE.SphereGeometry(0.1, 16, 16);
@@ -113,6 +115,15 @@ export class PlayerSnail {
     this.bodyCenter = new THREE.Object3D();
     this.bodyCenter.position.set(0, 0, 0); // Center of the body
     this.body.add(this.bodyCenter);
+
+    // Create a bounding box helper to better fit the snail's body and shell
+    this.boundingBox = new THREE.Box3();
+    this.tempVector = new THREE.Vector3();
+
+    // Add velocity tracking for damage calculation
+    this.eyeStalkVelocity = 0;
+    this.prevEyeStalkRotation = new THREE.Euler(0, 0, 0); // Initialize with zeros
+    this.firstFrameUpdate = true; // Flag for first frame
   }
   
   /**
@@ -233,6 +244,38 @@ export class PlayerSnail {
         this.body.material.color.copy(this.originalBodyColor);
       }
     }
+
+    // Calculate eye stalk velocity based on rotation change
+    const currentRotation = this.eyeStalk.rotation.clone();
+    
+    // Skip velocity calculation on first frame or if delta is too small
+    if (this.firstFrameUpdate) {
+      this.firstFrameUpdate = false;
+      this.prevEyeStalkRotation.copy(currentRotation);
+      return; // Exit early on first frame
+    }
+    
+    // Safe delta value to prevent division by zero
+    const safeDelta = Math.max(delta, 0.001);
+    
+    // Calculate rotation difference
+    const rotationDelta = new THREE.Vector2(
+      Math.abs(currentRotation.x - this.prevEyeStalkRotation.x),
+      Math.abs(currentRotation.y - this.prevEyeStalkRotation.y)
+    );
+    
+    // Calculate velocity as the magnitude of rotation change per second
+    const rotationSpeed = rotationDelta.length() / safeDelta;
+    
+    // Apply smoothing to avoid spikes
+    this.eyeStalkVelocity = THREE.MathUtils.lerp(
+      this.eyeStalkVelocity, 
+      rotationSpeed, 
+      0.5 // Smoothing factor
+    );
+    
+    // Store current rotation for next frame
+    this.prevEyeStalkRotation.copy(currentRotation);
   }
   
   aimEyeStalk(mouseX, mouseY) {
@@ -293,11 +336,33 @@ export class PlayerSnail {
   }
 
   /**
-   * Get the radius of the snail body for collision detection
+   * Get the body radius for collision detection
    * @returns {number} The collision radius
    */
   getBodyRadius() {
-    return this.bodyRadius;
+    // For collision purposes, we use a composite radius that encompasses
+    // both the body and shell. This approximates the true shape better than
+    // the bounding box approach while still keeping collision detection simple.
+    
+    // Get positions in world space
+    const bodyPosition = new THREE.Vector3();
+    this.body.getWorldPosition(bodyPosition);
+    
+    const shellPosition = new THREE.Vector3();
+    this.shell.getWorldPosition(shellPosition);
+    
+    // The body is roughly a capsule with radius 1.0 and length 2.0
+    const bodyRadius = 1.0;
+    
+    // The shell is roughly a hemisphere with radius 1.2
+    const shellRadius = 1.2;
+    
+    // Measure distance between body and shell centers
+    const bodyShellDistance = bodyPosition.distanceTo(shellPosition);
+    
+    // Return the maximum reach from the body center to the furthest point on the shell
+    // This is the body radius plus the distance to the shell center plus the shell radius
+    return Math.max(bodyRadius, bodyShellDistance + shellRadius);
   }
 
   /**
@@ -311,7 +376,7 @@ export class PlayerSnail {
       return false;
     }
     
-    // Apply damage
+    // Apply fractional damage
     this.health = Math.max(0, this.health - amount);
     
     // Set damage visual effect
@@ -323,8 +388,32 @@ export class PlayerSnail {
     this.isInvincible = true;
     this.invincibilityTime = 0;
     
-    console.log(`Player took ${amount} damage! Health: ${this.health}/${this.maxHealth}`);
+    console.log(`Player took ${amount.toFixed(2)} damage! Health: ${this.health.toFixed(2)}/${this.maxHealth}`);
     
     return true;
+  }
+
+  /**
+   * Get the current eye stalk velocity (for damage calculation)
+   * @returns {number} The current velocity
+   */
+  getEyeStalkVelocity() {
+    // Ensure we always return a valid number
+    return isNaN(this.eyeStalkVelocity) ? 0 : this.eyeStalkVelocity;
+  }
+
+  /**
+   * Calculate potential damage based on current velocity
+   * @returns {number} The potential damage
+   */
+  getPotentialDamage() {
+    // Get a safe velocity value
+    const safeVelocity = this.getEyeStalkVelocity();
+    
+    // Convert velocity to damage with explicit validation
+    const damage = safeVelocity / 5;
+    
+    // Ensure the result is a valid number
+    return isNaN(damage) ? 0 : damage;
   }
 } 

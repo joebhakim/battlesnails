@@ -7,6 +7,7 @@ import { KeyboardControls } from '../controls/KeyboardControls.js';
 import { CollisionDetection } from '../utils/CollisionDetection.js';
 import { UI } from '../utils/UI.js';
 import { Debug } from '../utils/Debug.js';
+import { AudioController } from '../audio/AudioController.js';
 
 import * as THREE from 'three';
 
@@ -47,6 +48,18 @@ export class Game {
     
     // Flag to track if player is striking
     this.isPlayerStriking = false;
+    
+    // Add cooldown timers for damage
+    this.playerDamageCooldown = 0;
+    this.npcDamageCooldown = 0;
+    this.damageCooldownDuration = 0.5; // Half a second between possible damage
+    
+    // Add level tracking
+    this.currentLevel = 1;
+    this.isLevelTransitioning = false;
+    
+    // Add audio controller
+    this.audio = null;
   }
   
   init() {
@@ -74,6 +87,9 @@ export class Game {
     this.ui = new UI();
     this.debug = new Debug(this);
     
+    // Set level info
+    this.ui.setLevelInfo(1, 'Placeholder Pete');
+    
     // Explicitly make sure the enemy health bar is at full
     this.ui.updateEnemyHealth(this.npcSnail.health, this.npcSnail.maxHealth);
     
@@ -85,66 +101,81 @@ export class Game {
     
     // Handle window resize
     window.addEventListener('resize', this.onWindowResize.bind(this));
+    
+    // Initialize audio controller (but don't start music automatically)
+    this.audio = new AudioController();
+    
+    // Set up music toggle button
+    this.ui.setupMusicButton(this.toggleMusic.bind(this));
   }
   
   setupEvents() {
-    // Set up mouse events for strike action
-    this.container.addEventListener('click', () => {
-      // Initiate the strike animation
-      this.playerSnail.strike();
-      this.isPlayerStriking = true;
-      
-      // No need for console.logs - debug info is shown in UI
-    });
+    // We no longer need this for strike animation
+    // this.container.addEventListener('click', () => {
+    //   this.playerSnail.strike();
+    // });
   }
   
   checkCollisions() {
-    // Only check player strike collisions if player is striking
-    if (this.isPlayerStriking) {
-      // Check if player's eye stalk is hitting NPC snail
-      const playerStrikeResult = this.collisionDetection.checkEyeStalkCollision(
-        this.playerSnail.getEyeStalkPosition(),
-        this.npcSnail.getBodyPosition(),
-        this.npcSnail.getBodyRadius()
-      );
+    // Get velocities and calculate potential damage with safeguards
+    const playerVelocity = this.playerSnail.getEyeStalkVelocity() || 0;
+    const playerDamage = this.playerSnail.getPotentialDamage() || 0;
+    
+    const npcVelocity = this.npcSnail.getEyeStalkVelocity() || 0;
+    const npcDamage = this.npcSnail.getPotentialDamage() || 0;
+    
+    // Update the velocity display with safe values
+    this.ui.updateVelocityDisplay(
+      isNaN(playerVelocity) ? 0 : playerVelocity,
+      isNaN(playerDamage) ? 0 : playerDamage,
+      isNaN(npcVelocity) ? 0 : npcVelocity,
+      isNaN(npcDamage) ? 0 : npcDamage
+    );
+    
+    // Check if player's eye stalk is hitting NPC snail
+    const playerHitNpc = this.collisionDetection.checkEyeStalkCollision(
+      this.playerSnail.getEyeStalkPosition(),
+      this.npcSnail
+    );
+    
+    if (playerHitNpc && this.npcDamageCooldown <= 0) {
+      // Try to damage the NPC snail with velocity-based damage
+      this.npcSnail.takeDamage(playerDamage);
       
-      if (playerStrikeResult) {
-        // Try to damage the NPC snail (will be ignored if invincible)
-        this.npcSnail.takeDamage(1);
-        
-        // Update UI
-        this.ui.updateEnemyHealth(this.npcSnail.health, this.npcSnail.maxHealth);
-        
-        // Check if game is over
-        if (this.npcSnail.health <= 0) {
-          this.gameOver(true);
-        }
+      // Start cooldown
+      this.npcDamageCooldown = this.damageCooldownDuration;
+      
+      // Update UI
+      this.ui.updateEnemyHealth(this.npcSnail.health, this.npcSnail.maxHealth);
+      
+      // Check if game is over
+      if (this.npcSnail.health <= 0) {
+        this.gameOver(true);
       }
     }
     
-    // Check NPC strikes against player
-    if (this.npcSnail.isStriking && this.npcSnail.isAtMaxStrikeExtension()) {
-      // Check if NPC's eye stalk is hitting player snail
-      const npcStrikeResult = this.collisionDetection.checkEyeStalkCollision(
-        this.npcSnail.getEyeStalkPosition(),
-        this.playerSnail.getBodyPosition(),
-        this.playerSnail.getBodyRadius()
-      );
+    // Check if NPC's eye stalk is hitting player snail
+    const npcHitPlayer = this.collisionDetection.checkEyeStalkCollision(
+      this.npcSnail.getEyeStalkPosition(),
+      this.playerSnail
+    );
+    
+    if (npcHitPlayer && this.playerDamageCooldown <= 0) {
+      console.log('Player hit by NPC snail!');
       
-      if (npcStrikeResult) {
-        console.log('Player hit by NPC snail!');
+      // Try to damage the player with velocity-based damage
+      const damageApplied = this.playerSnail.takeDamage(npcDamage);
+      
+      if (damageApplied) {
+        // Start cooldown
+        this.playerDamageCooldown = this.damageCooldownDuration;
         
-        // Try to damage the player (will be ignored if invincible)
-        const damageApplied = this.playerSnail.takeDamage(1);
+        // Update UI
+        this.ui.updatePlayerHealth(this.playerSnail.health, this.playerSnail.maxHealth);
         
-        // Update UI if damage was applied
-        if (damageApplied) {
-          this.ui.updatePlayerHealth(this.playerSnail.health, this.playerSnail.maxHealth);
-          
-          // Check if game is over
-          if (this.playerSnail.health <= 0) {
-            this.gameOver(false);
-          }
+        // Check if game is over
+        if (this.playerSnail.health <= 0) {
+          this.gameOver(false);
         }
       }
     }
@@ -156,10 +187,8 @@ export class Game {
    */
   checkBodyCollisions() {
     return this.collisionDetection.checkBodyCollision(
-      this.playerSnail.getBodyPosition(),
-      this.playerSnail.getBodyRadius(),
-      this.npcSnail.getBodyPosition(),
-      this.npcSnail.getBodyRadius()
+      this.playerSnail,
+      this.npcSnail
     );
   }
   
@@ -174,9 +203,98 @@ export class Game {
     this.isRunning = false;
   }
   
+  /**
+   * Handle game over or level completion
+   * @param {boolean} playerWon - Whether the player won
+   */
   gameOver(playerWon) {
-    this.stop();
-    this.ui.showGameOverMessage(playerWon);
+    if (playerWon) {
+      // Player won - handle level progression
+      this.handleLevelCompletion();
+    } else {
+      // Player lost - game over
+      this.isRunning = false;
+      this.ui.showGameOverMessage(false);
+    }
+  }
+  
+  /**
+   * Handle level completion and transition to next level
+   */
+  handleLevelCompletion() {
+    // Prevent multiple transitions
+    if (this.isLevelTransitioning) return;
+    this.isLevelTransitioning = true;
+    
+    // Show level complete message with countdown
+    this.ui.showLevelCompleteMessage(this.currentLevel);
+    
+    // Remove old enemy
+    this.scene.scene.remove(this.npcSnail.mesh);
+    
+    // Start countdown to next level
+    let countdown = 3;
+    this.ui.updateCountdown(countdown);
+    
+    const countdownInterval = setInterval(() => {
+      countdown--;
+      this.ui.updateCountdown(countdown);
+      
+      if (countdown <= 0) {
+        clearInterval(countdownInterval);
+        this.startNextLevel();
+      }
+    }, 1000);
+  }
+  
+  /**
+   * Start the next level with a new enemy
+   */
+  startNextLevel() {
+    // Increment level
+    this.currentLevel++;
+    
+    // Create new NPC snail
+    this.npcSnail = new NPCSnail();
+    this.scene.scene.add(this.npcSnail.mesh);
+    this.npcSnail.mesh.position.set(0, 0, -5);
+    
+    // Calculate size scale factor based on level (1.5x per level)
+    const scaleFactor = Math.pow(1.5, this.currentLevel - 1);
+    
+    // Apply scaling to the entire enemy mesh
+    this.npcSnail.mesh.scale.set(scaleFactor, scaleFactor, scaleFactor);
+    
+    // Store the scale factor on the NPC for collision detection adjustments
+    this.npcSnail.scaleFactor = scaleFactor;
+    
+    // Adjust position based on scale to prevent clipping through floor
+    // The y-position needs adjustment based on how the snail is modeled
+    const yOffset = (scaleFactor - 1) * 0.5; // Adjust as needed
+    this.npcSnail.mesh.position.y = yOffset;
+    
+    // Scale difficulty with level
+    this.npcSnail.speed = Math.min(10 + (this.currentLevel - 1) * 1, 15); // Cap at 15
+    
+    // Scale health with a more moderate 1.2x multiplier per level
+    const healthScaleFactor = Math.pow(1.2, this.currentLevel - 1);
+    this.npcSnail.health = Math.ceil(this.npcSnail.maxHealth * healthScaleFactor);
+    this.npcSnail.maxHealth = Math.ceil(this.npcSnail.maxHealth * healthScaleFactor);
+    
+    // Scale eye stalk swing speed (faster at higher levels)
+    // This controls how fast the enemy can swing its eye stalk to attack
+    this.npcSnail.eyeStalkSwingSpeed = 1.0 + (this.currentLevel - 1) * 0.2; // 20% faster per level
+    
+    // Give the NPC a level-based name
+    const npcName = `Placeholder Pete ${this.currentLevel}`;
+    
+    // Update UI with new level info
+    this.ui.setLevelInfo(this.currentLevel, npcName);
+    this.ui.updateEnemyHealth(this.npcSnail.health, this.npcSnail.maxHealth);
+    this.ui.hideLevelCompleteMessage();
+    
+    // Reset transition flag
+    this.isLevelTransitioning = false;
   }
   
   animate() {
@@ -233,15 +351,12 @@ export class Game {
       this.camera.lookAt(eyeStalkPosition);
     }
     
-    // Check for strike collisions during strike animation from either snail
-    if (this.playerSnail.isStriking || (this.npcSnail && this.npcSnail.isStriking)) {
-      this.checkCollisions();
-    }
+    // Update damage cooldowns
+    this.playerDamageCooldown = Math.max(0, this.playerDamageCooldown - delta);
+    this.npcDamageCooldown = Math.max(0, this.npcDamageCooldown - delta);
     
-    // Check for end of strike animation to reset striking state
-    if (this.isPlayerStriking && !this.playerSnail.isStriking) {
-      this.isPlayerStriking = false;
-    }
+    // Check collisions every frame, not just during strikes
+    this.checkCollisions();
     
     // Update debug information
     this.debug.update();
@@ -260,5 +375,14 @@ export class Game {
     
     // Update renderer size
     this.renderer.updateSize();
+  }
+  
+  // Add a method to toggle music
+  toggleMusic() {
+    if (this.audio.isPlaying) {
+      this.audio.stopMusic();
+    } else {
+      this.audio.startMusic();
+    }
   }
 } 
