@@ -8,6 +8,9 @@ import { CollisionDetection } from '../utils/CollisionDetection.js';
 import { UI } from '../utils/UI.js';
 import { Debug } from '../utils/Debug.js';
 import { AudioController } from '../audio/AudioController.js';
+import { NetworkManager } from '../network/NetworkManager.js';
+import { MultiplayerUI } from '../utils/MultiplayerUI.js';
+import { NetworkPlayerSnail } from '../entities/NetworkPlayerSnail.js';
 
 import * as THREE from 'three';
 
@@ -60,6 +63,12 @@ export class Game {
     
     // Add audio controller
     this.audio = null;
+    
+    // Add multiplayer components
+    this.networkManager = null;
+    this.multiplayerUI = null;
+    this.remotePlayerSnail = null;
+    this.isMultiplayerActive = false;
   }
   
   init() {
@@ -110,6 +119,9 @@ export class Game {
     
     // Set up music toggle button
     this.ui.setupMusicButton(this.toggleMusic.bind(this));
+    
+    // Initialize multiplayer components
+    this.initMultiplayer();
   }
   
   setupEvents() {
@@ -367,6 +379,25 @@ export class Game {
     // Render scene
     this.renderer.render(this.scene.scene, this.camera);
     
+    // Send player state if multiplayer is active
+    if (this.isMultiplayerActive && this.networkManager) {
+      const playerState = {
+        position: this.playerSnail.mesh.position.clone(),
+        rotation: this.playerSnail.mesh.rotation.clone(),
+        eyeStalkRotation: this.playerSnail.eyeStalk.rotation.clone(),
+        health: this.playerSnail.health,
+        isStriking: this.playerSnail.isStriking,
+        timestamp: Date.now()
+      };
+      
+      this.networkManager.sendPlayerState(playerState);
+    }
+    
+    // Update remote player if available
+    if (this.isMultiplayerActive && this.remotePlayerSnail) {
+      this.remotePlayerSnail.networkUpdate(delta);
+    }
+    
     // Request next frame
     requestAnimationFrame(this.animate.bind(this));
   }
@@ -387,5 +418,83 @@ export class Game {
     } else {
       this.audio.startMusic();
     }
+  }
+  
+  /**
+   * Initialize multiplayer components
+   */
+  initMultiplayer() {
+    // Create network manager
+    this.networkManager = new NetworkManager(this);
+    
+    // Set up data handler
+    this.networkManager.onDataReceived = (data) => {
+      this.handleNetworkData(data);
+    };
+    
+    // Add connection handlers
+    this.networkManager.onConnectionEstablished = () => {
+      this.handleConnectionEstablished();
+    };
+    
+    this.networkManager.onConnectionLost = () => {
+      this.handleConnectionLost();
+    };
+    
+    // Create multiplayer UI
+    this.multiplayerUI = new MultiplayerUI(this);
+    
+    // Create remote player
+    this.remotePlayerSnail = new NetworkPlayerSnail();
+    
+    // Don't add to scene yet - wait for connection
+  }
+  
+  /**
+   * Handle incoming network data
+   * @param {Object} data - The received data
+   */
+  handleNetworkData(data) {
+    if (data.type === 'playerState') {
+      if (this.remotePlayerSnail) {
+        this.remotePlayerSnail.processNetworkData(data.data);
+      }
+    }
+  }
+  
+  /**
+   * Handle successful connection establishment
+   */
+  handleConnectionEstablished() {
+    console.log('Connection established - starting multiplayer');
+    this.isMultiplayerActive = true;
+    
+    // Add remote player to scene if not already added
+    if (this.remotePlayerSnail && !this.remotePlayerSnail.mesh.parent) {
+      this.scene.scene.add(this.remotePlayerSnail.mesh);
+      
+      // Position remote player
+      const offset = this.networkManager.isHost ? -10 : 10;
+      this.remotePlayerSnail.mesh.position.set(offset, 0, 0);
+    }
+    
+    // Update UI
+    this.ui.showMessage('Player connected!', 3000);
+  }
+  
+  /**
+   * Handle connection loss
+   */
+  handleConnectionLost() {
+    console.log('Connection lost');
+    this.isMultiplayerActive = false;
+    
+    // Remove remote player from scene
+    if (this.remotePlayerSnail && this.remotePlayerSnail.mesh.parent) {
+      this.scene.scene.remove(this.remotePlayerSnail.mesh);
+    }
+    
+    // Update UI
+    this.ui.showMessage('Connection lost. Attempting to reconnect...', 3000);
   }
 } 
