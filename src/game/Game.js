@@ -24,13 +24,13 @@ export class Game {
     
     // Set up camera
     this.camera = new THREE.PerspectiveCamera(
-      75, // Field of view
+      90, // Field of view (increased from 75 to 90 for wider FOV)
       window.innerWidth / window.innerHeight, // Aspect ratio
       0.1, // Near clipping plane
       1000 // Far clipping plane
     );
-    this.camera.position.set(0, 10, 20);
-    this.camera.lookAt(0, 0, 0);
+    
+    // Camera will be positioned dynamically in the animate method to follow the eye stalk
     
     // Set up game entities
     this.playerSnail = null;
@@ -58,8 +58,12 @@ export class Game {
     this.npcSnail = new NPCSnail();
     
     // Add entities to scene
-    this.scene.add(this.playerSnail.mesh);
-    this.scene.add(this.npcSnail.mesh);
+    this.scene.scene.add(this.playerSnail.mesh);
+    this.scene.scene.add(this.npcSnail.mesh);
+    
+    // Position entities
+    this.playerSnail.mesh.position.set(0, 0, 5);
+    this.npcSnail.mesh.position.set(0, 0, -5);
     
     // Set up controls
     this.mouseControls = new MouseControls(this.playerSnail, this.container);
@@ -68,15 +72,16 @@ export class Game {
     // Set up utils
     this.collisionDetection = new CollisionDetection();
     this.ui = new UI();
-    
-    // Initialize UI
-    this.ui.updateEnemyHealth(this.npcSnail.health, this.npcSnail.maxHealth);
-    
-    // Initialize debug
     this.debug = new Debug(this);
     
-    // Events
+    // Explicitly make sure the enemy health bar is at full
+    this.ui.updateEnemyHealth(this.npcSnail.health, this.npcSnail.maxHealth);
+    
+    // Set up event listeners
     this.setupEvents();
+    
+    // Handle window resize
+    window.addEventListener('resize', this.onWindowResize.bind(this));
   }
   
   setupEvents() {
@@ -86,51 +91,62 @@ export class Game {
       this.playerSnail.strike();
       this.isPlayerStriking = true;
       
-      // For debugging, check collisions immediately on click
-      if (this.debug.enabled) {
-        console.log('Strike initiated!');
-      }
-      
-      // We'll no longer check collision here - instead we'll check
-      // during the animate loop when the eye stalk is at full extension
+      // No need for console.logs - debug info is shown in UI
     });
   }
   
   checkCollisions() {
-    // Only check collisions if player is striking
-    if (!this.isPlayerStriking) return;
-    
-    // Debug log
-    if (this.debug.enabled) {
-      console.log('Checking collisions...');
-      console.log('Player eye stalk position:', this.playerSnail.getEyeStalkPosition());
-      console.log('NPC body position:', this.npcSnail.getBodyPosition());
-      console.log('NPC body radius:', this.npcSnail.getBodyRadius());
+    // Only check player strike collisions if player is striking
+    if (this.isPlayerStriking) {
+      // Check if player's eye stalk is hitting NPC snail
+      const playerStrikeResult = this.collisionDetection.checkEyeStalkCollision(
+        this.playerSnail.getEyeStalkPosition(),
+        this.npcSnail.getBodyPosition(),
+        this.npcSnail.getBodyRadius()
+      );
+      
+      if (playerStrikeResult) {
+        // Try to damage the NPC snail (will be ignored if invincible)
+        this.npcSnail.takeDamage(1);
+        
+        // Update UI
+        this.ui.updateEnemyHealth(this.npcSnail.health, this.npcSnail.maxHealth);
+        
+        // Check if game is over
+        if (this.npcSnail.health <= 0) {
+          this.gameOver(true);
+        }
+      }
     }
     
-    // Check if player's eye stalk is hitting NPC snail
-    if (this.collisionDetection.checkEyeStalkCollision(
-      this.playerSnail.getEyeStalkPosition(),
+    // Check NPC strikes against player
+    if (this.npcSnail.isStriking && this.npcSnail.isAtMaxStrikeExtension()) {
+      // Check if NPC's eye stalk is hitting player snail
+      const npcStrikeResult = this.collisionDetection.checkEyeStalkCollision(
+        this.npcSnail.getEyeStalkPosition(),
+        this.playerSnail.getBodyPosition(),
+        this.playerSnail.getBodyRadius()
+      );
+      
+      if (npcStrikeResult) {
+        console.log('Player hit by NPC snail!');
+        // Implement player damage here if you want to add player health
+        // For now, just log the hit
+      }
+    }
+  }
+  
+  /**
+   * Check for body collisions between the player and NPC snails
+   * @returns {Object} Collision result with properties for collision response
+   */
+  checkBodyCollisions() {
+    return this.collisionDetection.checkBodyCollision(
+      this.playerSnail.getBodyPosition(),
+      this.playerSnail.getBodyRadius(),
       this.npcSnail.getBodyPosition(),
       this.npcSnail.getBodyRadius()
-    )) {
-      // Damage the NPC snail
-      this.npcSnail.takeDamage(1);
-      
-      // Debug log
-      console.log('Hit detected! NPC health now:', this.npcSnail.health);
-      
-      // Update UI
-      this.ui.updateEnemyHealth(this.npcSnail.health, this.npcSnail.maxHealth);
-      
-      // Check if game is over
-      if (this.npcSnail.health <= 0) {
-        this.gameOver(true);
-      }
-      
-      // Reset strike state so we don't keep damaging on every frame
-      this.isPlayerStriking = false;
-    }
+    );
   }
   
   start() {
@@ -159,13 +175,52 @@ export class Game {
     this.mouseControls.update();
     this.keyboardControls.update(delta);
     
-    // Update entities
-    this.playerSnail.update(delta);
-    this.npcSnail.update(delta);
+    // Check current body collisions before movement updates
+    const bodyCollision = this.checkBodyCollisions();
     
-    // Check if the strike animation is at the point of maximum extension
-    // This is when we want to check for collisions
-    if (this.playerSnail.isStriking && this.playerSnail.isAtMaxStrikeExtension()) {
+    // Get player position for NPC AI targeting
+    const playerPosition = this.playerSnail.mesh.position.clone();
+    
+    // Update entities with collision information
+    this.playerSnail.update(delta, bodyCollision);
+    this.npcSnail.update(delta, bodyCollision, playerPosition);
+    
+    // Update camera position to follow player's eye stalk
+    if (this.playerSnail) {
+      // Get the eye stalk position and rotation
+      const eyeStalkPosition = this.playerSnail.getEyeStalkPosition();
+      const eyeStalkRotation = this.playerSnail.eyeStalk.rotation.clone();
+      const snailRotation = this.playerSnail.mesh.rotation.clone();
+      
+      // Calculate eye stalk direction vector based on its rotation
+      const direction = new THREE.Vector3(0, 0, 1); // Forward vector
+      
+      // Apply eye stalk's vertical (X) rotation - this controls up/down
+      direction.applyAxisAngle(new THREE.Vector3(1, 0, 0), eyeStalkRotation.x);
+      
+      // Apply snail's overall Y rotation and eye stalk's horizontal (Y) rotation
+      // This controls left/right
+      direction.applyAxisAngle(new THREE.Vector3(0, 1, 0), snailRotation.y + eyeStalkRotation.y);
+      
+      // Reverse the direction to position camera behind the eye stalk
+      direction.negate();
+      
+      // Scale the direction vector to desired distance
+      const cameraDistance = 2; // Distance behind eye stalk
+      direction.multiplyScalar(cameraDistance);
+      
+      // Add a small vertical offset to position camera slightly above the eye stalk
+      const verticalOffset = new THREE.Vector3(0, 0.3, 0);
+      
+      // Set camera position
+      this.camera.position.copy(eyeStalkPosition).add(direction).add(verticalOffset);
+      
+      // Make camera look at eye stalk position
+      this.camera.lookAt(eyeStalkPosition);
+    }
+    
+    // Check for strike collisions during strike animation from either snail
+    if (this.playerSnail.isStriking || (this.npcSnail && this.npcSnail.isStriking)) {
       this.checkCollisions();
     }
     

@@ -3,8 +3,18 @@ import * as THREE from 'three';
 export class PlayerSnail {
   constructor() {
     // Player snail properties
-    this.speed = 3.0;
-    this.rotationSpeed = 2.0;
+    this.speed = 10.0;
+    this.rotationSpeed = 10.0;
+    
+    // Health system
+    this.health = 5;
+    this.maxHealth = 5;
+    this.isInvincible = false;
+    this.invincibilityTime = 0;
+    this.invincibilityDuration = 1.0; // 1 second of invincibility after being hit
+    this.isDamaged = false;
+    this.damageEffectTime = 0;
+    this.damageEffectDuration = 0.3; // Visual feedback duration in seconds
     
     // Movement state
     this.moveForward = false;
@@ -27,6 +37,11 @@ export class PlayerSnail {
     this.body.rotation.x = Math.PI / 2; // Rotate to be horizontal
     this.body.castShadow = true;
     this.body.receiveShadow = true;
+    
+    // Store original body color for damage effects
+    this.originalBodyColor = bodyMaterial.color.clone();
+    this.damageColor = new THREE.Color(0xFF0000); // Bright red for damage
+    this.invincibilityColor = new THREE.Color(0xFFD700); // Gold for invincibility
     
     // Create the shell
     const shellGeometry = new THREE.SphereGeometry(1.2, 32, 16, 0, Math.PI * 2, 0, Math.PI / 2);
@@ -73,7 +88,7 @@ export class PlayerSnail {
     
     // Create a hidden tip object at the end of eye stalk for precise collision detection
     this.eyeStalkTip = new THREE.Object3D();
-    this.eyeStalkTip.position.set(0, 0.9, 0); // Position it just beyond the eye
+    this.eyeStalkTip.position.set(0, 0.3, 0); // Adjusted to be at the front of the eye
     
     // Assemble the snail
     this.eye.add(this.pupil);
@@ -91,10 +106,24 @@ export class PlayerSnail {
     this.isStriking = false;
     this.strikeTime = 0;
     this.strikeDuration = 0.5; // In seconds
-    this.strikeDistance = 0.5; // How far forward the eye stalk extends during strike
+    this.strikeDistance = 0.8; // How far forward the eye stalk extends during strike
+
+    // Add body collision properties
+    this.bodyRadius = 1.5; // Collision radius for body
+    this.bodyCenter = new THREE.Object3D();
+    this.bodyCenter.position.set(0, 0, 0); // Center of the body
+    this.body.add(this.bodyCenter);
   }
   
-  update(delta) {
+  /**
+   * Update the player snail state
+   * @param {number} delta - Time delta since last frame
+   * @param {Object} bodyCollision - Body collision information from collision system
+   */
+  update(delta, bodyCollision = null) {
+    // Store the current position before movement
+    const previousPosition = this.mesh.position.clone();
+    
     // Update position based on movement
     const moveSpeed = this.speed * delta;
     
@@ -120,6 +149,27 @@ export class PlayerSnail {
     
     position.x = Math.max(-maxDistance, Math.min(maxDistance, position.x));
     position.z = Math.max(-maxDistance, Math.min(maxDistance, position.z));
+    
+    // Handle body collision if one exists
+    if (bodyCollision && bodyCollision.collision) {
+      // We need to respond to the collision by moving the player away
+      
+      // Get the direction from player to NPC (already normalized)
+      const collisionDir = bodyCollision.direction;
+      
+      // If we're the first body in the collision check (player), reverse the direction
+      collisionDir.negate();
+      
+      // Calculate the displacement needed to resolve the collision
+      // We share the resolution between the two bodies, so divide by 2
+      const pushBackDistance = bodyCollision.overlap / 2;
+      
+      // Create the displacement vector
+      const displacement = collisionDir.clone().multiplyScalar(pushBackDistance);
+      
+      // Apply the displacement to resolve the collision
+      this.mesh.position.add(displacement);
+    }
     
     // Handle eye stalk animation for strike
     if (this.isStriking) {
@@ -152,6 +202,37 @@ export class PlayerSnail {
       this.targetStalkRotation.y,
       10 * delta
     );
+    
+    // Handle damage visual effect
+    if (this.isDamaged) {
+      this.damageEffectTime += delta;
+      
+      if (this.damageEffectTime >= this.damageEffectDuration) {
+        // End damage effect
+        this.isDamaged = false;
+        this.damageEffectTime = 0;
+        
+        if (!this.isInvincible) {
+          this.body.material.color.copy(this.originalBodyColor);
+        }
+      }
+    }
+    
+    // Handle invincibility timer
+    if (this.isInvincible) {
+      this.invincibilityTime += delta;
+      
+      // Visual feedback for invincibility - pulsing gold color
+      const pulseIntensity = (Math.sin(this.invincibilityTime * 10) + 1) / 2; // 0 to 1
+      this.body.material.color.copy(this.originalBodyColor).lerp(this.invincibilityColor, pulseIntensity);
+      
+      if (this.invincibilityTime >= this.invincibilityDuration) {
+        // End invincibility
+        this.isInvincible = false;
+        this.invincibilityTime = 0;
+        this.body.material.color.copy(this.originalBodyColor);
+      }
+    }
   }
   
   aimEyeStalk(mouseX, mouseY) {
@@ -159,8 +240,8 @@ export class PlayerSnail {
     const ndcX = (mouseX / window.innerWidth) * 2 - 1;
     const ndcY = -(mouseY / window.innerHeight) * 2 + 1;
     
-    // Limit the rotation angles
-    const maxTilt = Math.PI / 4;
+    // Limit the rotation angles - keeping this as PI/2 for more humorous exaggerated effect
+    const maxTilt = Math.PI / 2;
     
     // Calculate rotation based on mouse position
     this.targetStalkRotation.x = ndcY * maxTilt;
@@ -198,5 +279,52 @@ export class PlayerSnail {
     
     return this.strikeTime >= halfDuration - tolerance && 
            this.strikeTime <= halfDuration + tolerance;
+  }
+
+  /**
+   * Get the world position of the snail body's center for collision detection
+   * @returns {THREE.Vector3} The world position of the body center
+   */
+  getBodyPosition() {
+    // Get world position of body center for collision
+    const position = new THREE.Vector3();
+    this.bodyCenter.getWorldPosition(position);
+    return position;
+  }
+
+  /**
+   * Get the radius of the snail body for collision detection
+   * @returns {number} The collision radius
+   */
+  getBodyRadius() {
+    return this.bodyRadius;
+  }
+
+  /**
+   * Handle taking damage from the NPC
+   * @param {number} amount - Amount of damage to take
+   * @returns {boolean} Whether damage was successfully applied
+   */
+  takeDamage(amount) {
+    // Can't take damage if invincible
+    if (this.isInvincible) {
+      return false;
+    }
+    
+    // Apply damage
+    this.health = Math.max(0, this.health - amount);
+    
+    // Set damage visual effect
+    this.isDamaged = true;
+    this.damageEffectTime = 0;
+    this.body.material.color.set(this.damageColor);
+    
+    // Set invincibility period
+    this.isInvincible = true;
+    this.invincibilityTime = 0;
+    
+    console.log(`Player took ${amount} damage! Health: ${this.health}/${this.maxHealth}`);
+    
+    return true;
   }
 } 

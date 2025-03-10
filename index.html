@@ -10,6 +10,12 @@
   <div id="app">
     <div id="game-container"></div>
     <div id="ui-container">
+      <div id="player-health">
+        <div class="health-label">Player Health:</div>
+        <div class="health-bar player-health-bar">
+          <div class="player-health-bar-fill"></div>
+        </div>
+      </div>
       <div id="enemy-health">
         <div class="health-label">Enemy Health:</div>
         <div class="health-bar">
@@ -19,13 +25,51 @@
       <div id="debug-panel">
         <button id="debug-toggle">Debug Mode</button>
         <div id="debug-info" class="hidden">
-          <div>Player Stalk → NPC: <span id="player-to-npc-distance">0</span> units</div>
-          <div>NPC Stalk → Player: <span id="npc-to-player-distance">0</span> units</div>
-          <div>Collision Status: <span id="collision-status">No collision</span></div>
-          <div>Player Strike: <span id="player-strike-status">No</span></div>
-          <div>Eye Stalk Pos: <span id="eye-stalk-position">x: 0, y: 0, z: 0</span></div>
-          <div>NPC Body Pos: <span id="npc-body-position">x: 0, y: 0, z: 0</span></div>
-          <div>Body Radius: <span id="npc-body-radius">0</span></div>
+          <div class="debug-section">
+            <h3>Distance Measurements</h3>
+            <div>Player Stalk → NPC: <span id="player-to-npc-distance">0</span> units</div>
+            <div>NPC Stalk → Player: <span id="npc-to-player-distance">0</span> units</div>
+          </div>
+          
+          <div class="debug-section">
+            <h3>Collision Information</h3>
+            <div>Status: <span id="collision-status">No collision</span></div>
+            <div>Player Strike: <span id="player-strike-status">No</span></div>
+            <div>Body Radius: <span id="npc-body-radius">0</span></div>
+            <div>NPC Invincible: <span id="npc-invincibility">No</span></div>
+            <div>NPC Health: <span id="npc-health">3/3</span></div>
+          </div>
+          
+          <div class="debug-section">
+            <h3>Positions</h3>
+            <div>Eye Stalk Pos: <span id="eye-stalk-position">x: 0, y: 0, z: 0</span></div>
+            <div>NPC Body Pos: <span id="npc-body-position">x: 0, y: 0, z: 0</span></div>
+          </div>
+          
+          <div class="debug-section">
+            <h3>Event Log</h3>
+            <div id="event-log" class="event-log">
+              <!-- Event entries will be added here dynamically -->
+            </div>
+          </div>
+          
+          <div class="debug-section">
+            <h3>Debug Legend</h3>
+            <div><span class="color-square cyan"></span> Player eye stalk tip</div>
+            <div><span class="color-square magenta"></span> NPC eye stalk tip</div>
+            <div><span class="color-square green-wire"></span> Player body</div>
+            <div><span class="color-square red-wire"></span> NPC body (collision area)</div>
+          </div>
+          
+          <div class="debug-section">
+            <h3>Update Control</h3>
+            <div>
+              <button id="debug-update">Update Debug Info</button>
+              <label>
+                <input type="checkbox" id="auto-update" checked> Auto-update
+              </label>
+            </div>
+          </div>
         </div>
       </div>
       <div id="game-message"></div>

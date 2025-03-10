@@ -53,6 +53,61 @@ export class CollisionDetection {
   }
   
   /**
+   * Check if two snail bodies are colliding
+   * 
+   * @param {THREE.Vector3} position1 - The world position of the first snail's body center
+   * @param {number} radius1 - The collision radius of the first snail's body
+   * @param {THREE.Vector3} position2 - The world position of the second snail's body center
+   * @param {number} radius2 - The collision radius of the second snail's body
+   * @returns {Object} Collision result object with properties: collision, distance, overlap, direction
+   */
+  checkBodyCollision(position1, radius1, position2, radius2) {
+    // Calculate distance between the two centers
+    const distance = position1.distanceTo(position2);
+    
+    // Calculate minimum distance before collision (sum of radiuses)
+    const minDistance = radius1 + radius2;
+    
+    // Calculate the amount of overlap
+    const overlap = Math.max(0, minDistance - distance);
+    
+    // Determine if there's a collision
+    const collision = distance < minDistance;
+    
+    // Calculate the direction vector from body1 to body2
+    const direction = new THREE.Vector3();
+    
+    if (distance > 0) {
+      // Safe normalization
+      direction.copy(position2).sub(position1).normalize();
+    } else {
+      // If centers are at the exact same position (unlikely), use a default direction
+      direction.set(1, 0, 0);
+    }
+    
+    // Additional debug information if needed
+    if (this.debugMode && collision) {
+      console.log('Body collision check:');
+      console.log('  Body 1 position:', position1);
+      console.log('  Body 1 radius:', radius1);
+      console.log('  Body 2 position:', position2);
+      console.log('  Body 2 radius:', radius2);
+      console.log('  Distance:', distance);
+      console.log('  Minimum distance:', minDistance);
+      console.log('  Overlap:', overlap);
+      console.log('  Collision detected:', collision);
+    }
+    
+    // Return detailed collision information
+    return {
+      collision,
+      distance,
+      overlap,
+      direction
+    };
+  }
+  
+  /**
    * Enable or disable debug mode
    * 
    * @param {boolean} enabled - Whether debug mode should be enabled

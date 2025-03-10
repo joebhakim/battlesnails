@@ -11,6 +11,19 @@ In BattleSnails, you control a snail and use its eye stalk to attack an enemy sn
 - **Mouse Movement**: Control the eye stalk direction
 - **WASD/Arrow Keys**: Move your snail around
 - **Mouse Click**: Perform a "strike" action with the eye stalk
+- **Debug Button**: Toggle debug mode for development insights
+
+## Comprehensive Documentation
+
+The game is fully documented across several chapters:
+
+1. **[Game Overview](docs/01-overview/README.md)** - Introduction to the game concept and its features
+2. **[Architecture](docs/02-architecture/README.md)** - Details of the project structure and design patterns
+3. **[Gameplay Mechanics](docs/03-gameplay/README.md)** - Deep dive into the gameplay systems
+4. **[Debugging System](docs/04-debugging/README.md)** - Guide to the debug mode features
+5. **[Implementation Details](docs/05-implementation/README.md)** - Code-level explanations of key features
+
+For a complete guide to all documentation, see the [Documentation Index](docs/README.md).
 
 ## Development
 
@@ -31,9 +44,15 @@ This project uses:
    npm run dev
    ```
 
-## Project Structure
+## Features
 
-The game follows a modular structure with separate components for the game objects, controls, and utilities. For a detailed breakdown, see the [specifications document](./docs/specifications.md).
+- 3D snail models created with Three.js geometries
+- Interactive eye stalk aiming and striking mechanics
+- Enemy snail with basic AI movement patterns
+- Health system with visual feedback
+- Comprehensive debug mode for development
+- Collision detection system
+- Simple but engaging gameplay loop
 
 ## License
 

@@ -4,6 +4,7 @@ export class Debug {
   constructor(game) {
     this.game = game;
     this.enabled = false;
+    this.autoUpdate = false;
     
     // Debug UI elements
     this.debugToggle = document.getElementById('debug-toggle');
@@ -17,10 +18,21 @@ export class Debug {
     this.eyeStalkPosition = document.getElementById('eye-stalk-position');
     this.npcBodyPosition = document.getElementById('npc-body-position');
     this.npcBodyRadius = document.getElementById('npc-body-radius');
+    this.npcInvincibility = document.getElementById('npc-invincibility');
+    this.npcHealth = document.getElementById('npc-health');
+    this.eventLog = document.getElementById('event-log');
+    
+    // Array to store recent events for the event log
+    this.recentEvents = [];
+    this.maxEvents = 5; // Maximum number of events to display
+    
+    // Update control elements
+    this.debugUpdateBtn = document.getElementById('debug-update');
+    this.autoUpdateCheckbox = document.getElementById('auto-update');
     
     // Debug visual helpers
     this.helpers = new THREE.Group();
-    this.game.scene.add(this.helpers);
+    this.game.scene.scene.add(this.helpers);
     
     // Player hitbox visualization
     this.playerHitbox = null;
@@ -32,6 +44,10 @@ export class Debug {
     this.playerStalkLine = null;
     this.npcStalkLine = null;
     
+    // Eye stalk tip markers
+    this.playerTipMarker = null;
+    this.npcTipMarker = null;
+    
     // Bind event listeners
     this.setupEventListeners();
   }
@@ -41,25 +57,43 @@ export class Debug {
     this.debugToggle.addEventListener('click', () => {
       this.toggleDebugMode();
     });
+    
+    // Manual update button
+    this.debugUpdateBtn.addEventListener('click', () => {
+      this.updateDebugInfo();
+    });
+    
+    // Auto update checkbox
+    this.autoUpdateCheckbox.addEventListener('change', (e) => {
+      this.autoUpdate = e.target.checked;
+    });
   }
   
   toggleDebugMode() {
     this.enabled = !this.enabled;
+    console.log(`Debug mode toggled to: ${this.enabled}`);
     
     if (this.enabled) {
+      console.log('Showing debug info and creating helpers');
       this.debugInfo.classList.remove('hidden');
       this.createDebugHelpers();
       // Enable debugging in collision detection
       this.game.collisionDetection.setDebugMode(true);
+      
+      // Set default for auto-update (off)
+      this.autoUpdate = false;
+      this.autoUpdateCheckbox.checked = false;
+      
+      // Update info immediately
+      this.updateDebugInfo();
+      console.log('Debug info updated and displayed');
     } else {
+      console.log('Hiding debug info and clearing helpers');
       this.debugInfo.classList.add('hidden');
       this.clearDebugHelpers();
       // Disable debugging in collision detection
       this.game.collisionDetection.setDebugMode(false);
     }
-    
-    // Log debug mode state
-    console.log(`Debug mode: ${this.enabled ? 'enabled' : 'disabled'}`);
   }
   
   createDebugHelpers() {
@@ -89,6 +123,18 @@ export class Debug {
     
     this.npcHitbox = new THREE.Mesh(npcHitboxGeometry, npcWireframeMaterial);
     this.helpers.add(this.npcHitbox);
+    
+    // Add eye stalk tip marker for player
+    const tipMarkerGeometry = new THREE.SphereGeometry(0.1, 8, 8);
+    const tipMarkerMaterial = new THREE.MeshBasicMaterial({ color: 0x00ffff });
+    this.playerTipMarker = new THREE.Mesh(tipMarkerGeometry, tipMarkerMaterial);
+    this.helpers.add(this.playerTipMarker);
+    
+    // Add eye stalk tip marker for NPC
+    const npcTipMarkerGeometry = new THREE.SphereGeometry(0.1, 8, 8);
+    const npcTipMarkerMaterial = new THREE.MeshBasicMaterial({ color: 0xff00ff });
+    this.npcTipMarker = new THREE.Mesh(npcTipMarkerGeometry, npcTipMarkerMaterial);
+    this.helpers.add(this.npcTipMarker);
     
     // Create eye stalk line for player
     const playerLineMaterial = new THREE.LineBasicMaterial({ 
@@ -129,12 +175,23 @@ export class Debug {
     this.npcHitbox = null;
     this.playerStalkLine = null;
     this.npcStalkLine = null;
+    this.playerTipMarker = null;
+    this.npcTipMarker = null;
   }
   
   update() {
     if (!this.enabled) return;
     
-    // Update hitbox positions
+    // Always update visual helpers
+    this.updateVisualHelpers();
+    
+    // Only update UI information if auto-update is enabled
+    if (this.autoUpdate) {
+      this.updateDebugInfo();
+    }
+  }
+  
+  updateVisualHelpers() {
     if (this.playerHitbox && this.npcHitbox) {
       // Update player hitbox position
       const playerPosition = this.game.playerSnail.mesh.position.clone();
@@ -144,18 +201,31 @@ export class Debug {
       const npcPosition = this.game.npcSnail.getBodyPosition();
       this.npcHitbox.position.copy(npcPosition);
       
+      // Update eye stalk tip markers
+      if (this.playerTipMarker) {
+        const playerStalkTipPos = this.game.playerSnail.getEyeStalkPosition();
+        this.playerTipMarker.position.copy(playerStalkTipPos);
+      }
+      
+      if (this.npcTipMarker) {
+        const npcStalkPos = this.game.npcSnail.getEyeStalkPosition();
+        this.npcTipMarker.position.copy(npcStalkPos);
+      }
+      
       // Update eye stalk lines
       this.updateEyeStalkLines();
-      
-      // Calculate and display distances
-      this.updateDistanceDisplays();
-      
-      // Check and display collision status
-      this.updateCollisionStatus();
-      
-      // Update additional debug information
-      this.updateAdditionalDebugInfo();
     }
+  }
+  
+  updateDebugInfo() {
+    // Calculate and display distances
+    this.updateDistanceDisplays();
+    
+    // Check and display collision status
+    this.updateCollisionStatus();
+    
+    // Update additional debug information
+    this.updateAdditionalDebugInfo();
   }
   
   updateEyeStalkLines() {
@@ -175,10 +245,8 @@ export class Debug {
     
     this.playerStalkLine.geometry.attributes.position.needsUpdate = true;
     
-    // Update NPC eye stalk line (we'll create a similar calculation for NPC to player)
-    // This is simplified as the NPC doesn't actually have a functional eye stalk for attacks
-    const npcStalkPos = new THREE.Vector3();
-    this.game.npcSnail.eyeStalk.getWorldPosition(npcStalkPos);
+    // Update NPC eye stalk line (we'll use the new getEyeStalkPosition method)
+    const npcStalkPos = this.game.npcSnail.getEyeStalkPosition();
     const playerBodyPos = new THREE.Vector3();
     this.game.playerSnail.body.getWorldPosition(playerBodyPos);
     
@@ -202,8 +270,7 @@ export class Debug {
     const playerToNpcDistance = playerStalkPos.distanceTo(npcBodyPos);
     
     // Calculate NPC stalk to player body distance
-    const npcStalkPos = new THREE.Vector3();
-    this.game.npcSnail.eyeStalk.getWorldPosition(npcStalkPos);
+    const npcStalkPos = this.game.npcSnail.getEyeStalkPosition();
     const playerBodyPos = new THREE.Vector3();
     this.game.playerSnail.body.getWorldPosition(playerBodyPos);
     const npcToPlayerDistance = npcStalkPos.distanceTo(playerBodyPos);
@@ -229,23 +296,40 @@ export class Debug {
       this.game.npcSnail.getBodyRadius()
     );
     
+    // If collision is newly detected, log it as an event
+    if (isColliding && this.lastCollisionStatus !== true) {
+      this.addEvent("Collision detected!");
+      
+      // If NPC is invincible during collision, log that too
+      if (this.game.npcSnail.isInvincible) {
+        this.addEvent("NPC is invincible - no damage taken");
+      }
+    }
+    
+    // Store last collision status to detect changes
+    this.lastCollisionStatus = isColliding;
+    
     // Update the collision status display
     this.collisionStatus.textContent = isColliding ? 'COLLISION DETECTED!' : 'No collision';
     this.collisionStatus.className = isColliding ? 'collision-true' : '';
-    
-    // Log collision to console when it happens
-    if (isColliding) {
-      console.log('Debug: Collision detected!');
-      console.log('Player eye stalk position:', this.game.playerSnail.getEyeStalkPosition());
-      console.log('NPC body position:', this.game.npcSnail.getBodyPosition());
-      console.log('NPC body radius:', this.game.npcSnail.getBodyRadius());
-    }
   }
   
   updateAdditionalDebugInfo() {
     // Update player strike status
+    const wasStriking = this.lastStrikeStatus;
+    const isStriking = this.game.playerSnail.isStriking;
+    
+    // Log strike events
+    if (isStriking && !wasStriking) {
+      this.addEvent("Strike initiated");
+    } else if (!isStriking && wasStriking) {
+      this.addEvent("Strike completed");
+    }
+    
+    this.lastStrikeStatus = isStriking;
+    
     this.playerStrikeStatus.textContent = 
-      this.game.playerSnail.isStriking ? 'Yes (Striking)' : 
+      isStriking ? 'Yes (Striking)' : 
       this.game.isPlayerStriking ? 'Yes (Strike state)' : 'No';
     
     // Get positions
@@ -261,12 +345,80 @@ export class Debug {
     
     // Update body radius display
     this.npcBodyRadius.textContent = this.game.npcSnail.bodyRadius.toFixed(2);
+
+    // Update health display
+    if (this.npcHealth) {
+      const currentHealth = this.game.npcSnail.health;
+      
+      // Log health changes
+      if (this.lastHealth !== undefined && currentHealth < this.lastHealth) {
+        this.addEvent(`NPC took damage! Health: ${currentHealth}/${this.game.npcSnail.maxHealth}`);
+      }
+      
+      this.lastHealth = currentHealth;
+      this.npcHealth.textContent = `${currentHealth}/${this.game.npcSnail.maxHealth}`;
+      
+      // Color based on health percentage
+      const healthPercentage = (currentHealth / this.game.npcSnail.maxHealth) * 100;
+      if (healthPercentage <= 33) {
+        this.npcHealth.className = 'health-critical';
+      } else if (healthPercentage <= 66) {
+        this.npcHealth.className = 'health-warning';
+      } else {
+        this.npcHealth.className = '';
+      }
+    }
+
+    // Update invincibility status
+    if (this.npcInvincibility) {
+      const wasInvincible = this.lastInvincibleStatus;
+      const isInvincible = this.game.npcSnail.isInvincible;
+      
+      // Log invincibility state changes
+      if (isInvincible && !wasInvincible) {
+        this.addEvent("Invincibility started");
+      } else if (!isInvincible && wasInvincible) {
+        this.addEvent("Invincibility ended");
+      }
+      
+      this.lastInvincibleStatus = isInvincible;
+      
+      this.npcInvincibility.textContent = isInvincible ? 
+        `Yes (${(this.game.npcSnail.invincibilityDuration - this.game.npcSnail.invincibilityTime).toFixed(2)}s left)` : 
+        'No';
+      this.npcInvincibility.className = isInvincible ? 'invincible-true' : '';
+    }
     
-    // Highlight player strike status when striking
-    if (this.game.playerSnail.isStriking || this.game.isPlayerStriking) {
-      this.playerStrikeStatus.style.color = '#ffff00'; // Yellow
-    } else {
-      this.playerStrikeStatus.style.color = ''; // Default
+    // Update event log UI
+    this.updateEventLog();
+  }
+
+  /**
+   * Add an event to the event log
+   * @param {string} eventText - Text describing the event
+   */
+  addEvent(eventText) {
+    const timestamp = new Date().toLocaleTimeString();
+    this.recentEvents.unshift(`[${timestamp}] ${eventText}`);
+    
+    // Trim to max length
+    if (this.recentEvents.length > this.maxEvents) {
+        this.recentEvents = this.recentEvents.slice(0, this.maxEvents);
+    }
+  }
+
+  /**
+   * Update the event log UI with recent events
+   */
+  updateEventLog() {
+    if (this.eventLog) {
+        this.eventLog.innerHTML = '';
+        
+        for (const event of this.recentEvents) {
+            const eventElement = document.createElement('div');
+            eventElement.textContent = event;
+            this.eventLog.appendChild(eventElement);
+        }
     }
   }
 } 
