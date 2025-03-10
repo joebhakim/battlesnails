@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>BattleSnails</title>
+  <link rel="stylesheet" href="/src/style.css">
+</head>
+<body>
+  <div id="app">
+    <div id="game-container"></div>
+    <div id="ui-container">
+      <div id="enemy-health">
+        <div class="health-label">Enemy Health:</div>
+        <div class="health-bar">
+          <div class="health-bar-fill"></div>
+        </div>
+      </div>
+      <div id="debug-panel">
+        <button id="debug-toggle">Debug Mode</button>
+        <div id="debug-info" class="hidden">
+          <div>Player Stalk → NPC: <span id="player-to-npc-distance">0</span> units</div>
+          <div>NPC Stalk → Player: <span id="npc-to-player-distance">0</span> units</div>
+          <div>Collision Status: <span id="collision-status">No collision</span></div>
+          <div>Player Strike: <span id="player-strike-status">No</span></div>
+          <div>Eye Stalk Pos: <span id="eye-stalk-position">x: 0, y: 0, z: 0</span></div>
+          <div>NPC Body Pos: <span id="npc-body-position">x: 0, y: 0, z: 0</span></div>
+          <div>Body Radius: <span id="npc-body-radius">0</span></div>
+        </div>
+      </div>
+      <div id="game-message"></div>
+    </div>
+  </div>
+  <script type="module" src="/src/main.js"></script>
+</body>
+</html> 
