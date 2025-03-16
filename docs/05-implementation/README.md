@@ -2,6 +2,148 @@
 
 This document provides a deep dive into the implementation details of key features in the BattleSnails game.
 
+## Hybrid Control System
+
+BattleSnails features a sophisticated dual-control system that provides an intuitive transition between eye stalk aiming and body rotation in attack mode.
+
+### Boundary Circle Implementation
+
+The control system uses a large circular boundary to determine the appropriate control mode:
+
+```javascript
+// MouseControls.js
+/**
+ * Check if the mouse is inside the boundary circle
+ * @returns {boolean} True if mouse is inside the circle
+ */
+isMouseInsideBoundaryCircle() {
+  // Get screen center
+  const centerX = window.innerWidth / 2;
+  const centerY = window.innerHeight / 2;
+  
+  // Calculate distance from center
+  const dx = this.mouseX - centerX;
+  const dy = this.mouseY - centerY;
+  const distance = Math.sqrt(dx * dx + dy * dy);
+  
+  // Calculate boundary radius (5/3 of viewport width)
+  const boundaryRadius = Math.min(window.innerWidth * 0.33 * 5 / 2, 1000);
+  
+  // Return true if inside, false if outside
+  return distance <= boundaryRadius;
+}
+```
+
+The UI component renders this boundary for visual feedback:
+
+```javascript
+// UI.js (CSS styles)
+.crosshair-boundary-circle {
+  position: absolute;
+  width: 166.65vw; /* 5/3 of viewport width */
+  height: 166.65vw; /* Make it a perfect circle */
+  max-width: 2000px;
+  max-height: 2000px;
+  border: 2px solid rgba(255, 255, 255, 0.3);
+  border-radius: 50%;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+}
+```
+
+### Dual Control Logic
+
+The system determines the appropriate behavior in the mouse move event handler:
+
+```javascript
+// MouseControls.js (simplified)
+setupEventListeners() {
+  this.container.addEventListener('mousemove', (event) => {
+    // Update mouse position and calculate deltas...
+    
+    if (this.isLMBPressed) { // Attack mode
+      const isInBoundary = this.isMouseInsideBoundaryCircle();
+      
+      // Update tracking state
+      if (isInBoundary !== this.isMouseInBoundary) {
+        this.isMouseInBoundary = isInBoundary;
+        
+        // Reset relative positioning if we just entered the boundary
+        if (isInBoundary) {
+          this.attackModeStartX = this.mouseX;
+          this.attackModeStartY = this.mouseY;
+        }
+      }
+      
+      if (isInBoundary) {
+        // INSIDE BOUNDARY: Control eye stalk direction
+        // Calculate eye stalk rotation based on mouse position...
+        this.playerSnail.eyeStalk.rotation.x = rotationX;
+        this.playerSnail.eyeStalk.rotation.y = rotationY;
+        
+        // Store valid position for boundary transitions
+        this.lastValidEyeStalkX = rotationX;
+        this.lastValidEyeStalkY = rotationY;
+      } else {
+        // OUTSIDE BOUNDARY: Rotate snail body instead
+        // Keep eye stalk at last valid position
+        this.playerSnail.eyeStalk.rotation.x = this.lastValidEyeStalkX;
+        this.playerSnail.eyeStalk.rotation.y = this.lastValidEyeStalkY;
+        
+        // Update camera rotation using mouse movement
+        this.cameraRotation.y += deltaX * this.cameraSensitivity;
+        this.cameraRotation.x -= deltaY * this.cameraSensitivity;
+        
+        // Apply rotation to snail body directly
+        this.playerSnail.mesh.rotation.y = this.cameraRotation.y + Math.PI;
+      }
+    } else {
+      // EXPLORATION MODE: Standard camera control...
+    }
+  });
+}
+```
+
+### Smooth Transitions
+
+To ensure smooth transitions between control states, several techniques are employed:
+
+1. **State Tracking**: The system keeps track of whether the mouse is inside the boundary.
+
+2. **Position Memory**: The last valid eye stalk position is stored when the mouse is inside the boundary.
+
+3. **Interpolation**: When transitioning between states, smooth interpolation is applied:
+
+```javascript
+// First frame transitions use interpolation for smoothness
+if (this.isFirstFrameOfAttackMode) {
+  this.playerSnail.eyeStalk.rotation.x = THREE.MathUtils.lerp(
+    this.lastStalkRotationX, 
+    rotationX, 
+    0.3 // Partial transition factor
+  );
+  // Similar for Y rotation...
+  this.isFirstFrameOfAttackMode = false;
+}
+```
+
+4. **Delta-Time Based Updates**: The update method uses the time since the last frame to ensure consistent movement speed regardless of frame rate:
+
+```javascript
+update(deltaTime) {
+  // Apply smooth interpolation based on delta time
+  this.playerSnail.eyeStalk.rotation.x = THREE.MathUtils.lerp(
+    this.playerSnail.eyeStalk.rotation.x,
+    targetRotationX,
+    deltaTime * 5 // Speed factor
+  );
+}
+```
+
+This hybrid control system provides an intuitive way for players to aim precisely with the eye stalk when the mouse is near the center of the screen, while still being able to reposition their entire snail when needed by moving the mouse further away from the center.
+
 ## Three.js Scene Setup
 
 The game's 3D environment is created in the `Scene` class:

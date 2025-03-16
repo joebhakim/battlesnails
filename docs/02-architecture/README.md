@@ -62,7 +62,7 @@ BattleSnails uses an object-oriented approach with the following key architectur
 
 ### Controls
 
-- **MouseControls**: Processes mouse input for aiming the eye stalk and initiating strikes.
+- **MouseControls**: Processes mouse input for controlling both the eye stalk and the snail's rotation through a hybrid control system. Implements a boundary-based approach where mouse movement inside a circular boundary controls the eye stalk, while movement outside the boundary rotates the entire snail. Also handles attack initiation and velocity-based attack power.
   
 - **KeyboardControls**: Processes keyboard input for moving the player snail.
 
@@ -70,7 +70,7 @@ BattleSnails uses an object-oriented approach with the following key architectur
 
 - **CollisionDetection**: Handles detection of collisions between the player's eye stalk and the enemy snail.
   
-- **UI**: Manages UI elements like the health bar and game over message.
+- **UI**: Manages UI elements like the health bar, game over message, and visual indicators such as the crosshair and boundary circle in attack mode.
   
 - **Debug**: Provides visual and text-based debugging tools to help understand the game's inner workings.
 

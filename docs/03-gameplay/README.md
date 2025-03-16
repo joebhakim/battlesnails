@@ -19,20 +19,30 @@ Movement is deliberately slow to match the snail theme. The snail moves in the d
 
 The eye stalk is the player's weapon and is controlled with the mouse:
 
-- **Mouse Movement**: Aim the eye stalk in different directions
-- **Mouse Click**: Perform a strike action with the eye stalk
+#### Exploration Mode (Mouse Button Released)
+- **Mouse Movement**: Controls camera and snail rotation
+- **Camera View**: Third-person view following behind the snail
 
-The eye stalk follows the mouse position with some physical constraints to keep the movement natural and limited to realistic angles.
+#### Attack Mode (Mouse Button Held)
+The game employs a hybrid control system in attack mode, using a large circular boundary:
+
+- **Mouse Inside Boundary Circle**: Controls eye stalk aiming for precise targeting
+- **Mouse Outside Boundary Circle**: Controls the snail's rotation while keeping eye stalk position fixed
+- **Mouse Button Release**: Performs strike or swing attack depending on mouse velocity
+
+The circular boundary is visible as a translucent circle around the crosshair when in attack mode, providing clear visual feedback about which control scheme is active.
 
 ## Snail Strike Mechanics
 
 The strike mechanic is the core combat element of the game:
 
-1. When the player clicks, the eye stalk begins a strike animation.
+1. When the player releases the mouse button, the eye stalk begins a strike animation.
 2. The eye stalk extends forward during the first half of the animation.
 3. At the peak of extension, collision detection checks if the eye stalk tip has contacted the enemy snail.
 4. If contact is made, damage is inflicted to the enemy snail.
 5. The eye stalk then retracts back to its original position.
+
+For higher mouse movement speeds, a more powerful swing attack is performed instead of a simple strike.
 
 The strike has a specific timing window for damage, requiring precision and good aim to land successful hits.
 

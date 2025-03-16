@@ -28,9 +28,20 @@ To run the game:
 
 ## Controls
 
+### Movement
 - **W/A/S/D or Arrow Keys**: Move the player snail
-- **Mouse Movement**: Aim the eye stalk
-- **Mouse Click**: Strike with the eye stalk
+
+### Exploration Mode (Mouse Released)
+- **Mouse Movement**: Control camera and rotate snail body
+
+### Attack Mode (Mouse Held Down)
+- **Mouse Inside Boundary Circle**: Aim the eye stalk for precise targeting
+- **Mouse Outside Boundary Circle**: Rotate the snail body while maintaining eye stalk position
+- **Mouse Button Release**: Perform attack (strike or swing based on velocity)
+
+A large circular boundary (visible as a translucent circle) determines which control scheme is active in attack mode, allowing for intuitive transitions between aiming and repositioning.
+
+### Debug
 - **Debug Toggle Button**: Enable or disable debug mode
 
 ## Development Resources

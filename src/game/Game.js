@@ -19,6 +19,7 @@ export class Game {
     this.container = container;
     this.clock = new THREE.Clock();
     this.isRunning = false;
+    this.lastFrameTime = Date.now();
     
     // Set up scene
     this.scene = new Scene();
@@ -77,6 +78,7 @@ export class Game {
     
     // Initialize game entities
     this.playerSnail = new PlayerSnail();
+    this.playerSnail.isActive = true; // Ensure player is active
     this.npcSnail = new NPCSnail();
     
     // Add entities to scene
@@ -88,7 +90,7 @@ export class Game {
     this.npcSnail.mesh.position.set(0, 0, -5);
     
     // Set up controls
-    this.mouseControls = new MouseControls(this.playerSnail, this.container);
+    this.mouseControls = new MouseControls(this.playerSnail, this.container, this);
     this.keyboardControls = new KeyboardControls(this.playerSnail);
     
     // Set up utils
@@ -122,6 +124,12 @@ export class Game {
     
     // Initialize multiplayer components
     this.initMultiplayer();
+    
+    // Attach game instance to canvas for debugging and direct access
+    const canvas = document.querySelector('canvas');
+    if (canvas) {
+      canvas.__gameInstance = this;
+    }
   }
   
   setupEvents() {
@@ -134,7 +142,13 @@ export class Game {
   checkCollisions() {
     // Get velocities and calculate potential damage with safeguards
     const playerVelocity = this.playerSnail.getEyeStalkVelocity() || 0;
-    const playerDamage = this.playerSnail.getPotentialDamage() || 0;
+    
+    // For physics-based attacks, use the swing velocity as a damage multiplier
+    let playerDamage = this.playerSnail.getPotentialDamage() || 0;
+    if (this.playerSnail.isSwinging && this.playerSnail.currentSwingVelocity) {
+      // Scale damage based on swing velocity (more velocity = more damage)
+      playerDamage = Math.max(playerDamage, this.playerSnail.currentSwingVelocity * 2);
+    }
     
     const npcVelocity = this.npcSnail.getEyeStalkVelocity() || 0;
     const npcDamage = this.npcSnail.getPotentialDamage() || 0;
@@ -148,12 +162,13 @@ export class Game {
     );
     
     // Check if player's eye stalk is hitting NPC snail
+    // Now use the new isInActiveAttackZone method that works for both strike and swing
     const playerHitNpc = this.collisionDetection.checkEyeStalkCollision(
       this.playerSnail.getEyeStalkPosition(),
       this.npcSnail
     );
     
-    if (playerHitNpc && this.npcDamageCooldown <= 0) {
+    if (playerHitNpc && this.npcDamageCooldown <= 0 && this.playerSnail.isInActiveAttackZone()) {
       // Try to damage the NPC snail with velocity-based damage
       this.npcSnail.takeDamage(playerDamage);
       
@@ -163,7 +178,7 @@ export class Game {
       // Update UI
       this.ui.updateEnemyHealth(this.npcSnail.health, this.npcSnail.maxHealth);
       
-      // Check if game is over
+      // Check for game over
       if (this.npcSnail.health <= 0) {
         this.gameOver(true);
       }
@@ -188,7 +203,7 @@ export class Game {
         // Update UI
         this.ui.updatePlayerHealth(this.playerSnail.health, this.playerSnail.maxHealth);
         
-        // Check if game is over
+        // Check if game over
         if (this.playerSnail.health <= 0) {
           this.gameOver(false);
         }
@@ -313,93 +328,225 @@ export class Game {
   }
   
   animate() {
-    if (!this.isRunning) return;
-    
-    // Get time delta
-    const delta = this.clock.getDelta();
-    
-    // Update controls
-    this.mouseControls.update();
-    this.keyboardControls.update(delta);
-    
-    // Check current body collisions before movement updates
-    const bodyCollision = this.checkBodyCollisions();
-    
-    // Get player position for NPC AI targeting
-    const playerPosition = this.playerSnail.mesh.position.clone();
-    
-    // Update entities with collision information
-    this.playerSnail.update(delta, bodyCollision);
-    this.npcSnail.update(delta, bodyCollision, playerPosition);
-    
-    // Update camera position to follow player's eye stalk
-    if (this.playerSnail) {
-      // Get the eye stalk position and rotation
-      const eyeStalkPosition = this.playerSnail.getEyeStalkPosition();
-      const eyeStalkRotation = this.playerSnail.eyeStalk.rotation.clone();
-      const snailRotation = this.playerSnail.mesh.rotation.clone();
-      
-      // Calculate eye stalk direction vector based on its rotation
-      const direction = new THREE.Vector3(0, 0, 1); // Forward vector
-      
-      // Apply eye stalk's vertical (X) rotation - this controls up/down
-      direction.applyAxisAngle(new THREE.Vector3(1, 0, 0), eyeStalkRotation.x);
-      
-      // Apply snail's overall Y rotation and eye stalk's horizontal (Y) rotation
-      // This controls left/right
-      direction.applyAxisAngle(new THREE.Vector3(0, 1, 0), snailRotation.y + eyeStalkRotation.y);
-      
-      // Reverse the direction to position camera behind the eye stalk
-      direction.negate();
-      
-      // Scale the direction vector to desired distance
-      const cameraDistance = 2; // Distance behind eye stalk
-      direction.multiplyScalar(cameraDistance);
-      
-      // Add a small vertical offset to position camera slightly above the eye stalk
-      const verticalOffset = new THREE.Vector3(0, 0.3, 0);
-      
-      // Set camera position
-      this.camera.position.copy(eyeStalkPosition).add(direction).add(verticalOffset);
-      
-      // Make camera look at eye stalk position
-      this.camera.lookAt(eyeStalkPosition);
-    }
-    
-    // Update damage cooldowns
-    this.playerDamageCooldown = Math.max(0, this.playerDamageCooldown - delta);
-    this.npcDamageCooldown = Math.max(0, this.npcDamageCooldown - delta);
-    
-    // Check collisions every frame, not just during strikes
-    this.checkCollisions();
-    
-    // Update debug information
-    this.debug.update();
-    
-    // Render scene
-    this.renderer.render(this.scene.scene, this.camera);
-    
-    // Send player state if multiplayer is active
-    if (this.isMultiplayerActive && this.networkManager) {
-      const playerState = {
-        position: this.playerSnail.mesh.position.clone(),
-        rotation: this.playerSnail.mesh.rotation.clone(),
-        eyeStalkRotation: this.playerSnail.eyeStalk.rotation.clone(),
-        health: this.playerSnail.health,
-        isStriking: this.playerSnail.isStriking,
-        timestamp: Date.now()
-      };
-      
-      this.networkManager.sendPlayerState(playerState);
-    }
-    
-    // Update remote player if available
-    if (this.isMultiplayerActive && this.remotePlayerSnail) {
-      this.remotePlayerSnail.networkUpdate(delta);
-    }
-    
-    // Request next frame
     requestAnimationFrame(this.animate.bind(this));
+    
+    // Calculate delta time
+    const now = Date.now();
+    const delta = (now - this.lastFrameTime) / 1000; // Convert to seconds
+    this.lastFrameTime = now;
+    
+    // Update player and controls
+    if (this.playerSnail && this.playerSnail.isActive) {
+      // Update keyboard controls for movement
+      this.keyboardControls.update(delta);
+      
+      // Update mouse controls for camera and attack
+      this.mouseControls.update(delta);
+      
+      // Update the player snail
+      this.playerSnail.update(delta);
+      
+      // Check if we're in attack mode
+      const isInAttackMode = this.mouseControls.isInAttackMode();
+      
+      // Add variables to track last camera positions for smooth transitions
+      if (!this.lastCameraPosition) {
+        this.lastCameraPosition = new THREE.Vector3();
+        this.lastCameraTarget = new THREE.Vector3();
+        this.transitionProgress = 1.0; // 1.0 means fully transitioned
+      }
+      
+      // Calculate camera target position
+      if (isInAttackMode || this.playerSnail.isStriking || this.playerSnail.isSwinging) {
+        // Check if we're just entering attack mode
+        if (!this.wasInAttackMode) {
+          // Store the current camera position and target for smooth transition
+          this.lastCameraPosition.copy(this.camera.position);
+          
+          // Get the current look target (approximated based on current view)
+          const lookTarget = new THREE.Vector3();
+          this.camera.getWorldDirection(lookTarget);
+          lookTarget.multiplyScalar(10).add(this.camera.position);
+          this.lastCameraTarget.copy(lookTarget);
+          
+          // Reset transition progress to start the transition
+          this.transitionProgress = 0.0;
+        }
+        
+        // ATTACK MODE CAMERA: Position behind the eye stalk for attack mode
+        
+        // Calculate eye stalk world position
+        const eyeStalkPos = new THREE.Vector3();
+        this.playerSnail.eyeStalk.getWorldPosition(eyeStalkPos);
+        
+        // Get eye stalk's forward direction
+        const eyeStalkForward = new THREE.Vector3(0, 0, 1);
+        eyeStalkForward.applyQuaternion(this.playerSnail.eyeStalk.getWorldQuaternion(new THREE.Quaternion()));
+        eyeStalkForward.normalize();
+        
+        // Position camera behind the eye stalk (reverse of forward direction)
+        // with a vertical offset for better visibility
+        const cameraOffset = new THREE.Vector3();
+        cameraOffset.copy(eyeStalkForward).multiplyScalar(-3); // 3 units back
+        cameraOffset.y += 1; // Slight upward for better view
+        
+        // Calculate the target camera position
+        const targetCameraPos = new THREE.Vector3();
+        targetCameraPos.copy(eyeStalkPos).add(cameraOffset);
+        
+        // Calculate the target look position
+        const targetLookPos = new THREE.Vector3();
+        targetLookPos.copy(eyeStalkPos).add(eyeStalkForward.multiplyScalar(10));
+        
+        // When entering attack mode, smoothly transition the camera
+        if (this.transitionProgress < 1.0) {
+          // Gradually increase the transition progress
+          this.transitionProgress = Math.min(1.0, this.transitionProgress + delta * 5); // Complete in 0.2 seconds
+          
+          // Interpolate between the previous camera position and the target position
+          this.camera.position.lerpVectors(this.lastCameraPosition, targetCameraPos, this.transitionProgress);
+          
+          // Create a temporary vector for the interpolated look target
+          const tempLookTarget = new THREE.Vector3();
+          tempLookTarget.lerpVectors(this.lastCameraTarget, targetLookPos, this.transitionProgress);
+          
+          // Look at the interpolated target
+          this.camera.lookAt(tempLookTarget);
+        } else {
+          // Once transition is complete, use the exact target position
+          this.camera.position.copy(targetCameraPos);
+          this.camera.lookAt(targetLookPos);
+        }
+        
+        // Occasionally log eye stalk position for debugging
+        if (Math.random() < 0.01) {
+          console.log(`Attack camera: Eye stalk rotation: (${this.playerSnail.eyeStalk.rotation.x.toFixed(2)}, ${this.playerSnail.eyeStalk.rotation.y.toFixed(2)})`);
+        }
+        
+        // Store attack mode as the last mode
+        this.wasInAttackMode = true;
+      } else {
+        // EXPLORATION MODE CAMERA: Follow player with mouse-controlled rotation
+        
+        // If we just exited attack mode, start a new transition
+        if (this.wasInAttackMode) {
+          // Store the current camera position and target for smooth transition
+          this.lastCameraPosition.copy(this.camera.position);
+          
+          // Get the current look target (approximated based on current view)
+          const lookDir = new THREE.Vector3(0, 0, -1);
+          lookDir.applyQuaternion(this.camera.quaternion);
+          this.lastCameraTarget.copy(this.camera.position).add(lookDir.multiplyScalar(10));
+          
+          // Reset transition progress to start the transition
+          this.transitionProgress = 0.0;
+          
+          // Reset the attack mode flag
+          this.wasInAttackMode = false;
+        }
+        
+        // Get camera rotation from mouse controls
+        const cameraRotation = this.mouseControls.getCameraRotation();
+        
+        // Calculate camera position based on the snail position and camera rotation
+        const cameraDistance = 5;
+        const cameraHeight = 2;
+        
+        // Calculate horizontal position around the snail
+        const cameraX = Math.sin(cameraRotation.y) * cameraDistance;
+        const cameraZ = Math.cos(cameraRotation.y) * cameraDistance;
+        
+        // Apply the vertical rotation
+        const offsetY = Math.sin(cameraRotation.x) * cameraDistance;
+        const horizontalDistance = Math.cos(cameraRotation.x) * cameraDistance;
+        
+        // Calculate target camera position for exploration mode
+        const targetCameraPos = new THREE.Vector3(
+          this.playerSnail.mesh.position.x + (cameraX * horizontalDistance / cameraDistance),
+          cameraHeight + offsetY,
+          this.playerSnail.mesh.position.z + (cameraZ * horizontalDistance / cameraDistance)
+        );
+        
+        // Create the look at target
+        const targetLookPos = new THREE.Vector3(
+          this.playerSnail.mesh.position.x,
+          this.playerSnail.mesh.position.y + 1, // Look a bit above the snail
+          this.playerSnail.mesh.position.z
+        );
+        
+        // Handle smooth transition from attack mode
+        if (this.transitionProgress < 1.0) {
+          // Gradually increase the transition progress
+          this.transitionProgress = Math.min(1.0, this.transitionProgress + delta * 5); // Complete in 0.2 seconds
+          
+          // Interpolate between the previous camera position and the target position
+          this.camera.position.lerpVectors(this.lastCameraPosition, targetCameraPos, this.transitionProgress);
+          
+          // Create a temporary vector for the interpolated look target
+          const tempLookTarget = new THREE.Vector3();
+          tempLookTarget.lerpVectors(this.lastCameraTarget, targetLookPos, this.transitionProgress);
+          
+          // Look at the interpolated target
+          this.camera.lookAt(tempLookTarget);
+        } else {
+          // Once transition is complete, use the exact positions
+          this.camera.position.copy(targetCameraPos);
+          this.camera.lookAt(targetLookPos);
+        }
+        
+        // Make player face the same direction as camera in exploration mode
+        this.playerSnail.mesh.rotation.y = cameraRotation.y + Math.PI;
+      }
+      
+      // Update HUD elements
+      this.ui.updatePlayerHealth(this.playerSnail.health, this.playerSnail.maxHealth);
+      this.ui.updateEnemyHealth(this.npcSnail.health, this.npcSnail.maxHealth);
+      this.ui.updateAttackHUD(
+        isInAttackMode || this.playerSnail.isStriking || this.playerSnail.isSwinging,
+        this.mouseControls.attackVelocity / 5, // Normalize to 0-1 range (max velocity is 5)
+        this.mouseControls.getAttackDirection()
+      );
+      
+      // Update NPC snail
+      if (this.npcSnail) {
+        this.npcSnail.update(delta, this.checkBodyCollisions(), this.playerSnail.mesh.position.clone());
+      }
+      
+      // Update damage cooldowns
+      this.playerDamageCooldown = Math.max(0, this.playerDamageCooldown - delta);
+      this.npcDamageCooldown = Math.max(0, this.npcDamageCooldown - delta);
+      
+      // Check for collisions
+      this.checkCollisions();
+      
+      // Update debug information if available
+      if (this.debug) {
+        this.debug.update();
+      }
+      
+      // Send player state if multiplayer is active
+      if (this.isMultiplayerActive && this.networkManager) {
+        const playerState = {
+          position: this.playerSnail.mesh.position.clone(),
+          rotation: this.playerSnail.mesh.rotation.clone(),
+          eyeStalkRotation: this.playerSnail.eyeStalk.rotation.clone(),
+          health: this.playerSnail.health,
+          isStriking: this.playerSnail.isStriking,
+          isSwinging: this.playerSnail.isSwinging,
+          timestamp: Date.now()
+        };
+        
+        this.networkManager.sendPlayerState(playerState);
+      }
+      
+      // Update remote player if available
+      if (this.isMultiplayerActive && this.remotePlayerSnail) {
+        this.remotePlayerSnail.networkUpdate(delta);
+      }
+    }
+    
+    // Render the scene
+    this.renderer.render(this.scene.scene, this.camera);
   }
   
   onWindowResize() {

@@ -116,6 +116,66 @@ export class UI {
     this.musicButton.textContent = '🔊'; // Start with sound icon
     document.body.appendChild(this.musicButton);
     
+    // Add attack HUD for visual feedback on swing mechanics
+    this.attackHUD = document.createElement('div');
+    this.attackHUD.className = 'attack-hud';
+    document.body.appendChild(this.attackHUD);
+    
+    // Power meter container
+    this.powerMeterContainer = document.createElement('div');
+    this.powerMeterContainer.className = 'power-meter-container';
+    this.attackHUD.appendChild(this.powerMeterContainer);
+    
+    // Power meter label
+    const powerLabel = document.createElement('div');
+    powerLabel.className = 'power-label';
+    powerLabel.textContent = 'SWING POWER';
+    this.powerMeterContainer.appendChild(powerLabel);
+    
+    // Power meter
+    this.powerMeter = document.createElement('div');
+    this.powerMeter.className = 'power-meter';
+    this.powerMeterContainer.appendChild(this.powerMeter);
+    
+    this.powerMeterFill = document.createElement('div');
+    this.powerMeterFill.className = 'power-meter-fill';
+    this.powerMeter.appendChild(this.powerMeterFill);
+    
+    // Attack direction indicator
+    this.directionIndicator = document.createElement('div');
+    this.directionIndicator.className = 'direction-indicator';
+    this.attackHUD.appendChild(this.directionIndicator);
+    
+    // Arrow for direction indicator
+    this.directionArrow = document.createElement('div');
+    this.directionArrow.className = 'direction-arrow';
+    this.directionIndicator.appendChild(this.directionArrow);
+    
+    // Crosshair for attack mode
+    this.crosshair = document.createElement('div');
+    this.crosshair.className = 'crosshair';
+    this.crosshair.style.display = 'none'; // Hidden by default
+    document.body.appendChild(this.crosshair);
+    
+    // Add circle boundary around crosshair
+    const boundaryCircle = document.createElement('div');
+    boundaryCircle.className = 'crosshair-boundary-circle';
+    this.crosshair.appendChild(boundaryCircle);
+    
+    // Add crosshair segments (horizontal and vertical lines)
+    const horizontalLine = document.createElement('div');
+    horizontalLine.className = 'crosshair-h';
+    this.crosshair.appendChild(horizontalLine);
+    
+    const verticalLine = document.createElement('div');
+    verticalLine.className = 'crosshair-v';
+    this.crosshair.appendChild(verticalLine);
+    
+    // Add center dot
+    const centerDot = document.createElement('div');
+    centerDot.className = 'crosshair-center';
+    this.crosshair.appendChild(centerDot);
+    
     // Add CSS
     this.addStyles();
   }
@@ -145,8 +205,18 @@ export class UI {
    * Add CSS styles for the UI
    */
   addStyles() {
+    // Remove any existing styles
+    const existingStyle = document.getElementById('battlesnails-ui-styles');
+    if (existingStyle) {
+      existingStyle.remove();
+    }
+    
+    // Create new style element
     const style = document.createElement('style');
-    style.innerHTML = `
+    style.id = 'battlesnails-ui-styles';
+    
+    // Add CSS rules
+    style.textContent = `
       .game-infobar {
         position: absolute;
         top: 0;
@@ -314,7 +384,143 @@ export class UI {
         background-color: rgba(0, 0, 0, 0.9);
         transform: scale(1.05);
       }
+      
+      /* Attack HUD */
+      .attack-hud {
+        position: absolute;
+        bottom: 30px;
+        right: 30px;
+        width: 200px;
+        height: 200px;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        pointer-events: none; /* Allow clicks to pass through */
+        opacity: 0; /* Hidden by default */
+        transition: opacity 0.3s;
+        z-index: 10;
+      }
+      
+      .attack-hud.active {
+        opacity: 1;
+      }
+      
+      .power-meter-container {
+        width: 100%;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        margin-bottom: 20px;
+      }
+      
+      .power-label {
+        color: white;
+        font-family: 'Arial', sans-serif;
+        font-size: 14px;
+        font-weight: bold;
+        margin-bottom: 5px;
+        text-shadow: 0 0 3px black, 0 0 3px black, 0 0 3px black;
+      }
+      
+      .power-meter {
+        width: 100%;
+        height: 15px;
+        background-color: rgba(0, 0, 0, 0.5);
+        border: 2px solid white;
+        border-radius: 10px;
+        overflow: hidden;
+      }
+      
+      .power-meter-fill {
+        height: 100%;
+        width: 0%;
+        background: linear-gradient(to right, #00ff00, #ffff00, #ff0000);
+        transition: width 0.1s;
+      }
+      
+      .direction-indicator {
+        width: 100px;
+        height: 100px;
+        border-radius: 50%;
+        border: 2px solid white;
+        background-color: rgba(0, 0, 0, 0.3);
+        position: relative;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+      
+      .direction-arrow {
+        width: 0;
+        height: 0;
+        border-left: 10px solid transparent;
+        border-right: 10px solid transparent;
+        border-bottom: 30px solid white;
+        position: absolute;
+        transform: translateY(-20px) rotate(0deg);
+        transform-origin: center calc(100% - 5px);
+        filter: drop-shadow(0 0 2px rgba(0, 0, 0, 0.8));
+      }
+      
+      /* Crosshair styles */
+      .crosshair {
+        position: fixed;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+        width: 40px;
+        height: 40px;
+        pointer-events: none; /* Allow clicks to pass through */
+        z-index: 1000;
+      }
+      
+      .crosshair-boundary-circle {
+        position: absolute;
+        width: 166.65vw; /* 5/3 of viewport width (5x bigger than before) */
+        height: 166.65vw; /* Make it a perfect circle */
+        max-width: 2000px; /* Limit maximum size (5x bigger than before) */
+        max-height: 2000px;
+        border: 2px solid rgba(255, 255, 255, 0.3);
+        border-radius: 50%;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+        pointer-events: none;
+      }
+      
+      .crosshair-h, .crosshair-v {
+        position: absolute;
+        background-color: rgba(255, 255, 255, 0.7);
+      }
+      
+      .crosshair-h {
+        width: 100%;
+        height: 2px;
+        top: 50%;
+        transform: translateY(-50%);
+      }
+      
+      .crosshair-v {
+        width: 2px;
+        height: 100%;
+        left: 50%;
+        transform: translateX(-50%);
+      }
+      
+      .crosshair-center {
+        position: absolute;
+        width: 6px;
+        height: 6px;
+        border-radius: 50%;
+        background-color: rgba(255, 0, 0, 0.7);
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+      }
     `;
+    
+    // Append the styles to the document head
     document.head.appendChild(style);
   }
   
@@ -460,5 +666,63 @@ export class UI {
         this.musicButton.textContent = '🔊';
       }
     });
+  }
+  
+  /**
+   * Update the attack HUD with power and direction
+   * @param {boolean} isInAttackMode - Whether the player is in attack mode
+   * @param {number} power - Current attack power (0-1)
+   * @param {Object} direction - Direction vector {x, y}
+   */
+  updateAttackHUD(isInAttackMode, power = 0, direction = {x: 0, y: 1}) {
+    // Show/hide the HUD based on attack mode
+    if (isInAttackMode) {
+      this.attackHUD.classList.add('active');
+      
+      // Show the crosshair in attack mode
+      this.crosshair.style.display = 'block';
+      
+      // Update power meter (scale to 0-100%, ensure minimum of 5%)
+      const powerPercent = Math.min(Math.max(power * 20, 5), 100);
+      this.powerMeterFill.style.width = `${powerPercent}%`;
+      
+      // Calculate color based on power (green->yellow->red)
+      let r = 0, g = 0;
+      if (powerPercent < 50) {
+        // Green to yellow
+        r = Math.floor(255 * (powerPercent / 50)); 
+        g = 255;
+      } else {
+        // Yellow to red
+        r = 255;
+        g = Math.floor(255 * (1 - (powerPercent - 50) / 50));
+      }
+      this.powerMeterFill.style.background = `rgb(${r}, ${g}, 0)`;
+      
+      // Calculate angle from direction vector (in degrees)
+      // Default direction is down (0,-1) which is 0 degrees
+      const angle = Math.atan2(-direction.x, -direction.y) * (180 / Math.PI);
+      
+      // Update direction arrow rotation
+      this.directionArrow.style.transform = `translateY(-20px) rotate(${angle}deg)`;
+      
+      // Log for debugging
+      console.log(`HUD: Power ${powerPercent.toFixed(1)}%, Direction ${angle.toFixed(1)}°`);
+    } else {
+      this.attackHUD.classList.remove('active');
+      
+      // Hide the crosshair when not in attack mode
+      this.crosshair.style.display = 'none';
+    }
+  }
+  
+  /**
+   * Reset the attack HUD
+   */
+  resetAttackHUD() {
+    this.attackHUD.classList.remove('active');
+    
+    // Hide the crosshair
+    this.crosshair.style.display = 'none';
   }
 } 

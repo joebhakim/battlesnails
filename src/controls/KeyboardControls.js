@@ -66,11 +66,16 @@ export class KeyboardControls {
     }
   }
   
-  update() {
+  update(delta) {
     // Update player movement based on key states
     this.playerSnail.moveForward = this.keys.forward;
     this.playerSnail.moveBackward = this.keys.backward;
-    this.playerSnail.moveLeft = this.keys.left;
-    this.playerSnail.moveRight = this.keys.right;
+    
+    // left and right are reversed because of the way the controls are set up
+    this.playerSnail.moveLeft = this.keys.right;
+    this.playerSnail.moveRight = this.keys.left;
+    
+    // We don't need to call strafeUpdate anymore as the movement
+    // is now handled in the main update cycle via updateMovement
   }
 } 
