@@ -1,261 +1,286 @@
+:root {
+  color-scheme: dark;
+  --panel: rgba(15, 23, 42, 0.82);
+  --panel-border: rgba(148, 163, 184, 0.2);
+  --panel-shadow: 0 20px 40px rgba(15, 23, 42, 0.28);
+  --text: #e2e8f0;
+  --muted: #94a3b8;
+  --accent: #38bdf8;
+  --danger: #fb7185;
+  --success: #4ade80;
+}
+
 * {
-  margin: 0;
-  padding: 0;
   box-sizing: border-box;
 }
 
-body, html {
+html,
+body {
+  margin: 0;
   width: 100%;
   height: 100%;
   overflow: hidden;
-  font-family: Arial, sans-serif;
+  font-family: "Trebuchet MS", "Segoe UI", sans-serif;
+  background: radial-gradient(circle at top, #89aac2 0%, #5f7f97 35%, #334155 100%);
+  color: var(--text);
+}
+
+button,
+input {
+  font: inherit;
 }
 
 #app {
+  position: relative;
   width: 100%;
   height: 100%;
-  position: relative;
 }
 
 #game-container {
-  width: 100%;
-  height: 100%;
   position: absolute;
-  top: 0;
-  left: 0;
+  inset: 0;
 }
 
-#ui-container {
+#hud {
   position: absolute;
-  top: 20px;
-  left: 20px;
+  top: 18px;
+  left: 18px;
+  display: grid;
+  gap: 12px;
+  width: min(320px, calc(100vw - 120px));
   z-index: 10;
   pointer-events: none;
 }
 
-#player-health {
-  background-color: rgba(0, 0, 0, 0.5);
-  color: white;
-  padding: 10px;
-  border-radius: 5px;
-  display: flex;
-  flex-direction: column;
-  width: 200px;
-  margin-bottom: 10px;
+.hud-card {
+  padding: 14px 16px;
+  background: var(--panel);
+  border: 1px solid var(--panel-border);
+  border-radius: 16px;
+  box-shadow: var(--panel-shadow);
+  backdrop-filter: blur(12px);
 }
 
-#enemy-health {
-  background-color: rgba(0, 0, 0, 0.5);
-  color: white;
-  padding: 10px;
-  border-radius: 5px;
+.hud-header {
   display: flex;
-  flex-direction: column;
-  width: 200px;
+  justify-content: space-between;
+  align-items: baseline;
+  margin-bottom: 8px;
 }
 
 .health-label {
-  margin-bottom: 5px;
+  font-size: 0.95rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.health-value {
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
 }
 
 .health-bar {
-  width: 100%;
-  height: 20px;
-  background-color: #333;
-  border-radius: 5px;
+  height: 14px;
+  background: rgba(15, 23, 42, 0.85);
+  border-radius: 999px;
   overflow: hidden;
 }
 
-.health-bar-fill, .player-health-bar-fill {
-  height: 100%;
+.health-bar-fill {
   width: 100%;
-  background-color: #ff0000;
-  transition: width 0.3s ease-in-out, background-color 0.3s ease-in-out;
+  height: 100%;
+  border-radius: inherit;
+  transition: width 0.18s ease, background-color 0.18s ease;
 }
 
 .player-health-bar-fill {
-  background-color: #00ff00; /* Green for player */
+  background: var(--success);
 }
 
-#game-message {
-  display: none;
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  transform: translate(-50%, -50%);
-  padding: 20px;
-  border-radius: 5px;
-  color: white;
-  font-size: 24px;
-  text-align: center;
-  pointer-events: auto; /* Make sure it can be clicked */
+.enemy-health-bar-fill {
+  background: var(--danger);
 }
 
-.restart-button {
-  display: block;
-  margin: 10px auto 0;
-  padding: 8px 16px;
-  background-color: #333;
-  color: white;
-  border: none;
-  border-radius: 4px;
-  cursor: pointer;
-  font-size: 18px;
+.controls-card {
+  font-size: 0.92rem;
+  line-height: 1.4;
+  color: #dbeafe;
 }
 
-.restart-button:hover {
-  background-color: #555;
-}
-
-/* Debug panel styles */
 #debug-panel {
-  margin-top: 20px;
-  background-color: rgba(0, 0, 0, 0.7);
-  color: #00ff00;
-  padding: 10px;
-  border-radius: 5px;
-  font-family: monospace;
-  width: 300px;
+  position: absolute;
+  top: 18px;
+  right: 18px;
+  width: min(320px, calc(100vw - 120px));
+  z-index: 12;
+}
+
+#debug-toggle,
+#debug-update,
+#music-toggle,
+.restart-button {
+  border: 1px solid rgba(148, 163, 184, 0.26);
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.92);
+  color: var(--text);
+  cursor: pointer;
+  transition: transform 0.15s ease, background-color 0.15s ease, border-color 0.15s ease;
+}
+
+#debug-toggle:hover,
+#debug-update:hover,
+#music-toggle:hover,
+.restart-button:hover {
+  transform: translateY(-1px);
+  border-color: rgba(56, 189, 248, 0.55);
+  background: rgba(30, 41, 59, 0.96);
 }
 
 #debug-toggle {
-  pointer-events: auto;
-  background-color: #444;
-  color: #00ff00;
-  border: 1px solid #00ff00;
-  padding: 5px 10px;
-  border-radius: 3px;
-  cursor: pointer;
-  font-family: monospace;
-}
-
-#debug-toggle:hover {
-  background-color: #333;
+  padding: 10px 16px;
+  width: 100%;
 }
 
 #debug-info {
   margin-top: 10px;
-  font-size: 12px;
-  line-height: 1.5;
+  padding: 14px;
+  border-radius: 18px;
+  background: rgba(15, 23, 42, 0.84);
+  border: 1px solid var(--panel-border);
+  box-shadow: var(--panel-shadow);
+  backdrop-filter: blur(12px);
 }
 
 #debug-info.hidden {
   display: none;
 }
 
-.debug-section {
-  margin-bottom: 15px;
-  padding: 8px;
-  background-color: rgba(0, 0, 0, 0.3);
-  border-radius: 3px;
+.debug-section + .debug-section {
+  margin-top: 14px;
 }
 
 .debug-section h3 {
-  margin: 0 0 5px 0;
-  font-size: 14px;
-  color: #00ccff;
-  border-bottom: 1px solid #00ccff;
-  padding-bottom: 3px;
+  margin: 0 0 8px;
+  font-size: 0.84rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+
+.debug-section div {
+  margin: 4px 0;
+  font-size: 0.88rem;
+}
+
+.debug-controls {
+  display: flex;
+  align-items: center;
+  gap: 12px;
 }
 
 #debug-update {
-  pointer-events: auto;
-  background-color: #444;
-  color: #00ff00;
-  border: 1px solid #00ff00;
-  padding: 3px 8px;
-  border-radius: 3px;
-  cursor: pointer;
-  font-family: monospace;
-  font-size: 11px;
-  margin-right: 10px;
-}
-
-#debug-update:hover {
-  background-color: #333;
-}
-
-#auto-update {
-  pointer-events: auto;
-  vertical-align: middle;
+  padding: 6px 12px;
 }
 
 label {
-  pointer-events: auto;
-  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
 }
 
-.color-square {
-  display: inline-block;
-  width: 12px;
-  height: 12px;
-  margin-right: 5px;
-  vertical-align: middle;
-}
-
-.cyan {
-  background-color: #00ffff;
-}
-
-.magenta {
-  background-color: #ff00ff;
-}
-
-.green-wire {
-  background-color: #00ff00;
-  border: 1px dotted #fff;
-}
-
-.red-wire {
-  background-color: #ff0000;
-  border: 1px dotted #fff;
-}
-
-.collision-true {
-  color: #ff0000 !important;
-  font-weight: bold;
-}
-
-.invincible-true {
-  color: #ffd700 !important; /* Gold color for invincibility */
-  font-weight: bold;
-}
-
-.health-warning {
-  color: #ff8000 !important; /* Orange for medium health */
-  font-weight: bold;
-}
-
-.health-critical {
-  color: #ff0000 !important; /* Red for low health */
-  font-weight: bold;
-}
-
-.distance-close {
-  color: #ffff00;
-}
-
-.distance-critical {
-  color: #ff0000;
-  font-weight: bold;
-}
-
-/* Event log styling */
 .event-log {
-  max-height: 120px;
+  max-height: 132px;
   overflow-y: auto;
-  background-color: #111;
-  border: 1px solid #333;
-  padding: 5px;
-  font-size: 0.85em;
-  margin-top: 5px;
+  padding-right: 6px;
 }
 
 .event-log div {
-  border-bottom: 1px dotted #333;
-  padding: 2px 0;
+  padding-bottom: 4px;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.12);
 }
 
 .event-log div:last-child {
-  border-bottom: none;
-} 
+  border-bottom: 0;
+}
+
+#music-toggle {
+  position: absolute;
+  right: 18px;
+  bottom: 18px;
+  padding: 12px 18px;
+  z-index: 12;
+}
+
+#music-toggle.active {
+  border-color: rgba(74, 222, 128, 0.55);
+  color: #dcfce7;
+}
+
+#game-message {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  display: none;
+  min-width: min(360px, calc(100vw - 48px));
+  padding: 24px 28px;
+  transform: translate(-50%, -50%);
+  text-align: center;
+  background: rgba(15, 23, 42, 0.94);
+  border: 1px solid rgba(148, 163, 184, 0.3);
+  border-radius: 22px;
+  box-shadow: 0 24px 70px rgba(15, 23, 42, 0.45);
+  z-index: 20;
+}
+
+#game-message.visible {
+  display: block;
+}
+
+#game-message h2 {
+  margin: 0 0 10px;
+  font-size: 2rem;
+}
+
+#game-message p {
+  margin: 0;
+  color: var(--muted);
+}
+
+.restart-button {
+  margin-top: 18px;
+  padding: 10px 18px;
+}
+
+.collision-true {
+  color: #fca5a5;
+  font-weight: 700;
+}
+
+.invincible-true {
+  color: #fde68a;
+  font-weight: 700;
+}
+
+@media (max-width: 720px) {
+  #hud,
+  #debug-panel {
+    width: calc(100vw - 36px);
+  }
+
+  #hud {
+    top: 14px;
+    left: 14px;
+  }
+
+  #debug-panel {
+    top: auto;
+    right: 14px;
+    bottom: 72px;
+  }
+
+  #music-toggle {
+    right: 14px;
+    bottom: 14px;
+  }
+}
