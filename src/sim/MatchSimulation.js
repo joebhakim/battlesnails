@@ -22,7 +22,7 @@ import {
 
 export const MATCH_TICK_RATE = 60;
 export const MATCH_TICK_DURATION = 1 / MATCH_TICK_RATE;
-export const DEFAULT_MAX_HEALTH = 40;
+export const DEFAULT_MAX_HEALTH = 3;
 
 const UP = new THREE.Vector3(0, 1, 0);
 const PLAYER_STARTS = new Map([

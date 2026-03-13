@@ -19,7 +19,7 @@ export class PlayerSnail extends SnailActor {
       stalkPitchMax: 1.15,
       stalkResponse: 15,
       stalkRecover: 9,
-      impactThreshold: 5.8,
+      impactThreshold: 5.4,
       impactMomentumFactor: 0.35
     });
 

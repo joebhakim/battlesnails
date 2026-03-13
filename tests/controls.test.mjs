@@ -45,27 +45,28 @@ test('swing input maps vertical mouse delta to pitch only', () => {
   assert(player.stalkTargetPose.pitch < neutralPitch);
 });
 
-test('stalk length stays fixed regardless of control mode', () => {
-  const swingPlayer = new PlayerSnail();
-  const thrustPlayer = new PlayerSnail();
+test('stalk uses a longer segmented chain', () => {
+  const player = new PlayerSnail();
+  const nodes = player.getStalkNodes();
+  const totalLength = nodes.slice(1).reduce((length, node, index) => (
+    length + node.distanceTo(nodes[index])
+  ), 0);
 
-  swingPlayer.update(1 / 60, createCombatInput('swing', 12, -8));
-  thrustPlayer.update(1 / 60, createCombatInput('thrust', -12, 8));
-
-  assert.equal(swingPlayer.eyeStalk.scale.y, 1);
-  assert.equal(thrustPlayer.eyeStalk.scale.y, 1);
-  assert.equal('extension' in swingPlayer.stalkTargetPose, false);
-  assert.equal('extension' in thrustPlayer.stalkTargetPose, false);
+  assert.equal(nodes.length, player.stalkSegmentCount + 1);
+  assert.equal(player.stalkSegments.length, player.stalkSegmentCount);
+  assert(totalLength > 3);
 });
 
-test('stalk pose update uses roll for lateral bend instead of local yaw spin', () => {
+test('idle rope settles into a visible gravity sag', () => {
   const player = new PlayerSnail();
+  const initialNodes = player.getStalkNodes();
 
-  player.applyCombatInput(createCombatInput('swing', 12, 0));
-  player.update(1 / 60, createCombatInput('swing', 0, 0));
+  for (let index = 0; index < 45; index += 1) {
+    player.update(1 / 60, { engaged: false, mode: 'idle', lookX: 0, lookY: 0 });
+  }
 
-  assert.equal(player.eyeStalk.rotation.y, 0);
-  assert.notEqual(player.eyeStalk.rotation.z, 0);
+  const settledNodes = player.getStalkNodes();
+  assert(settledNodes[3].y < initialNodes[3].y - 0.2);
 });
 
 test('lock-on camera basis keeps D moving to world-right when facing the enemy head-on', () => {

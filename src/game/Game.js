@@ -237,6 +237,7 @@ export class Game {
 
     this.currentOverlayKey = overlayKey;
     this.ui.showMessage({
+      variant: overlay.variant,
       title: overlay.title,
       body: overlay.body,
       actions: overlay.actions.map((action) => ({

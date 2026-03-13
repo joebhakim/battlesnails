@@ -121,12 +121,14 @@ export class MultiplayerSession {
     switch (this.connectionState) {
       case 'connecting':
         return {
+          variant: 'info',
           title: 'Joining the confluence of the snails.',
           body: 'Snails are emerging..',
           actions: [{ id: 'leave', label: 'Back to Menu' }]
         };
       case 'waiting':
         return {
+          variant: 'info',
           title: 'Waiting',
           body: this.waitingReason === 'opponent_disconnected'
             ? 'the Coward snailed away'
@@ -135,17 +137,24 @@ export class MultiplayerSession {
         };
       case 'ended': {
         const playerWon = this.snapshot?.winnerSlot === this.localSlot;
-        const title = this.snapshot?.reason === 'draw'
+        const isDraw = this.snapshot?.reason === 'draw';
+        const title = isDraw
           ? 'Draw'
           : playerWon
-            ? 'Victory'
-            : 'Defeat';
-        const body = this.snapshot?.reason === 'draw'
+            ? 'SNAILED'
+            : 'SALTED';
+        const body = isDraw
           ? 'Both snails fell in the same exchange.'
           : playerWon
             ? 'Snailed em, well done, you really SNAILED that other snail. Remember: this game is all about the snailing.'
             : 'SALTED.';
+        const variant = isDraw
+          ? 'info'
+          : playerWon
+            ? 'victory'
+            : 'defeat';
         return {
+          variant,
           title,
           body,
           actions: [{ id: 'leave', label: 'Leave Match' }]
@@ -153,6 +162,7 @@ export class MultiplayerSession {
       }
       case 'error':
         return {
+          variant: 'info',
           title: 'Multiplayer Error',
           body: this.errorMessage || 'Unable to run multiplayer.',
           actions: [{ id: 'leave', label: 'Back to Menu' }]

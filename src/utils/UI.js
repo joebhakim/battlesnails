@@ -24,11 +24,11 @@ export class UI {
   }
 
   updatePlayerHealth(currentHealth, maxHealth) {
-    this.updateHealthBar(this.playerHealthBarFill, this.playerHealthValue, currentHealth, maxHealth, '#4ade80');
+    this.updateHealthBar(this.playerHealthBarFill, this.playerHealthValue, currentHealth, maxHealth, '#b8443a');
   }
 
   updateEnemyHealth(currentHealth, maxHealth) {
-    this.updateHealthBar(this.enemyHealthBarFill, this.enemyHealthValue, currentHealth, maxHealth, '#fb7185');
+    this.updateHealthBar(this.enemyHealthBarFill, this.enemyHealthValue, currentHealth, maxHealth, '#888078');
   }
 
   updateHealthBar(fillElement, valueElement, currentHealth, maxHealth, healthyColor) {
@@ -39,9 +39,9 @@ export class UI {
     if (percentage > 66) {
       fillElement.style.backgroundColor = healthyColor;
     } else if (percentage > 33) {
-      fillElement.style.backgroundColor = '#fbbf24';
+      fillElement.style.backgroundColor = '#c49a2a';
     } else {
-      fillElement.style.backgroundColor = '#f97316';
+      fillElement.style.backgroundColor = '#d04030';
     }
   }
 
@@ -67,9 +67,12 @@ export class UI {
     this.musicButton.classList.toggle('active', isPlaying);
   }
 
-  showMessage({ title, body, actions = [] }) {
+  showMessage({ variant, title, body, actions = [] }) {
     this.gameMessage.innerHTML = '';
-    this.gameMessage.classList.add('visible');
+    this.gameMessage.className = 'visible';
+    if (variant) {
+      this.gameMessage.classList.add(`game-message--${variant}`);
+    }
 
     const titleElement = document.createElement('h2');
     titleElement.textContent = title;
@@ -90,12 +93,13 @@ export class UI {
   }
 
   clearMessage() {
-    this.gameMessage.classList.remove('visible');
+    this.gameMessage.className = '';
     this.gameMessage.innerHTML = '';
   }
 
   showGameOverMessage(playerWon) {
     this.showMessage({
+      variant: playerWon ? 'victory' : 'defeat',
       title: playerWon ? 'Victory' : 'Defeat',
       body: playerWon
         ? 'Placeholder Pete is down.'

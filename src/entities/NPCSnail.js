@@ -19,12 +19,12 @@ export class NPCSnail extends SnailActor {
       stalkPitchMax: 0.7,
       stalkResponse: 11,
       stalkRecover: 7,
-      impactThreshold: 5.2,
+      impactThreshold: 5.1,
       impactMomentumFactor: 0.28
     });
 
-    this.attackRange = 4.25;
-    this.preferredDistance = 3.4;
+    this.attackRange = 6.1;
+    this.preferredDistance = 5.2;
     this.attackCooldown = 0.9;
     this.attackCooldownRemaining = 0.5;
     this.windupDuration = 0.4;

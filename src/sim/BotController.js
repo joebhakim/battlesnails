@@ -4,8 +4,8 @@ import { createIdleInput } from './MatchSimulation.js';
 
 export class BotController {
   constructor(options = {}) {
-    this.preferredDistance = options.preferredDistance ?? 3.6;
-    this.attackRange = options.attackRange ?? 4.3;
+    this.preferredDistance = options.preferredDistance ?? 5.2;
+    this.attackRange = options.attackRange ?? 6.1;
     this.attackCooldown = options.attackCooldown ?? 0.9;
     this.windupDuration = options.windupDuration ?? 0.35;
     this.recoverDuration = options.recoverDuration ?? 0.3;

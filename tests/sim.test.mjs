@@ -1,8 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import * as THREE from 'three';
 
 import { BotController } from '../src/sim/BotController.js';
 import { MatchSimulation, MATCH_TICK_DURATION } from '../src/sim/MatchSimulation.js';
+import { buildStalkSegmentSamples, evaluateStalkImpact } from '../src/sim/StalkRope.js';
 
 function stepMany(simulation, count, inputA, inputB) {
   for (let index = 0; index < count; index += 1) {
@@ -45,6 +47,52 @@ test('body collisions separate overlapping snails', () => {
   assert(playerA.position.distanceTo(playerB.position) > 0.5);
 });
 
+test('snapshots include authoritative rope nodes', () => {
+  const simulation = new MatchSimulation();
+  const snapshot = simulation.getSnapshot();
+  const player = snapshot.players[0];
+
+  assert.equal(Array.isArray(player.stalkNodes), true);
+  assert.equal(player.stalkNodes.length > 4, true);
+  assert.equal(typeof player.stalkSegmentRadius, 'number');
+});
+
+test('idle rope sags under gravity in the shared simulation', () => {
+  const simulation = new MatchSimulation();
+  const initialMidY = simulation.getPlayerState(1).stalkNodes[3].y;
+
+  stepMany(simulation, 45, {}, {});
+
+  const settledMidY = simulation.getPlayerState(1).stalkNodes[3].y;
+  assert(settledMidY < initialMidY - 0.15);
+});
+
+test('segment impact evaluation can use a non-terminal rope segment', () => {
+  const nodes = [
+    new THREE.Vector3(0, 0, 0),
+    new THREE.Vector3(1, 0, 0),
+    new THREE.Vector3(2, 0, 0),
+    new THREE.Vector3(3, 0, 0)
+  ];
+  const previousNodes = [
+    new THREE.Vector3(0, 0, 0),
+    new THREE.Vector3(0.2, 0, 0),
+    new THREE.Vector3(1.2, 0, 0),
+    new THREE.Vector3(3.1, 0, 0)
+  ];
+  const samples = buildStalkSegmentSamples(nodes, previousNodes, MATCH_TICK_DURATION, 0.2);
+  const impact = evaluateStalkImpact(
+    samples,
+    new THREE.Vector3(1.5, 0, 0),
+    0.3,
+    new THREE.Vector3(),
+    0
+  );
+
+  assert.equal(impact.collision, true);
+  assert.equal(impact.contactSample?.index, 1);
+});
+
 test('repeated thrust input can damage the opposing player', () => {
   const simulation = new MatchSimulation();
   const attacker = simulation.getPlayerState(1);
@@ -57,7 +105,7 @@ test('repeated thrust input can damage the opposing player', () => {
 
   stepMany(
     simulation,
-    8,
+    20,
     { moveZ: -1, lockOnHeld: true, combatMode: 'thrust', lookY: -18 },
     { lockOnHeld: true }
   );
@@ -78,7 +126,7 @@ test('winner is declared when a player reaches zero health', () => {
 
   stepMany(
     simulation,
-    8,
+    20,
     { moveZ: -1, lockOnHeld: true, combatMode: 'thrust', lookY: -18 },
     { lockOnHeld: true }
   );

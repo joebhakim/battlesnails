@@ -87,6 +87,7 @@ export class SinglePlayerSession {
 
     const playerWon = this.snapshot.winnerSlot === this.localSlot;
     return {
+      variant: playerWon ? 'victory' : 'defeat',
       title: playerWon ? 'Victory' : 'Defeat',
       body: playerWon
         ? 'The other guy got SNAILED.'

@@ -78,6 +78,8 @@ test('multiplayer server auto-pairs two clients and starts a match', async () =>
   assert.equal(welcomeB.slot, 2);
   assert.equal(matchStartA.snapshot.phase, 'running');
   assert.equal(matchStartB.snapshot.players.length, 2);
+  assert.equal(Array.isArray(matchStartA.snapshot.players[0].stalkNodes), true);
+  assert.equal(matchStartA.snapshot.players[0].stalkNodes.length > 4, true);
 
   clientA.close();
   clientB.close();

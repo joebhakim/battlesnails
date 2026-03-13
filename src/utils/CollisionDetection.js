@@ -1,4 +1,4 @@
-import * as THREE from 'three';
+import { evaluateStalkImpact } from '../sim/StalkRope.js';
 
 export class CollisionDetection {
   constructor() {
@@ -17,22 +17,28 @@ export class CollisionDetection {
 
   checkImpactCollision(attacker, targetSnail) {
     const eyeStalkPosition = attacker.getEyeStalkPosition();
-    const eyeStalkVelocity = attacker.getEyeStalkVelocity();
+    const segmentSamples = attacker.getStalkSegmentSamples();
     const movementAssistVelocity = attacker.getBodyVelocity();
     const targetBodyPosition = targetSnail.getBodyPosition();
     const targetBodyRadius = targetSnail.getBodyRadius();
-    const distance = eyeStalkPosition.distanceTo(targetBodyPosition);
-    const hasCollision = distance <= targetBodyRadius;
-    const directionToTarget = distance === 0
-      ? new THREE.Vector3(0, 0, 1)
-      : targetBodyPosition.clone().sub(eyeStalkPosition).normalize();
-    const closingSpeed = Math.max(0, eyeStalkVelocity.dot(directionToTarget));
-    const movementAssist = Math.max(0, movementAssistVelocity.dot(directionToTarget));
-    const impactPower = closingSpeed + movementAssist * attacker.getImpactMomentumFactor();
+    const impactResult = evaluateStalkImpact(
+      segmentSamples,
+      targetBodyPosition,
+      targetBodyRadius,
+      movementAssistVelocity,
+      attacker.getImpactMomentumFactor()
+    );
+    const activeSample = impactResult.contactSample ?? impactResult.strongestSample;
+    const distance = activeSample?.surfaceDistance ?? eyeStalkPosition.distanceTo(targetBodyPosition);
+    const impactPower = impactResult.collision
+      ? impactResult.contactImpactPower
+      : impactResult.impactPower;
+    const closingSpeed = activeSample?.closingSpeed ?? 0;
+    const movementAssist = activeSample?.movementAssist ?? 0;
 
     this.lastCollisionDetails = {
-      eyeStalkPosition: eyeStalkPosition.clone(),
-      eyeStalkVelocity: eyeStalkVelocity.clone(),
+      eyeStalkPosition: activeSample?.center?.clone() ?? eyeStalkPosition.clone(),
+      eyeStalkVelocity: activeSample?.velocity?.clone() ?? attacker.getEyeStalkVelocity(),
       targetBodyPosition,
       targetBodyRadius,
       distance,
@@ -40,10 +46,10 @@ export class CollisionDetection {
       closingSpeed,
       movementAssist
     };
-    this.lastCollisionResult = hasCollision && impactPower >= attacker.getImpactThreshold();
+    this.lastCollisionResult = impactResult.collision && impactPower >= attacker.getImpactThreshold();
 
     return {
-      collision: hasCollision,
+      collision: impactResult.collision,
       impactPower,
       closingSpeed,
       movementAssist,
