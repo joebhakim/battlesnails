@@ -17,8 +17,6 @@ export class NPCSnail extends SnailActor {
       stalkYawLimit: 1.05,
       stalkPitchMin: -0.55,
       stalkPitchMax: 0.7,
-      stalkExtensionMin: 0.75,
-      stalkExtensionMax: 1.85,
       stalkResponse: 11,
       stalkRecover: 7,
       impactThreshold: 5.2,
@@ -85,7 +83,7 @@ export class NPCSnail extends SnailActor {
       this.moveAlong(strafeDirection, this.speed * 0.4, delta);
     }
 
-    this.setStalkTargetPose({ yaw: 0, pitch: 0.12, extension: 1.02 }, 'tracking', 0.25);
+    this.setStalkTargetPose({ yaw: 0, pitch: 0.12 }, 'tracking', 0.25);
 
     if (distanceToPlayer <= this.attackRange && this.attackCooldownRemaining === 0) {
       this.attackSide = Math.random() > 0.5 ? 1 : -1;
@@ -97,8 +95,7 @@ export class NPCSnail extends SnailActor {
   updateWindup(distanceToPlayer) {
     this.setStalkTargetPose({
       yaw: this.attackSide * 0.92,
-      pitch: 0.4,
-      extension: 0.82
+      pitch: 0.4
     }, 'windup', 0.7);
 
     if (distanceToPlayer > this.attackRange * 1.25) {
@@ -114,8 +111,7 @@ export class NPCSnail extends SnailActor {
   updateStrikeState(delta, directionToPlayer, distanceToPlayer) {
     this.setStalkTargetPose({
       yaw: -this.attackSide * 0.48,
-      pitch: -0.08,
-      extension: 1.8
+      pitch: -0.08
     }, 'strike', 1);
 
     if (distanceToPlayer <= this.attackRange * 1.1) {
@@ -129,7 +125,7 @@ export class NPCSnail extends SnailActor {
   }
 
   updateRecover(delta, directionToPlayer, distanceToPlayer) {
-    this.setStalkTargetPose({ yaw: 0, pitch: 0.1, extension: 1 }, 'recover', 0.2);
+    this.setStalkTargetPose({ yaw: 0, pitch: 0.1 }, 'recover', 0.2);
 
     if (distanceToPlayer < this.preferredDistance * 1.05) {
       this.moveAlong(directionToPlayer, -this.speed * 0.45, delta);

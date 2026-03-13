@@ -1,7 +1,7 @@
 # Overview
 
-BattleSnails is intentionally small: a single duel in a flat arena.
+BattleSnails is intentionally small: one flat arena, one duel camera, and either one bot or one second localhost player.
 
-You play as the blue snail. The enemy snail closes distance, winds up, and attacks in short bursts. The goal is to keep moving, manually whip the eye stalk with the mouse, and land clean impacts before the NPC does.
+You always control the blue snail locally. In single-player, the opponent is a bot. In LAN multiplayer, a second browser client controls the opponent through an authoritative server running on the host machine.
 
-The current version is focused on a stable core loop rather than feature breadth. Multiplayer, level scaling, the old cursor-strike system, and the unfinished hybrid attack-mode migration have been removed.
+The current version is focused on a stable duel core rather than feature breadth. The browser client renders and captures input, while a shared simulation core drives both the local bot duel and the localhost PvP server.

@@ -11,6 +11,13 @@ import { CollisionDetection } from '../utils/CollisionDetection.js';
 import { UI } from '../utils/UI.js';
 import { Debug } from '../utils/Debug.js';
 import { AudioController } from '../audio/AudioController.js';
+import { SinglePlayerSession } from './SinglePlayerSession.js';
+import { MultiplayerSession } from './MultiplayerSession.js';
+import { DEFAULT_MAX_HEALTH } from '../sim/MatchSimulation.js';
+
+const DEFAULT_CAMERA_PLAYER = new THREE.Vector3(0, 1, 6);
+const DEFAULT_CAMERA_ENEMY = new THREE.Vector3(0, 1, -6);
+const DEFAULT_FORWARD = new THREE.Vector3(0, 0, -1);
 
 export class Game {
   constructor(container) {
@@ -21,7 +28,7 @@ export class Game {
     this.cameraController = new CameraController(this.camera);
 
     this.playerSnail = null;
-    this.npcSnail = null;
+    this.opponentSnail = null;
     this.mouseControls = null;
     this.keyboardControls = null;
     this.collisionDetection = null;
@@ -29,8 +36,10 @@ export class Game {
     this.debug = null;
     this.audio = null;
 
+    this.currentSession = null;
+    this.currentOverlayKey = null;
+    this.hasRenderedMatchState = false;
     this.isRunning = false;
-    this.gameResult = null;
     this.lastFrameTime = performance.now();
   }
 
@@ -38,9 +47,11 @@ export class Game {
     this.scene.init();
 
     this.playerSnail = new PlayerSnail();
-    this.npcSnail = new NPCSnail();
+    this.opponentSnail = new NPCSnail();
+    this.playerSnail.setVisible(false);
+    this.opponentSnail.setVisible(false);
     this.scene.scene.add(this.playerSnail.mesh);
-    this.scene.scene.add(this.npcSnail.mesh);
+    this.scene.scene.add(this.opponentSnail.mesh);
 
     this.mouseControls = new MouseControls(this.container);
     this.keyboardControls = new KeyboardControls();
@@ -48,17 +59,25 @@ export class Game {
     this.ui = new UI();
     this.debug = new Debug(this);
 
-    this.ui.updatePlayerHealth(this.playerSnail.health, this.playerSnail.maxHealth);
-    this.ui.updateEnemyHealth(this.npcSnail.health, this.npcSnail.maxHealth);
-    this.ui.setInstructions('WASD move · Hold LMB sweep · Hold RMB thrust · Click arena to capture mouse');
+    this.ui.updatePlayerHealth(DEFAULT_MAX_HEALTH, DEFAULT_MAX_HEALTH);
+    this.ui.updateEnemyHealth(DEFAULT_MAX_HEALTH, DEFAULT_MAX_HEALTH);
+    this.ui.setHealthLabels('Player', 'Enemy');
+    this.refreshInstructions();
     this.ui.setMusicState(false);
     this.ui.setupMusicButton(this.toggleMusic.bind(this));
+    this.ui.setupModeButtons({
+      onSinglePlayer: this.startSinglePlayerSession.bind(this),
+      onMultiplayer: this.startMultiplayerSession.bind(this)
+    });
+    this.ui.showStartMenu();
 
+    this.cameraController.setLockOnEnabled(false);
     this.cameraController.snapToTarget(
-      this.playerSnail.getBodyPosition(),
-      this.npcSnail.getBodyPosition(),
-      this.playerSnail.getFacingVector()
+      DEFAULT_CAMERA_PLAYER,
+      DEFAULT_CAMERA_ENEMY,
+      DEFAULT_FORWARD
     );
+
     this.onWindowResize();
     window.addEventListener('resize', this.onWindowResize.bind(this));
   }
@@ -75,6 +94,8 @@ export class Game {
 
   stop() {
     this.isRunning = false;
+    this.currentSession?.leave();
+    this.currentSession = null;
   }
 
   animate() {
@@ -93,83 +114,214 @@ export class Game {
   }
 
   update(delta) {
-    if (this.gameResult) {
+    if (!this.currentSession) {
+      if (this.debug) {
+        this.debug.update();
+      }
       return;
     }
 
-    const movementAxes = this.keyboardControls.getMovementAxes();
-    const movementDirection = this.cameraController.getMovementDirection(movementAxes);
-    const combatInput = this.mouseControls.consumeCombatInput();
+    const localInput = this.buildLocalInput();
+    this.currentSession.update(delta, localInput);
 
-    this.playerSnail.move(movementDirection, delta);
-    this.playerSnail.update(delta, combatInput);
-
-    this.npcSnail.update(delta, this.playerSnail.getBodyPosition());
-    this.resolveBodyCollision();
-
-    this.cameraController.update(
-      this.playerSnail.getBodyPosition(),
-      this.npcSnail.getBodyPosition(),
-      this.playerSnail.getFacingVector()
-    );
-    this.handleCombat();
-    this.updateHud();
+    const localState = this.currentSession.getLocalPlayerState();
+    const opponentState = this.currentSession.getOpponentPlayerState();
+    this.applyViewState(localState, opponentState, localInput.lockOnHeld, delta);
+    this.updateHud(localState, opponentState);
+    this.updateOverlay();
 
     if (this.debug) {
       this.debug.update();
     }
   }
 
-  resolveBodyCollision() {
-    const collision = this.collisionDetection.checkBodyCollision(this.playerSnail, this.npcSnail);
-    if (!collision.collision) {
+  buildLocalInput() {
+    const movementAxes = this.keyboardControls.getMovementAxes();
+    const movementDirection = this.cameraController.getMovementDirection(movementAxes);
+    const combatInput = this.mouseControls.consumeCombatInput();
+
+    return {
+      moveX: movementDirection.x,
+      moveZ: movementDirection.z,
+      jumpPressed: this.keyboardControls.consumeJumpRequest(),
+      lockOnHeld: this.keyboardControls.isLockOnHeld(),
+      combatMode: combatInput.mode,
+      lookX: combatInput.lookX,
+      lookY: combatInput.lookY
+    };
+  }
+
+  applyViewState(localState, opponentState, lockOnHeld, delta) {
+    if (!localState) {
+      this.playerSnail.setVisible(false);
+      this.opponentSnail.setVisible(false);
+      this.hasRenderedMatchState = false;
       return;
     }
 
-    const displacement = collision.direction.clone().multiplyScalar(collision.overlap / 2);
-    this.playerSnail.mesh.position.addScaledVector(displacement, -1);
-    this.npcSnail.mesh.position.add(displacement);
-    this.playerSnail.clampToArena();
-    this.npcSnail.clampToArena();
-    this.playerSnail.refreshPositionCache();
-    this.npcSnail.refreshPositionCache();
-  }
-
-  handleCombat() {
-    const playerImpact = this.collisionDetection.checkImpactCollision(this.playerSnail, this.npcSnail);
-    this.playerSnail.setImpactPower(playerImpact.impactPower);
-
-    if (playerImpact.collision && playerImpact.impactPower >= playerImpact.threshold) {
-      const npcDamaged = this.npcSnail.takeDamage(1);
-      if (npcDamaged && this.npcSnail.health <= 0) {
-        this.endGame(true);
-        return;
-      }
+    this.playerSnail.applyMatchState(localState, delta);
+    if (opponentState) {
+      this.opponentSnail.applyMatchState(opponentState, delta);
+    } else {
+      this.opponentSnail.setVisible(false);
     }
 
-    const npcImpact = this.collisionDetection.checkImpactCollision(this.npcSnail, this.playerSnail);
-    this.npcSnail.setImpactPower(npcImpact.impactPower);
+    const fallbackOpponentState = opponentState ?? {
+      position: {
+        x: localState.position.x,
+        y: localState.position.y,
+        z: localState.position.z - 6
+      },
+      connected: false
+    };
 
-    if (npcImpact.collision && npcImpact.impactPower >= npcImpact.threshold) {
-      const playerDamaged = this.playerSnail.takeDamage(1);
-      if (playerDamaged && this.playerSnail.health <= 0) {
-        this.endGame(false);
-      }
+    const lockOnEnabled = Boolean(lockOnHeld && opponentState?.connected);
+    this.cameraController.setLockOnEnabled(lockOnEnabled);
+
+    if (!this.hasRenderedMatchState) {
+      this.cameraController.snapToTarget(
+        this.playerSnail.getBodyPosition(),
+        new THREE.Vector3(
+          fallbackOpponentState.position.x,
+          fallbackOpponentState.position.y,
+          fallbackOpponentState.position.z
+        ),
+        this.playerSnail.getFacingVector()
+      );
+      this.hasRenderedMatchState = true;
+    } else {
+      this.cameraController.update(
+        this.playerSnail.getBodyPosition(),
+        new THREE.Vector3(
+          fallbackOpponentState.position.x,
+          fallbackOpponentState.position.y,
+          fallbackOpponentState.position.z
+        ),
+        this.playerSnail.getFacingVector()
+      );
     }
   }
 
-  updateHud() {
-    this.ui.updatePlayerHealth(this.playerSnail.health, this.playerSnail.maxHealth);
-    this.ui.updateEnemyHealth(this.npcSnail.health, this.npcSnail.maxHealth);
+  updateHud(localState, opponentState) {
+    if (localState) {
+      this.ui.updatePlayerHealth(localState.health, localState.maxHealth);
+    }
+
+    if (opponentState) {
+      this.ui.updateEnemyHealth(opponentState.health, opponentState.maxHealth);
+    }
+
+    const labels = this.currentSession?.getHudLabels() ?? { opponent: 'Enemy' };
+    this.ui.setHealthLabels('Player', labels.opponent);
   }
 
-  endGame(playerWon) {
-    this.gameResult = playerWon ? 'won' : 'lost';
+  updateOverlay() {
+    const overlay = this.currentSession?.getOverlayState() ?? null;
+    const overlayKey = overlay ? JSON.stringify({
+      title: overlay.title,
+      body: overlay.body,
+      actions: overlay.actions.map((action) => action.id)
+    }) : null;
+
+    if (!overlay) {
+      if (this.currentOverlayKey !== null) {
+        this.ui.clearMessage();
+        this.currentOverlayKey = null;
+      }
+      return;
+    }
+
+    if (overlayKey === this.currentOverlayKey) {
+      return;
+    }
+
+    this.currentOverlayKey = overlayKey;
+    this.ui.showMessage({
+      title: overlay.title,
+      body: overlay.body,
+      actions: overlay.actions.map((action) => ({
+        label: action.label,
+        onClick: () => this.handleOverlayAction(action.id)
+      }))
+    });
+  }
+
+  handleOverlayAction(actionId) {
+    switch (actionId) {
+      case 'restart':
+        if (this.currentSession instanceof SinglePlayerSession) {
+          this.currentSession.restart();
+          this.ui.clearMessage();
+          this.currentOverlayKey = null;
+          this.hasRenderedMatchState = false;
+        }
+        break;
+      case 'menu':
+      case 'leave':
+        this.returnToModeSelect();
+        break;
+    }
+  }
+
+  startSinglePlayerSession() {
+    this.enterSession(new SinglePlayerSession());
+  }
+
+  startMultiplayerSession() {
+    this.enterSession(new MultiplayerSession());
+  }
+
+  enterSession(session) {
+    this.currentSession?.leave();
+    this.currentSession = session;
+    this.currentOverlayKey = null;
+    this.hasRenderedMatchState = false;
+    this.resetViewActors();
+    this.ui.hideStartMenu();
+    this.ui.clearMessage();
+    this.ui.updatePlayerHealth(DEFAULT_MAX_HEALTH, DEFAULT_MAX_HEALTH);
+    this.ui.updateEnemyHealth(DEFAULT_MAX_HEALTH, DEFAULT_MAX_HEALTH);
+    this.refreshInstructions();
+
     if (document.pointerLockElement === this.container && document.exitPointerLock) {
       document.exitPointerLock();
     }
-    this.ui.showGameOverMessage(playerWon);
-    this.stop();
+  }
+
+  returnToModeSelect() {
+    this.currentSession?.leave();
+    this.currentSession = null;
+    this.currentOverlayKey = null;
+    this.hasRenderedMatchState = false;
+    this.resetViewActors();
+    this.ui.clearMessage();
+    this.ui.showStartMenu();
+    this.ui.setHealthLabels('Player', 'Enemy');
+    this.ui.updatePlayerHealth(DEFAULT_MAX_HEALTH, DEFAULT_MAX_HEALTH);
+    this.ui.updateEnemyHealth(DEFAULT_MAX_HEALTH, DEFAULT_MAX_HEALTH);
+    this.cameraController.setLockOnEnabled(false);
+    this.cameraController.snapToTarget(
+      DEFAULT_CAMERA_PLAYER,
+      DEFAULT_CAMERA_ENEMY,
+      DEFAULT_FORWARD
+    );
+
+    if (document.pointerLockElement === this.container && document.exitPointerLock) {
+      document.exitPointerLock();
+    }
+  }
+
+  refreshInstructions() {
+    this.ui.setInstructions(
+      'WASD move · Space jump · LMB sweep · RMB thrust · Hold Shift lock-on · Click arena'
+    );
+  }
+
+  resetViewActors() {
+    this.playerSnail.setVisible(false);
+    this.opponentSnail.setVisible(false);
+    delete this.playerSnail.mesh.userData.hasAppliedMatchState;
+    delete this.opponentSnail.mesh.userData.hasAppliedMatchState;
   }
 
   toggleMusic() {
@@ -184,6 +336,17 @@ export class Game {
     }
 
     this.ui.setMusicState(this.audio.isPlaying);
+  }
+
+  getDebugState() {
+    return {
+      sessionState: this.currentSession?.getConnectionState() ?? 'menu',
+      localSlot: this.currentSession?.getLocalSlot() ?? null,
+      localPlayer: this.currentSession?.getLocalPlayerState() ?? null,
+      opponentPlayer: this.currentSession?.getOpponentPlayerState() ?? null,
+      playerView: this.playerSnail.mesh.visible ? this.playerSnail : null,
+      opponentView: this.opponentSnail.mesh.visible ? this.opponentSnail : null
+    };
   }
 
   onWindowResize() {

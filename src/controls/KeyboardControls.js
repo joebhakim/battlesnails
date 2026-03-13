@@ -4,8 +4,10 @@ export class KeyboardControls {
       forward: false,
       backward: false,
       left: false,
-      right: false
+      right: false,
+      lockOn: false
     };
+    this.pendingJump = false;
 
     this.setupEventListeners();
   }
@@ -42,6 +44,18 @@ export class KeyboardControls {
         this.keys.right = isPressed;
         event.preventDefault();
         break;
+      case 'shift':
+        this.keys.lockOn = isPressed;
+        event.preventDefault();
+        break;
+      case ' ':
+      case 'space':
+      case 'spacebar':
+        if (isPressed && !event.repeat) {
+          this.pendingJump = true;
+        }
+        event.preventDefault();
+        break;
     }
   }
 
@@ -50,5 +64,15 @@ export class KeyboardControls {
       forward: Number(this.keys.forward) - Number(this.keys.backward),
       right: Number(this.keys.right) - Number(this.keys.left)
     };
+  }
+
+  isLockOnHeld() {
+    return this.keys.lockOn;
+  }
+
+  consumeJumpRequest() {
+    const shouldJump = this.pendingJump;
+    this.pendingJump = false;
+    return shouldJump;
   }
 }

@@ -15,35 +15,42 @@ export class PlayerSnail extends SnailActor {
       shellCriticalColor: 0xa63a1f,
       stalkNeutralPitch: 0.08,
       stalkYawLimit: 1.3,
-      stalkPitchMin: -0.75,
-      stalkPitchMax: 0.85,
-      stalkExtensionMin: 0.72,
-      stalkExtensionMax: 1.95,
+      stalkPitchMin: -1.2,
+      stalkPitchMax: 1.15,
       stalkResponse: 15,
       stalkRecover: 9,
       impactThreshold: 5.8,
       impactMomentumFactor: 0.35
     });
 
-    this.sweepYawSensitivity = 0.0125;
-    this.sweepPitchSensitivity = 0.0095;
-    this.sweepExtensionSensitivity = 0.0038;
-    this.thrustYawSensitivity = 0.0065;
-    this.thrustPitchSensitivity = 0.006;
-    this.thrustExtensionSensitivity = 0.014;
+    this.lockedMoveSpeed = 7.5;
+    this.freeMoveSpeed = 10;
+    this.speed = this.freeMoveSpeed;
+
+    this.sweepYawSensitivity = 0.011;
+    this.sweepPitchSensitivity = 0.014;
+    this.thrustYawSensitivity = 0.005;
+    this.thrustPitchSensitivity = 0.011;
+
+    this.jumpVelocity = 8.5;
+    this.gravity = 24;
+    this.verticalVelocity = 0;
+    this.isGrounded = true;
   }
 
-  move(direction, delta) {
-    if (direction.lengthSq() === 0) {
-      return;
+  move(direction, delta, facingDirection = direction) {
+    if (direction.lengthSq() > 0) {
+      this.moveAlong(direction, this.speed, delta);
     }
 
-    this.moveAlong(direction, this.speed, delta);
-    this.faceDirection(direction, delta);
+    if (facingDirection.lengthSq() > 0) {
+      this.faceDirection(facingDirection, delta);
+    }
   }
 
   update(delta, combatInput) {
     this.applyCombatInput(combatInput);
+    this.updateJump(delta);
     this.updateShared(delta);
   }
 
@@ -57,21 +64,46 @@ export class PlayerSnail extends SnailActor {
     const intensity = Math.min(1, movementAmount / 18);
 
     if (combatInput.mode === 'thrust') {
-      const extensionDelta = Math.max(0, -combatInput.lookY) * this.thrustExtensionSensitivity;
       this.adjustStalkTargetPose({
-        yaw: combatInput.lookX * this.thrustYawSensitivity,
-        pitch: -combatInput.lookY * this.thrustPitchSensitivity,
-        extension: extensionDelta - Math.max(0, combatInput.lookY) * 0.007
+        yaw: -combatInput.lookX * this.thrustYawSensitivity,
+        pitch: -combatInput.lookY * this.thrustPitchSensitivity
       }, 'thrust', intensity);
       return;
     }
 
     this.adjustStalkTargetPose({
-      yaw: combatInput.lookX * this.sweepYawSensitivity,
-      pitch: -combatInput.lookY * this.sweepPitchSensitivity,
-      extension: (
-        Math.abs(combatInput.lookX) + Math.max(0, -combatInput.lookY) * 0.7
-      ) * this.sweepExtensionSensitivity - Math.max(0, combatInput.lookY) * 0.004
+      yaw: -combatInput.lookX * this.sweepYawSensitivity,
+      pitch: -combatInput.lookY * this.sweepPitchSensitivity
     }, 'swing', intensity);
+  }
+
+  setLockOnEnabled(isLockedOn) {
+    this.speed = isLockedOn ? this.lockedMoveSpeed : this.freeMoveSpeed;
+  }
+
+  jump() {
+    if (!this.isGrounded) {
+      return false;
+    }
+
+    this.isGrounded = false;
+    this.verticalVelocity = this.jumpVelocity;
+    return true;
+  }
+
+  updateJump(delta) {
+    if (this.isGrounded) {
+      this.mesh.position.y = this.groundHeight;
+      return;
+    }
+
+    this.verticalVelocity -= this.gravity * delta;
+    this.mesh.position.y += this.verticalVelocity * delta;
+
+    if (this.mesh.position.y <= this.groundHeight) {
+      this.mesh.position.y = this.groundHeight;
+      this.verticalVelocity = 0;
+      this.isGrounded = true;
+    }
   }
 }

@@ -1,6 +1,6 @@
 # BattleSnails Docs
 
-This documentation matches the simplified single-player version of BattleSnails.
+This documentation matches the current version of BattleSnails, including single-player and LAN multiplayer.
 
 ## Sections
 

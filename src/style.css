@@ -107,6 +107,86 @@ input {
   color: #dbeafe;
 }
 
+#start-menu {
+  position: absolute;
+  inset: 0;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(15, 23, 42, 0.28);
+  backdrop-filter: blur(8px);
+  z-index: 18;
+}
+
+#start-menu.visible {
+  display: flex;
+}
+
+#boot-error {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(15, 23, 42, 0.72);
+  backdrop-filter: blur(8px);
+  z-index: 20;
+}
+
+.menu-card {
+  width: min(520px, calc(100vw - 48px));
+  padding: 28px 30px;
+  border-radius: 28px;
+  background: rgba(15, 23, 42, 0.92);
+  border: 1px solid rgba(148, 163, 184, 0.25);
+  box-shadow: 0 24px 70px rgba(15, 23, 42, 0.45);
+}
+
+.menu-kicker {
+  margin: 0 0 8px;
+  font-size: 0.82rem;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+
+.menu-card h1 {
+  margin: 0;
+  font-size: clamp(2rem, 6vw, 3.4rem);
+  line-height: 0.95;
+}
+
+.menu-copy {
+  margin: 14px 0 0;
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+.menu-actions {
+  display: grid;
+  gap: 12px;
+  margin-top: 24px;
+}
+
+.menu-actions button {
+  padding: 14px 18px;
+  border: 1px solid rgba(148, 163, 184, 0.26);
+  border-radius: 16px;
+  background: rgba(30, 41, 59, 0.96);
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+  transition: transform 0.15s ease, background-color 0.15s ease, border-color 0.15s ease;
+}
+
+.menu-actions button:hover {
+  transform: translateY(-1px);
+  border-color: rgba(56, 189, 248, 0.55);
+  background: rgba(51, 65, 85, 0.98);
+}
+
 #debug-panel {
   position: absolute;
   top: 18px;

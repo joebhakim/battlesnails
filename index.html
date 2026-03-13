@@ -13,8 +13,8 @@
     <div id="hud">
       <div class="hud-card" id="player-health">
         <div class="hud-header">
-          <span class="health-label">Player</span>
-          <span class="health-value" id="player-health-value">3/3</span>
+          <span class="health-label" id="player-label">Player</span>
+          <span class="health-value" id="player-health-value">40/40</span>
         </div>
         <div class="health-bar">
           <div class="health-bar-fill player-health-bar-fill"></div>
@@ -23,8 +23,8 @@
 
       <div class="hud-card" id="enemy-health">
         <div class="hud-header">
-          <span class="health-label">Enemy</span>
-          <span class="health-value" id="enemy-health-value">3/3</span>
+          <span class="health-label" id="enemy-label">Enemy</span>
+          <span class="health-value" id="enemy-health-value">40/40</span>
         </div>
         <div class="health-bar">
           <div class="health-bar-fill enemy-health-bar-fill"></div>
@@ -32,7 +32,19 @@
       </div>
 
       <div class="hud-card controls-card" id="controls-hint">
-        WASD move · Hold LMB sweep · Hold RMB thrust · Click arena to capture mouse
+        WASD move · Space jump · LMB sweep · RMB thrust · Hold Shift lock-on · Click arena
+      </div>
+    </div>
+
+    <div id="start-menu" class="visible">
+      <div class="menu-card">
+        <p class="menu-kicker">BattleSnails</p>
+        <h1>Choose A Mode</h1>
+        <p class="menu-copy">Single-player stays local. LAN multiplayer auto-pairs two browser clients through a server on this machine, either locally or from another device on the same network.</p>
+        <div class="menu-actions">
+          <button id="start-singleplayer" type="button">Single Player</button>
+          <button id="start-multiplayer" type="button">LAN Multiplayer</button>
+        </div>
       </div>
     </div>
 
@@ -47,20 +59,22 @@
 
         <div class="debug-section">
           <h3>Combat</h3>
+          <div>Session: <span id="session-state">idle</span></div>
+          <div>Local slot: <span id="local-slot">-</span></div>
           <div>Collision: <span id="collision-status">Clear</span></div>
           <div>Player mode: <span id="player-control-mode">idle</span></div>
           <div>Player impact: <span id="player-impact-power">0.00</span></div>
           <div>Mouse capture: <span id="mouse-capture-status">No</span></div>
-          <div>NPC state: <span id="npc-state">approach</span></div>
-          <div>NPC invincible: <span id="npc-invincibility">No</span></div>
-          <div>NPC health: <span id="npc-health">3/3</span></div>
+          <div>Opponent state: <span id="opponent-state">idle</span></div>
+          <div>Opponent invincible: <span id="opponent-invincibility">No</span></div>
+          <div>Opponent health: <span id="opponent-health">40/40</span></div>
         </div>
 
         <div class="debug-section">
           <h3>Positions</h3>
           <div>Eye stalk tip: <span id="eye-stalk-position">x: 0.00, y: 0.00, z: 0.00</span></div>
-          <div>NPC body: <span id="npc-body-position">x: 0.00, y: 0.00, z: 0.00</span></div>
-          <div>NPC radius: <span id="npc-body-radius">0.00</span></div>
+          <div>Opponent body: <span id="opponent-body-position">x: 0.00, y: 0.00, z: 0.00</span></div>
+          <div>Opponent radius: <span id="opponent-body-radius">0.00</span></div>
         </div>
 
         <div class="debug-section">

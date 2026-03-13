@@ -4,9 +4,8 @@ export class Debug {
     this.enabled = false;
     this.autoUpdate = true;
     this.previousControlMode = 'idle';
-    this.previousNpcState = null;
-    this.previousNpcHealth = null;
-    this.previousNpcInvincibility = false;
+    this.previousSessionState = 'menu';
+    this.previousOpponentHealth = null;
     this.previousPointerLock = false;
     this.previousImpactReady = false;
     this.events = [];
@@ -16,16 +15,18 @@ export class Debug {
     this.debugInfo = document.getElementById('debug-info');
     this.playerToNpcDistance = document.getElementById('player-to-npc-distance');
     this.npcToPlayerDistance = document.getElementById('npc-to-player-distance');
+    this.sessionState = document.getElementById('session-state');
+    this.localSlot = document.getElementById('local-slot');
     this.collisionStatus = document.getElementById('collision-status');
     this.playerControlMode = document.getElementById('player-control-mode');
     this.playerImpactPower = document.getElementById('player-impact-power');
     this.mouseCaptureStatus = document.getElementById('mouse-capture-status');
-    this.npcState = document.getElementById('npc-state');
+    this.opponentState = document.getElementById('opponent-state');
     this.eyeStalkPosition = document.getElementById('eye-stalk-position');
-    this.npcBodyPosition = document.getElementById('npc-body-position');
-    this.npcBodyRadius = document.getElementById('npc-body-radius');
-    this.npcInvincibility = document.getElementById('npc-invincibility');
-    this.npcHealth = document.getElementById('npc-health');
+    this.opponentBodyPosition = document.getElementById('opponent-body-position');
+    this.opponentBodyRadius = document.getElementById('opponent-body-radius');
+    this.opponentInvincibility = document.getElementById('opponent-invincibility');
+    this.opponentHealth = document.getElementById('opponent-health');
     this.eventLog = document.getElementById('event-log');
     this.debugUpdateBtn = document.getElementById('debug-update');
     this.autoUpdateCheckbox = document.getElementById('auto-update');
@@ -67,46 +68,91 @@ export class Debug {
   }
 
   updateDebugInfo() {
-    const playerTip = this.game.playerSnail.getEyeStalkPosition();
-    const npcTip = this.game.npcSnail.getEyeStalkPosition();
-    const playerBody = this.game.playerSnail.getBodyPosition();
-    const npcBody = this.game.npcSnail.getBodyPosition();
-    const playerImpact = this.game.collisionDetection.checkImpactCollision(this.game.playerSnail, this.game.npcSnail);
+    const debugState = this.game.getDebugState();
+    const localView = debugState.playerView;
+    const opponentView = debugState.opponentView;
+    const localState = debugState.localPlayer;
+    const opponentState = debugState.opponentPlayer;
 
-    this.playerToNpcDistance.textContent = playerTip.distanceTo(npcBody).toFixed(2);
-    this.npcToPlayerDistance.textContent = npcTip.distanceTo(playerBody).toFixed(2);
-
-    const collisionReady = playerImpact.collision && playerImpact.impactPower >= playerImpact.threshold;
-    this.collisionStatus.textContent = collisionReady
-      ? 'Impact ready'
-      : playerImpact.collision
-        ? 'Glancing'
-        : 'Clear';
-    this.collisionStatus.className = collisionReady ? 'collision-true' : '';
-
-    this.playerControlMode.textContent = this.game.playerSnail.getCombatMode();
-    this.playerImpactPower.textContent = `${this.game.playerSnail.getImpactPower().toFixed(2)} / ${this.game.playerSnail.getImpactThreshold().toFixed(2)}`;
+    this.sessionState.textContent = debugState.sessionState;
+    this.localSlot.textContent = debugState.localSlot ?? '-';
     this.mouseCaptureStatus.textContent = this.game.mouseControls.isPointerLocked() ? 'Yes' : 'No';
     this.mouseCaptureStatus.className = this.game.mouseControls.isPointerLocked() ? 'collision-true' : '';
 
-    this.npcState.textContent = this.game.npcSnail.state;
-    this.eyeStalkPosition.textContent = `x: ${playerTip.x.toFixed(2)}, y: ${playerTip.y.toFixed(2)}, z: ${playerTip.z.toFixed(2)}`;
-    this.npcBodyPosition.textContent = `x: ${npcBody.x.toFixed(2)}, y: ${npcBody.y.toFixed(2)}, z: ${npcBody.z.toFixed(2)}`;
-    this.npcBodyRadius.textContent = this.game.npcSnail.getBodyRadius().toFixed(2);
-    this.npcInvincibility.textContent = this.game.npcSnail.isInvincible() ? 'Yes' : 'No';
-    this.npcInvincibility.className = this.game.npcSnail.isInvincible() ? 'invincible-true' : '';
-    this.npcHealth.textContent = `${this.game.npcSnail.health}/${this.game.npcSnail.maxHealth}`;
+    if (!localView || !localState) {
+      this.playerToNpcDistance.textContent = '0.00';
+      this.npcToPlayerDistance.textContent = '0.00';
+      this.collisionStatus.textContent = 'Clear';
+      this.playerControlMode.textContent = 'idle';
+      this.playerImpactPower.textContent = '0.00 / 0.00';
+      this.opponentState.textContent = debugState.sessionState;
+      this.eyeStalkPosition.textContent = 'x: 0.00, y: 0.00, z: 0.00';
+      this.opponentBodyPosition.textContent = 'x: 0.00, y: 0.00, z: 0.00';
+      this.opponentBodyRadius.textContent = '0.00';
+      this.opponentInvincibility.textContent = 'No';
+      this.opponentHealth.textContent = opponentState
+        ? `${opponentState.health}/${opponentState.maxHealth}`
+        : '0/0';
+      this.recordEvents(debugState);
+      this.renderEventLog();
+      return;
+    }
 
-    this.recordEvents();
+    const playerTip = localView.getEyeStalkPosition();
+    const playerBody = localView.getBodyPosition();
+
+    if (opponentView && opponentState) {
+      const opponentTip = opponentView.getEyeStalkPosition();
+      const opponentBody = opponentView.getBodyPosition();
+      const playerImpact = this.game.collisionDetection.checkImpactCollision(localView, opponentView);
+      const collisionReady = playerImpact.collision && playerImpact.impactPower >= playerImpact.threshold;
+
+      this.playerToNpcDistance.textContent = playerTip.distanceTo(opponentBody).toFixed(2);
+      this.npcToPlayerDistance.textContent = opponentTip.distanceTo(playerBody).toFixed(2);
+      this.collisionStatus.textContent = collisionReady
+        ? 'Impact ready'
+        : playerImpact.collision
+          ? 'Glancing'
+          : 'Clear';
+      this.collisionStatus.className = collisionReady ? 'collision-true' : '';
+      this.opponentState.textContent = `${debugState.sessionState} / ${opponentState.controlMode}`;
+      this.opponentBodyPosition.textContent = `x: ${opponentBody.x.toFixed(2)}, y: ${opponentBody.y.toFixed(2)}, z: ${opponentBody.z.toFixed(2)}`;
+      this.opponentBodyRadius.textContent = opponentView.getBodyRadius().toFixed(2);
+      this.opponentInvincibility.textContent = opponentState.invincible ? 'Yes' : 'No';
+      this.opponentInvincibility.className = opponentState.invincible ? 'invincible-true' : '';
+      this.opponentHealth.textContent = `${opponentState.health}/${opponentState.maxHealth}`;
+    } else {
+      this.playerToNpcDistance.textContent = '0.00';
+      this.npcToPlayerDistance.textContent = '0.00';
+      this.collisionStatus.textContent = 'Waiting';
+      this.collisionStatus.className = '';
+      this.opponentState.textContent = debugState.sessionState;
+      this.opponentBodyPosition.textContent = 'x: 0.00, y: 0.00, z: 0.00';
+      this.opponentBodyRadius.textContent = '0.00';
+      this.opponentInvincibility.textContent = 'No';
+      this.opponentInvincibility.className = '';
+      this.opponentHealth.textContent = '0/0';
+    }
+
+    this.playerControlMode.textContent = localState.controlMode;
+    this.playerImpactPower.textContent = `${localState.impactPower.toFixed(2)} / ${localView.getImpactThreshold().toFixed(2)}`;
+    this.eyeStalkPosition.textContent = `x: ${playerTip.x.toFixed(2)}, y: ${playerTip.y.toFixed(2)}, z: ${playerTip.z.toFixed(2)}`;
+
+    this.recordEvents(debugState);
     this.renderEventLog();
   }
 
-  recordEvents() {
-    const currentControlMode = this.game.playerSnail.getCombatMode();
+  recordEvents(debugState) {
+    const currentControlMode = debugState.localPlayer?.controlMode ?? 'idle';
     if (currentControlMode !== this.previousControlMode) {
       this.addEvent(`Player mode: ${currentControlMode}`);
     }
     this.previousControlMode = currentControlMode;
+
+    if (debugState.sessionState !== this.previousSessionState) {
+      this.addEvent(`Session: ${debugState.sessionState}`);
+      this.previousSessionState = debugState.sessionState;
+    }
 
     const pointerLocked = this.game.mouseControls.isPointerLocked();
     if (pointerLocked !== this.previousPointerLock) {
@@ -114,26 +160,13 @@ export class Debug {
       this.previousPointerLock = pointerLocked;
     }
 
-    if (this.previousNpcState !== this.game.npcSnail.state) {
-      this.addEvent(`NPC state: ${this.game.npcSnail.state}`);
-      this.previousNpcState = this.game.npcSnail.state;
+    if (this.previousOpponentHealth !== null && debugState.opponentPlayer && debugState.opponentPlayer.health < this.previousOpponentHealth) {
+      this.addEvent(`Opponent took damage: ${debugState.opponentPlayer.health}/${debugState.opponentPlayer.maxHealth}`);
     }
+    this.previousOpponentHealth = debugState.opponentPlayer?.health ?? null;
 
-    if (this.previousNpcHealth !== null && this.game.npcSnail.health < this.previousNpcHealth) {
-      this.addEvent(`NPC took damage: ${this.game.npcSnail.health}/${this.game.npcSnail.maxHealth}`);
-    }
-    this.previousNpcHealth = this.game.npcSnail.health;
-
-    const npcInvincible = this.game.npcSnail.isInvincible();
-    if (npcInvincible && !this.previousNpcInvincibility) {
-      this.addEvent('NPC invincibility started');
-    }
-    if (!npcInvincible && this.previousNpcInvincibility) {
-      this.addEvent('NPC invincibility ended');
-    }
-    this.previousNpcInvincibility = npcInvincible;
-
-    const impactReady = this.game.playerSnail.getImpactPower() >= this.game.playerSnail.getImpactThreshold();
+    const impactReady = Boolean(debugState.localPlayer && debugState.playerView &&
+      debugState.localPlayer.impactPower >= debugState.playerView.getImpactThreshold());
     if (impactReady && !this.previousImpactReady) {
       this.addEvent('Player impact threshold reached');
     }

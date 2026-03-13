@@ -14,15 +14,27 @@ export class CameraController {
     this.height = 4.6;
     this.playerFocusHeight = 1.4;
     this.enemyFocusHeight = 1.1;
+    this.lookAheadDistance = 4.4;
     this.positionLerp = 0.12;
     this.lookLerp = 0.16;
     this.playerFocusBias = 0.35;
+    this.lockOnEnabled = true;
+    this.movementForward = new THREE.Vector3(0, 0, -1);
+  }
+
+  setLockOnEnabled(enabled) {
+    this.lockOnEnabled = enabled;
+  }
+
+  isLockOnEnabled() {
+    return this.lockOnEnabled;
   }
 
   snapToTarget(playerPosition, enemyPosition, fallbackForward) {
     const layout = this.computeLayout(playerPosition, enemyPosition, fallbackForward);
     this.focus.copy(layout.focus);
     this.lookAtTarget.copy(layout.lookAt);
+    this.movementForward.copy(layout.movementForward);
     this.camera.position.copy(layout.position);
     this.camera.lookAt(this.lookAtTarget);
   }
@@ -32,6 +44,10 @@ export class CameraController {
     this.camera.position.lerp(layout.position, this.positionLerp);
     this.focus.lerp(layout.focus, this.lookLerp);
     this.lookAtTarget.lerp(layout.lookAt, this.lookLerp);
+    this.movementForward.lerp(layout.movementForward, this.lookLerp);
+    if (this.movementForward.lengthSq() > 0.0001) {
+      this.movementForward.normalize();
+    }
     this.camera.lookAt(this.lookAtTarget);
   }
 
@@ -47,30 +63,60 @@ export class CameraController {
       duelForward.normalize();
     }
 
+    const fallbackDirection = fallbackForward?.clone().setY(0) ?? duelForward.clone();
+    if (fallbackDirection.lengthSq() < 0.0001) {
+      fallbackDirection.copy(duelForward);
+    }
+    if (fallbackDirection.lengthSq() < 0.0001) {
+      fallbackDirection.set(0, 0, -1);
+    } else {
+      fallbackDirection.normalize();
+    }
+
     const playerFocus = this.focusBuffer.copy(playerPosition);
     playerFocus.y += this.playerFocusHeight;
 
     const enemyFocus = this.lookAtBuffer.copy(enemyPosition);
     enemyFocus.y += this.enemyFocusHeight;
 
-    const focus = playerFocus.clone().lerp(enemyFocus, 1 - this.playerFocusBias);
-    const position = playerFocus.clone()
-      .addScaledVector(duelForward, -this.distance)
-      .addScaledVector(this.up, this.height);
-    const lookAt = focus.clone();
+    if (this.lockOnEnabled) {
+      const focus = playerFocus.clone().lerp(enemyFocus, 1 - this.playerFocusBias);
+      const position = playerFocus.clone()
+        .addScaledVector(duelForward, -this.distance)
+        .addScaledVector(this.up, this.height);
+      const lookAt = focus.clone();
 
-    return { position, focus, lookAt };
+      return {
+        position,
+        focus,
+        lookAt,
+        movementForward: duelForward.clone()
+      };
+    }
+
+    const focus = playerFocus.clone();
+    const position = playerFocus.clone()
+      .addScaledVector(fallbackDirection, -this.distance)
+      .addScaledVector(this.up, this.height);
+    const lookAt = playerFocus.clone().addScaledVector(fallbackDirection, this.lookAheadDistance);
+
+    return {
+      position,
+      focus,
+      lookAt,
+      movementForward: fallbackDirection
+    };
   }
 
   getMovementBasis() {
-    const forward = this.lookAtTarget.clone().sub(this.camera.position).setY(0);
+    const forward = this.movementForward.clone().setY(0);
     if (forward.lengthSq() === 0) {
       forward.set(0, 0, -1);
     } else {
       forward.normalize();
     }
 
-    const right = new THREE.Vector3().crossVectors(this.up, forward).normalize();
+    const right = new THREE.Vector3().crossVectors(forward, this.up).normalize();
     return { forward, right };
   }
 

@@ -1,16 +1,26 @@
 export class UI {
   constructor() {
+    this.playerLabel = document.getElementById('player-label');
+    this.enemyLabel = document.getElementById('enemy-label');
     this.playerHealthBarFill = document.querySelector('#player-health .health-bar-fill');
     this.enemyHealthBarFill = document.querySelector('#enemy-health .health-bar-fill');
     this.playerHealthValue = document.getElementById('player-health-value');
     this.enemyHealthValue = document.getElementById('enemy-health-value');
     this.instructions = document.getElementById('controls-hint');
+    this.startMenu = document.getElementById('start-menu');
+    this.startSinglePlayerButton = document.getElementById('start-singleplayer');
+    this.startMultiplayerButton = document.getElementById('start-multiplayer');
     this.musicButton = document.getElementById('music-toggle');
     this.gameMessage = document.getElementById('game-message');
   }
 
   setInstructions(text) {
     this.instructions.textContent = text;
+  }
+
+  setHealthLabels(playerLabel, opponentLabel) {
+    this.playerLabel.textContent = playerLabel;
+    this.enemyLabel.textContent = opponentLabel;
   }
 
   updatePlayerHealth(currentHealth, maxHealth) {
@@ -39,31 +49,65 @@ export class UI {
     this.musicButton.addEventListener('click', toggleCallback);
   }
 
+  setupModeButtons({ onSinglePlayer, onMultiplayer }) {
+    this.startSinglePlayerButton.addEventListener('click', onSinglePlayer);
+    this.startMultiplayerButton.addEventListener('click', onMultiplayer);
+  }
+
+  showStartMenu() {
+    this.startMenu.classList.add('visible');
+  }
+
+  hideStartMenu() {
+    this.startMenu.classList.remove('visible');
+  }
+
   setMusicState(isPlaying) {
     this.musicButton.textContent = isPlaying ? 'Music On' : 'Music Off';
     this.musicButton.classList.toggle('active', isPlaying);
   }
 
-  showGameOverMessage(playerWon) {
+  showMessage({ title, body, actions = [] }) {
     this.gameMessage.innerHTML = '';
     this.gameMessage.classList.add('visible');
 
-    const title = document.createElement('h2');
-    title.textContent = playerWon ? 'Victory' : 'Defeat';
+    const titleElement = document.createElement('h2');
+    titleElement.textContent = title;
 
-    const body = document.createElement('p');
-    body.textContent = playerWon
-      ? 'Placeholder Pete is down.'
-      : 'The enemy landed the final strike.';
+    const bodyElement = document.createElement('p');
+    bodyElement.textContent = body;
 
-    const restartButton = document.createElement('button');
-    restartButton.type = 'button';
-    restartButton.className = 'restart-button';
-    restartButton.textContent = 'Restart';
-    restartButton.addEventListener('click', () => {
-      window.location.reload();
+    this.gameMessage.append(titleElement, bodyElement);
+
+    for (const action of actions) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'restart-button';
+      button.textContent = action.label;
+      button.addEventListener('click', action.onClick);
+      this.gameMessage.appendChild(button);
+    }
+  }
+
+  clearMessage() {
+    this.gameMessage.classList.remove('visible');
+    this.gameMessage.innerHTML = '';
+  }
+
+  showGameOverMessage(playerWon) {
+    this.showMessage({
+      title: playerWon ? 'Victory' : 'Defeat',
+      body: playerWon
+        ? 'Placeholder Pete is down.'
+        : 'The enemy landed the final strike.',
+      actions: [
+        {
+          label: 'Restart',
+          onClick: () => {
+            window.location.reload();
+          }
+        }
+      ]
     });
-
-    this.gameMessage.append(title, body, restartButton);
   }
 }
