@@ -1,96 +1,69 @@
 import * as THREE from 'three';
 
 import {
-  STALK_ACTIVE_PULL,
-  STALK_CONSTRAINT_ITERATIONS,
-  STALK_DAMPING,
-  STALK_GRAVITY,
-  STALK_IDLE_PULL,
-  STALK_SEGMENT_COUNT,
-  STALK_SEGMENT_RADIUS,
-  STALK_TOTAL_LENGTH,
+  STALK_ROOT_OFFSETS,
   buildStalkSegmentSamples,
   cloneNodeArray,
   createInitialStalkNodes,
   evaluateStalkImpact,
+  getBodyLocalDirection,
+  getLocalStalkDirection,
   getStalkGoalWorldPosition,
   getStalkRootWorldPosition,
   getTipWorldPosition,
   serializeNodes,
   simulateStalkRope
 } from './StalkRope.js';
+import {
+  DEFAULT_TUNING_CONFIG,
+  createTerrainConfigFromTuning,
+  createSimulationProfiles,
+  normalizeTuningConfig
+} from './Tuning.js';
+import { createTerrainPosition, getTerrainHeight } from '../world/Terrain.js';
 
 export const MATCH_TICK_RATE = 60;
 export const MATCH_TICK_DURATION = 1 / MATCH_TICK_RATE;
-export const DEFAULT_MAX_HEALTH = 3;
+export const DEFAULT_MAX_HEALTH = DEFAULT_TUNING_CONFIG.playerMaxHealth;
+export const DEFAULT_BOT_MAX_HEALTH = DEFAULT_TUNING_CONFIG.botMaxHealth;
+export const DEFAULT_JUMP_VELOCITY = DEFAULT_TUNING_CONFIG.jumpVelocity;
+export const TRAIL_CELL_SIZE = DEFAULT_TUNING_CONFIG.trailCellSize;
+export const TRAIL_SPEED_MULTIPLIER = DEFAULT_TUNING_CONFIG.trailSpeedMultiplier;
 
-const UP = new THREE.Vector3(0, 1, 0);
+const STALK_SIDE_KEYS = ['left', 'right'];
+const STALK_LOOK_INTENSITY_SCALE = 18;
+const TRAIL_CONTACT_RADIUS = 1.2;
+
 const PLAYER_STARTS = new Map([
-  [1, new THREE.Vector3(0, 1, 6)],
-  [2, new THREE.Vector3(0, 1, -6)]
+  [1, Object.freeze({ x: 0, z: 6 })],
+  [2, Object.freeze({ x: 0, z: -6 })]
 ]);
 
-const HUMAN_PROFILE = {
-  groundHeight: 1,
-  arenaRadius: 22,
-  bodyRadius: 1.8,
-  maxHealth: DEFAULT_MAX_HEALTH,
-  invincibilityDuration: 0.45,
-  jumpVelocity: 8.5,
-  gravity: 24,
-  turnSpeed: 12,
-  lockedMoveSpeed: 7.5,
-  freeMoveSpeed: 10,
-  stalkNeutralYaw: 0,
-  stalkNeutralPitch: 0.08,
-  stalkYawLimit: 1.3,
-  stalkPitchMin: -1.2,
-  stalkPitchMax: 1.15,
-  stalkResponse: 15,
-  stalkRecover: 9,
-  stalkSegmentCount: STALK_SEGMENT_COUNT,
-  stalkTotalLength: STALK_TOTAL_LENGTH,
-  stalkSegmentRadius: STALK_SEGMENT_RADIUS,
-  stalkGravity: STALK_GRAVITY,
-  stalkDamping: STALK_DAMPING,
-  stalkConstraintIterations: STALK_CONSTRAINT_ITERATIONS,
-  stalkDrivePull: STALK_ACTIVE_PULL,
-  stalkIdlePull: STALK_IDLE_PULL,
-  impactThreshold: 5.4,
-  impactMomentumFactor: 0.35,
-  sweepYawSensitivity: 0.011,
-  sweepPitchSensitivity: 0.014,
-  thrustYawSensitivity: 0.005,
-  thrustPitchSensitivity: 0.011
-};
+function createRingPoints(radius, count, angleOffset = 0) {
+  return Array.from({ length: count }, (_, index) => {
+    const angle = angleOffset + (index / count) * Math.PI * 2;
+    return {
+      x: Math.sin(angle) * radius,
+      z: Math.cos(angle) * radius
+    };
+  });
+}
 
-const BOT_PROFILE = {
-  ...HUMAN_PROFILE,
-  turnSpeed: 8,
-  lockedMoveSpeed: 4.2,
-  freeMoveSpeed: 4.2,
-  stalkNeutralPitch: 0.12,
-  stalkYawLimit: 1.05,
-  stalkPitchMin: -0.55,
-  stalkPitchMax: 0.7,
-  stalkResponse: 11,
-  stalkRecover: 7,
-  impactThreshold: 5.1,
-  impactMomentumFactor: 0.28,
-  sweepYawSensitivity: 0.009,
-  sweepPitchSensitivity: 0.009,
-  thrustYawSensitivity: 0.005,
-  thrustPitchSensitivity: 0.009
-};
+const BOT_STARTS = [
+  ...createRingPoints(8, 8, Math.PI / 8),
+  ...createRingPoints(12.5, 12, 0),
+  ...createRingPoints(17, 20, Math.PI / 20)
+];
 
 const DEFAULT_INPUT = Object.freeze({
   moveX: 0,
   moveZ: 0,
   jumpPressed: false,
   lockOnHeld: false,
-  combatMode: 'idle',
   lookX: 0,
-  lookY: 0
+  lookY: 0,
+  leftHeld: false,
+  rightHeld: false
 });
 
 function angleDifference(current, target) {
@@ -109,55 +82,174 @@ function cloneVector(vector) {
   return { x: vector.x, y: vector.y, z: vector.z };
 }
 
-function createInitialPosition(slot) {
-  return (PLAYER_STARTS.get(slot) ?? new THREE.Vector3()).clone();
+function computeImpactDamage(attacker, stalk, impactPower) {
+  const threshold = Math.max(0.0001, attacker.profile.impactThreshold);
+  const innervationMultiplier = stalk.held
+    ? attacker.profile.innervatedDamageMultiplier ?? 1
+    : 1;
+
+  return Math.max(
+    1,
+    Math.round((impactPower / threshold) * innervationMultiplier)
+  );
 }
 
-function resolveProfile(profileName) {
-  return profileName === 'bot' ? BOT_PROFILE : HUMAN_PROFILE;
+function createTrailCellKey(cellX, cellZ) {
+  return `${cellX}:${cellZ}`;
+}
+
+function quantizeTrailCoord(value, cellSize) {
+  return Math.round(value / cellSize);
+}
+
+function circleIntersectsTrailCell(x, z, radius, cell, cellSize) {
+  const halfSize = cellSize / 2;
+  const closestX = clamp(x, cell.x - halfSize, cell.x + halfSize);
+  const closestZ = clamp(z, cell.z - halfSize, cell.z + halfSize);
+  const deltaX = x - closestX;
+  const deltaZ = z - closestZ;
+  return (deltaX * deltaX) + (deltaZ * deltaZ) <= radius * radius;
+}
+
+function createInitialPosition(slot, terrainConfig) {
+  if (PLAYER_STARTS.has(slot)) {
+    const point = PLAYER_STARTS.get(slot);
+    return createTerrainPosition(point.x, point.z, terrainConfig);
+  }
+
+  const botIndex = Math.max(0, slot - 3);
+  const point = BOT_STARTS[botIndex % BOT_STARTS.length];
+  return createTerrainPosition(point.x, point.z, terrainConfig);
 }
 
 function normalizeInput(rawInput = {}) {
-  const combatMode = rawInput.combatMode === 'swing' || rawInput.combatMode === 'thrust'
-    ? rawInput.combatMode
-    : 'idle';
-
   return {
     moveX: Number.isFinite(rawInput.moveX) ? rawInput.moveX : 0,
     moveZ: Number.isFinite(rawInput.moveZ) ? rawInput.moveZ : 0,
     jumpPressed: Boolean(rawInput.jumpPressed),
     lockOnHeld: Boolean(rawInput.lockOnHeld),
-    combatMode,
     lookX: Number.isFinite(rawInput.lookX) ? rawInput.lookX : 0,
-    lookY: Number.isFinite(rawInput.lookY) ? rawInput.lookY : 0
+    lookY: Number.isFinite(rawInput.lookY) ? rawInput.lookY : 0,
+    leftHeld: Boolean(rawInput.leftHeld),
+    rightHeld: Boolean(rawInput.rightHeld)
   };
 }
 
-function createInitialStalkState(profile, position, rotationY) {
-  const rootWorld = getStalkRootWorldPosition(position, rotationY);
+function getPlayerGroundHeight(player, terrainConfig) {
+  return getTerrainHeight(player.position.x, player.position.z, terrainConfig);
+}
+
+function snapPlayerToGroundIfGrounded(player, terrainConfig) {
+  if (!player.grounded) {
+    return;
+  }
+
+  player.position.y = getPlayerGroundHeight(player, terrainConfig);
+}
+
+function getControlMode(input) {
+  if (input.leftHeld && input.rightHeld) {
+    return 'both';
+  }
+
+  if (input.leftHeld) {
+    return 'left';
+  }
+
+  if (input.rightHeld) {
+    return 'right';
+  }
+
+  return 'idle';
+}
+
+function createStalkState(profile, position, rotationY, side) {
+  const rootOffset = STALK_ROOT_OFFSETS[side] ?? STALK_ROOT_OFFSETS.right;
+  const targetYaw = profile.stalkNeutralYaw;
+  const targetPitch = profile.stalkNeutralPitch;
+  const rootWorld = getStalkRootWorldPosition(position, rotationY, rootOffset);
   const goalWorld = getStalkGoalWorldPosition(
     position,
     rotationY,
-    profile.stalkNeutralYaw,
-    profile.stalkNeutralPitch,
-    profile.stalkTotalLength
+    targetYaw,
+    targetPitch,
+    profile.stalkTotalLength,
+    rootOffset
   );
-  const stalkNodes = createInitialStalkNodes(rootWorld, goalWorld, profile.stalkSegmentCount);
-  const previousStalkNodes = cloneNodeArray(stalkNodes);
+  const nodes = createInitialStalkNodes(rootWorld, goalWorld, profile.stalkSegmentCount);
+  const tipPosition = getTipWorldPosition(nodes);
 
   return {
-    stalkNodes,
-    previousStalkNodes,
-    eyeTipPosition: getTipWorldPosition(stalkNodes),
-    previousEyeTipPosition: getTipWorldPosition(stalkNodes)
+    side,
+    rootOffset: rootOffset.clone(),
+    nodes,
+    previousNodes: cloneNodeArray(nodes),
+    tipPosition,
+    previousTipPosition: tipPosition.clone(),
+    tipVelocity: new THREE.Vector3(),
+    desiredYaw: targetYaw,
+    desiredPitch: targetPitch,
+    appliedYaw: targetYaw,
+    appliedPitch: targetPitch,
+    targetYaw: targetYaw,
+    targetPitch: targetPitch,
+    targetVector: getLocalStalkDirection(targetYaw, targetPitch),
+    currentVector: getLocalStalkDirection(targetYaw, targetPitch),
+    impactPower: 0,
+    held: false,
+    segmentRadius: profile.stalkSegmentRadius
   };
 }
 
-function createPlayerState(slot, profileName, connected = true) {
-  const profile = resolveProfile(profileName);
-  const position = createInitialPosition(slot);
-  const initialRotation = slot === 1 ? Math.PI : 0;
-  const stalkState = createInitialStalkState(profile, position, initialRotation);
+function getStalkEntries(player) {
+  return STALK_SIDE_KEYS.map((side) => [side, player.stalks[side]]);
+}
+
+function getCompositeTipPosition(player) {
+  const left = player.stalks.left.tipPosition;
+  const right = player.stalks.right.tipPosition;
+  return left.clone().add(right).multiplyScalar(0.5);
+}
+
+function updateCompositeTipState(player, delta) {
+  const nextEyeTipPosition = getCompositeTipPosition(player);
+  if (delta > 0) {
+    player.eyeTipVelocity.copy(nextEyeTipPosition).sub(player.eyeTipPosition).divideScalar(delta);
+  } else {
+    player.eyeTipVelocity.set(0, 0, 0);
+  }
+
+  player.previousEyeTipPosition.copy(player.eyeTipPosition);
+  player.eyeTipPosition.copy(nextEyeTipPosition);
+}
+
+function serializeStalk(stalk) {
+  return {
+    nodes: serializeNodes(stalk.nodes),
+    segmentRadius: stalk.segmentRadius,
+    held: stalk.held,
+    impactPower: stalk.impactPower,
+    targetVector: cloneVector(stalk.targetVector),
+    currentVector: cloneVector(stalk.currentVector),
+    targetYaw: stalk.desiredYaw,
+    targetPitch: stalk.desiredPitch
+  };
+}
+
+function createPlayerState(
+  slot,
+  profileName,
+  connected = true,
+  profileTemplates = createSimulationProfiles(),
+  terrainConfig
+) {
+  const profile = profileTemplates[profileName] ?? profileTemplates.human;
+  const position = createInitialPosition(slot, terrainConfig);
+  const initialRotation = slot === 1 ? Math.PI : slot === 2 ? 0 : Math.atan2(-position.x, -position.z);
+  const stalks = Object.fromEntries(
+    STALK_SIDE_KEYS.map((side) => [side, createStalkState(profile, position, initialRotation, side)])
+  );
+  const eyeTipPosition = stalks.left.tipPosition.clone().add(stalks.right.tipPosition).multiplyScalar(0.5);
 
   return {
     slot,
@@ -167,14 +259,14 @@ function createPlayerState(slot, profileName, connected = true) {
     position,
     previousPosition: position.clone(),
     bodyVelocity: new THREE.Vector3(),
-    eyeTipPosition: stalkState.eyeTipPosition,
-    previousEyeTipPosition: stalkState.previousEyeTipPosition,
+    eyeTipPosition,
+    previousEyeTipPosition: eyeTipPosition.clone(),
     eyeTipVelocity: new THREE.Vector3(),
-    stalkNodes: stalkState.stalkNodes,
-    previousStalkNodes: stalkState.previousStalkNodes,
+    stalks,
     rotationY: initialRotation,
     health: profile.maxHealth,
     maxHealth: profile.maxHealth,
+    onTrail: false,
     invincibilityTime: 0,
     grounded: true,
     verticalVelocity: 0,
@@ -182,13 +274,26 @@ function createPlayerState(slot, profileName, connected = true) {
     controlMode: 'idle',
     controlIntensity: 0,
     impactPower: 0,
-    bodyRadius: profile.bodyRadius,
-    stalkSegmentRadius: profile.stalkSegmentRadius,
-    stalkYaw: profile.stalkNeutralYaw,
-    stalkPitch: profile.stalkNeutralPitch,
-    stalkTargetYaw: profile.stalkNeutralYaw,
-    stalkTargetPitch: profile.stalkNeutralPitch
+    bodyRadius: profile.bodyRadius
   };
+}
+
+function applyProfileToPlayer(player, profile) {
+  player.profile = profile;
+  player.maxHealth = profile.maxHealth;
+  player.health = Math.min(player.health, player.maxHealth);
+  player.bodyRadius = profile.bodyRadius;
+
+  for (const [, stalk] of getStalkEntries(player)) {
+    stalk.segmentRadius = profile.stalkSegmentRadius;
+    stalk.desiredYaw = clamp(stalk.desiredYaw, -profile.stalkYawLimit, profile.stalkYawLimit);
+    stalk.desiredPitch = clamp(stalk.desiredPitch, profile.stalkPitchMin, profile.stalkPitchMax);
+    stalk.appliedYaw = clamp(stalk.appliedYaw, -profile.stalkYawLimit, profile.stalkYawLimit);
+    stalk.appliedPitch = clamp(stalk.appliedPitch, profile.stalkPitchMin, profile.stalkPitchMax);
+    stalk.targetYaw = stalk.desiredYaw;
+    stalk.targetPitch = stalk.desiredPitch;
+    stalk.targetVector.copy(getLocalStalkDirection(stalk.desiredYaw, stalk.desiredPitch));
+  }
 }
 
 export class MatchSimulation {
@@ -200,11 +305,18 @@ export class MatchSimulation {
 
     this.tickRate = options.tickRate ?? MATCH_TICK_RATE;
     this.tickDuration = 1 / this.tickRate;
+    this.tuningConfig = normalizeTuningConfig(options.tuning ?? DEFAULT_TUNING_CONFIG);
+    this.terrainConfig = createTerrainConfigFromTuning(this.tuningConfig);
+    this.profileTemplates = createSimulationProfiles(this.tuningConfig);
     this.mode = options.mode ?? 'singleplayer';
     this.phase = options.startImmediately === false ? 'waiting' : 'running';
     this.winnerSlot = null;
     this.endReason = null;
     this.tick = 0;
+    this.trailCellSize = options.trailCellSize ?? this.tuningConfig.trailCellSize;
+    this.trailSpeedMultiplier = options.trailSpeedMultiplier ?? this.tuningConfig.trailSpeedMultiplier;
+    this.trailContactRadius = options.trailContactRadius ?? this.tuningConfig.trailContactRadius;
+    this.wetTrailCells = new Map();
 
     this.players = new Map();
     this.inputs = new Map();
@@ -213,7 +325,9 @@ export class MatchSimulation {
       const player = createPlayerState(
         participant.slot,
         participant.profile ?? 'human',
-        participant.connected ?? true
+        participant.connected ?? true,
+        this.profileTemplates,
+        this.terrainConfig
       );
       this.players.set(player.slot, player);
       this.inputs.set(player.slot, { ...DEFAULT_INPUT });
@@ -231,7 +345,13 @@ export class MatchSimulation {
     this.inputs.clear();
 
     for (const descriptor of descriptors) {
-      const player = createPlayerState(descriptor.slot, descriptor.profile, descriptor.connected);
+      const player = createPlayerState(
+        descriptor.slot,
+        descriptor.profile,
+        descriptor.connected,
+        this.profileTemplates,
+        this.terrainConfig
+      );
       this.players.set(player.slot, player);
       this.inputs.set(player.slot, { ...DEFAULT_INPUT });
     }
@@ -240,6 +360,7 @@ export class MatchSimulation {
     this.winnerSlot = null;
     this.endReason = null;
     this.tick = 0;
+    this.wetTrailCells.clear();
   }
 
   setPlayerConnected(slot, connected) {
@@ -263,31 +384,59 @@ export class MatchSimulation {
     return this.players.get(slot) ?? null;
   }
 
+  getTuningConfig() {
+    return { ...this.tuningConfig };
+  }
+
+  setTuningConfig(nextConfig) {
+    this.tuningConfig = normalizeTuningConfig(nextConfig);
+    this.terrainConfig = createTerrainConfigFromTuning(this.tuningConfig);
+    this.profileTemplates = createSimulationProfiles(this.tuningConfig);
+    this.trailCellSize = this.tuningConfig.trailCellSize;
+    this.trailSpeedMultiplier = this.tuningConfig.trailSpeedMultiplier;
+    this.trailContactRadius = this.tuningConfig.trailContactRadius;
+
+    for (const player of this.players.values()) {
+      applyProfileToPlayer(
+        player,
+        this.profileTemplates[player.profileName] ?? this.profileTemplates.human
+      );
+    }
+  }
+
   getSnapshot() {
     return {
       tick: this.tick,
       phase: this.phase,
       winnerSlot: this.winnerSlot,
       reason: this.endReason,
+      terrain: { ...this.terrainConfig },
+      trailCellSize: this.trailCellSize,
+      trailCells: Array.from(this.wetTrailCells.values()).map((cell) => ({
+        x: cell.x,
+        z: cell.z
+      })),
       players: Array.from(this.players.values())
         .sort((left, right) => left.slot - right.slot)
         .map((player) => ({
           slot: player.slot,
+          profileName: player.profileName,
           connected: player.connected,
           position: cloneVector(player.position),
           rotationY: player.rotationY,
-          stalkYaw: player.stalkYaw,
-          stalkPitch: player.stalkPitch,
-          stalkNodes: serializeNodes(player.stalkNodes),
-          stalkSegmentRadius: player.stalkSegmentRadius,
           health: player.health,
           maxHealth: player.maxHealth,
+          onTrail: player.onTrail,
           grounded: player.grounded,
           lockOn: player.lockOnHeld,
           controlMode: player.controlMode,
           controlIntensity: player.controlIntensity,
           impactPower: player.impactPower,
-          invincible: player.invincibilityTime > 0
+          invincible: player.invincibilityTime > 0,
+          stalks: {
+            left: serializeStalk(player.stalks.left),
+            right: serializeStalk(player.stalks.right)
+          }
         }))
     };
   }
@@ -298,41 +447,75 @@ export class MatchSimulation {
     }
 
     const orderedPlayers = Array.from(this.players.values()).sort((left, right) => left.slot - right.slot);
+
     for (const player of orderedPlayers) {
       player.previousPosition.copy(player.position);
       player.previousEyeTipPosition.copy(player.eyeTipPosition);
       player.impactPower = 0;
+
+      for (const [, stalk] of getStalkEntries(player)) {
+        stalk.previousTipPosition.copy(stalk.tipPosition);
+        stalk.impactPower = 0;
+      }
     }
 
     for (const player of orderedPlayers) {
       if (!player.connected || player.health <= 0) {
+        player.onTrail = false;
+        player.controlMode = 'idle';
+        for (const [, stalk] of getStalkEntries(player)) {
+          stalk.held = false;
+        }
         continue;
       }
 
-      const opponent = orderedPlayers.find((candidate) => candidate.slot !== player.slot && candidate.connected) ?? null;
+      const target = this.findPreferredTarget(player, {
+        preferHumans: this.mode === 'multiplayer' && player.profileName === 'bot'
+      });
       const input = this.inputs.get(player.slot) ?? DEFAULT_INPUT;
-      this.applyInput(player, opponent, input, delta);
+      this.applyInput(player, target, input, delta);
     }
 
-    if (orderedPlayers.length >= 2) {
-      this.resolveBodyCollision(orderedPlayers[0], orderedPlayers[1]);
+    for (let leftIndex = 0; leftIndex < orderedPlayers.length; leftIndex += 1) {
+      for (let rightIndex = leftIndex + 1; rightIndex < orderedPlayers.length; rightIndex += 1) {
+        this.resolveBodyCollision(orderedPlayers[leftIndex], orderedPlayers[rightIndex]);
+      }
     }
 
     for (const player of orderedPlayers) {
       if (!player.connected) {
+        player.onTrail = false;
         continue;
       }
 
-      this.updateStalkRope(player, delta);
+      if (player.health > 0) {
+        this.depositTrailForPlayer(player);
+      } else {
+        player.onTrail = false;
+        for (const [, stalk] of getStalkEntries(player)) {
+          stalk.held = false;
+          stalk.impactPower = 0;
+        }
+      }
+
+      this.updateStalkRopes(player, delta);
       player.bodyVelocity.copy(player.position).sub(player.previousPosition).divideScalar(Math.max(delta, 0.0001));
-      player.eyeTipVelocity.copy(player.eyeTipPosition).sub(player.previousEyeTipPosition).divideScalar(Math.max(delta, 0.0001));
+      updateCompositeTipState(player, delta);
       player.invincibilityTime = Math.max(0, player.invincibilityTime - delta);
+      player.onTrail = player.health > 0 && this.isPlayerOnWetTrail(player);
     }
 
-    if (orderedPlayers.length >= 2) {
-      this.resolveImpacts(orderedPlayers[0], orderedPlayers[1], delta);
+    for (const attacker of orderedPlayers) {
+      for (const target of orderedPlayers) {
+        if (attacker.slot === target.slot) {
+          continue;
+        }
+
+        this.resolveImpact(attacker, target, delta);
+      }
     }
 
+    this.evaluateEndState();
     this.tick += 1;
     return this.getSnapshot();
   }
@@ -343,32 +526,99 @@ export class MatchSimulation {
     this.endReason = reason;
   }
 
-  applyInput(player, opponent, input, delta) {
+  getLivingPlayers({ humansOnly = false } = {}) {
+    return Array.from(this.players.values()).filter((player) => (
+      player.connected &&
+      player.health > 0 &&
+      (!humansOnly || player.profileName !== 'bot')
+    ));
+  }
+
+  findPreferredTarget(player, { preferHumans = false } = {}) {
+    const candidates = this.getLivingPlayers().filter((candidate) => candidate.slot !== player.slot);
+    if (candidates.length === 0) {
+      return null;
+    }
+
+    const humanCandidates = preferHumans
+      ? candidates.filter((candidate) => candidate.profileName !== 'bot')
+      : [];
+    const pool = humanCandidates.length > 0 ? humanCandidates : candidates;
+
+    return pool.reduce((nearest, candidate) => {
+      if (!nearest) {
+        return candidate;
+      }
+
+      const nearestDistance = nearest.position.distanceToSquared(player.position);
+      const candidateDistance = candidate.position.distanceToSquared(player.position);
+      return candidateDistance < nearestDistance ? candidate : nearest;
+    }, null);
+  }
+
+  evaluateEndState() {
+    if (this.mode === 'test') {
+      return;
+    }
+
+    if (this.mode === 'multiplayer') {
+      const livingHumans = this.getLivingPlayers({ humansOnly: true });
+      if (livingHumans.length > 1) {
+        return;
+      }
+
+      if (livingHumans.length === 1) {
+        this.endMatch(livingHumans[0].slot, 'knockout');
+        return;
+      }
+
+      this.endMatch(null, 'draw');
+      return;
+    }
+
+    const livingPlayers = this.getLivingPlayers();
+    if (livingPlayers.length > 1) {
+      return;
+    }
+
+    if (livingPlayers.length === 1) {
+      this.endMatch(livingPlayers[0].slot, 'knockout');
+      return;
+    }
+
+    this.endMatch(null, 'draw');
+  }
+
+  applyInput(player, target, input, delta) {
     const normalizedInput = normalizeInput(input);
     const movement = new THREE.Vector3(normalizedInput.moveX, 0, normalizedInput.moveZ);
     if (movement.lengthSq() > 1) {
       movement.normalize();
     }
 
-    const speed = normalizedInput.lockOnHeld
+    const baseSpeed = normalizedInput.lockOnHeld
       ? player.profile.lockedMoveSpeed
       : player.profile.freeMoveSpeed;
+    const speed = baseSpeed * (this.isPlayerOnWetTrail(player) ? this.trailSpeedMultiplier : 1);
     player.position.addScaledVector(movement, speed * delta);
     this.clampPlanarPosition(player);
+
+    const groundHeight = getPlayerGroundHeight(player, this.terrainConfig);
 
     if (normalizedInput.jumpPressed && player.grounded) {
       player.grounded = false;
       player.verticalVelocity = player.profile.jumpVelocity;
+      player.position.y = groundHeight;
     }
 
     if (player.grounded) {
-      player.position.y = player.profile.groundHeight;
+      player.position.y = groundHeight;
     } else {
       player.verticalVelocity -= player.profile.gravity * delta;
       player.position.y += player.verticalVelocity * delta;
 
-      if (player.position.y <= player.profile.groundHeight) {
-        player.position.y = player.profile.groundHeight;
+      if (player.position.y <= groundHeight) {
+        player.position.y = groundHeight;
         player.verticalVelocity = 0;
         player.grounded = true;
       }
@@ -377,8 +627,8 @@ export class MatchSimulation {
     player.lockOnHeld = normalizedInput.lockOnHeld;
 
     let facingDirection = null;
-    if (normalizedInput.lockOnHeld && opponent) {
-      facingDirection = opponent.position.clone().sub(player.position);
+    if (normalizedInput.lockOnHeld && target) {
+      facingDirection = target.position.clone().sub(player.position);
     } else if (movement.lengthSq() > 0) {
       facingDirection = movement;
     }
@@ -393,73 +643,153 @@ export class MatchSimulation {
       }
     }
 
-    this.applyCombatInput(player, normalizedInput, delta);
+    this.applyCombatInput(player, normalizedInput);
   }
 
-  applyCombatInput(player, input, delta) {
-    if (input.combatMode === 'idle') {
-      player.stalkTargetYaw = player.profile.stalkNeutralYaw;
-      player.stalkTargetPitch = player.profile.stalkNeutralPitch;
-      player.controlMode = 'idle';
-      player.controlIntensity = 0;
-    } else {
-      const intensity = Math.min(1, Math.hypot(input.lookX, input.lookY) / 18);
-      const yawSensitivity = input.combatMode === 'thrust'
-        ? player.profile.thrustYawSensitivity
-        : player.profile.sweepYawSensitivity;
-      const pitchSensitivity = input.combatMode === 'thrust'
-        ? player.profile.thrustPitchSensitivity
-        : player.profile.sweepPitchSensitivity;
+  applyCombatInput(player, input) {
+    player.controlMode = getControlMode(input);
+    player.controlIntensity = (input.leftHeld || input.rightHeld)
+      ? Math.min(1, Math.hypot(input.lookX, input.lookY) / STALK_LOOK_INTENSITY_SCALE)
+      : 0;
 
-      player.stalkTargetYaw = clamp(
-        player.stalkTargetYaw + (-input.lookX * yawSensitivity),
+    for (const [side, stalk] of getStalkEntries(player)) {
+      const held = side === 'left' ? input.leftHeld : input.rightHeld;
+      stalk.held = held;
+
+      if (!held) {
+        stalk.targetYaw = stalk.desiredYaw;
+        stalk.targetPitch = stalk.desiredPitch;
+        stalk.targetVector.copy(getLocalStalkDirection(stalk.desiredYaw, stalk.desiredPitch));
+        continue;
+      }
+
+      stalk.desiredYaw = clamp(
+        stalk.desiredYaw + (-input.lookX * player.profile.stalkYawSensitivity),
         -player.profile.stalkYawLimit,
         player.profile.stalkYawLimit
       );
-      player.stalkTargetPitch = clamp(
-        player.stalkTargetPitch + (-input.lookY * pitchSensitivity),
+      stalk.desiredPitch = clamp(
+        stalk.desiredPitch + (-input.lookY * player.profile.stalkPitchSensitivity),
         player.profile.stalkPitchMin,
         player.profile.stalkPitchMax
       );
-      player.controlMode = input.combatMode;
-      player.controlIntensity = intensity;
+      stalk.targetYaw = stalk.desiredYaw;
+      stalk.targetPitch = stalk.desiredPitch;
+      stalk.targetVector.copy(getLocalStalkDirection(stalk.desiredYaw, stalk.desiredPitch));
     }
-
-    const response = player.controlMode === 'idle'
-      ? player.profile.stalkRecover
-      : player.profile.stalkResponse;
-    const alpha = Math.min(1, response * delta);
-
-    player.stalkYaw = THREE.MathUtils.lerp(player.stalkYaw, player.stalkTargetYaw, alpha);
-    player.stalkPitch = THREE.MathUtils.lerp(player.stalkPitch, player.stalkTargetPitch, alpha);
   }
 
-  updateStalkRope(player, delta) {
-    const goalWorld = getStalkGoalWorldPosition(
-      player.position,
-      player.rotationY,
-      player.stalkYaw,
-      player.stalkPitch,
-      player.profile.stalkTotalLength
-    );
-    const rootWorld = getStalkRootWorldPosition(player.position, player.rotationY);
+  updateStalkRopes(player, delta) {
+    for (const [, stalk] of getStalkEntries(player)) {
+      if (stalk.held) {
+        const responseAlpha = Math.min(
+          1,
+          (player.profile.stalkTargetApproachSpeed / Math.max(0.0001, player.profile.stalkMass)) * delta
+        );
+        stalk.appliedYaw = lerpAngle(stalk.appliedYaw, stalk.desiredYaw, responseAlpha);
+        stalk.appliedPitch += (stalk.desiredPitch - stalk.appliedPitch) * responseAlpha;
+      }
 
-    simulateStalkRope({
-      nodes: player.stalkNodes,
-      previousNodes: player.previousStalkNodes,
-      rootWorld,
-      goalWorld,
-      delta,
-      segmentLength: player.profile.stalkTotalLength / player.profile.stalkSegmentCount,
-      gravity: player.profile.stalkGravity,
-      damping: player.profile.stalkDamping,
-      goalPull: player.controlMode === 'idle'
-        ? player.profile.stalkIdlePull
-        : player.profile.stalkDrivePull,
-      constraintIterations: player.profile.stalkConstraintIterations
-    });
+      const goalWorld = getStalkGoalWorldPosition(
+        player.position,
+        player.rotationY,
+        stalk.appliedYaw,
+        stalk.appliedPitch,
+        player.profile.stalkTotalLength,
+        stalk.rootOffset
+      );
+      const rootWorld = getStalkRootWorldPosition(player.position, player.rotationY, stalk.rootOffset);
 
-    player.eyeTipPosition.copy(getTipWorldPosition(player.stalkNodes));
+      simulateStalkRope({
+        nodes: stalk.nodes,
+        previousNodes: stalk.previousNodes,
+        rootWorld,
+        goalWorld,
+        delta,
+        segmentLength: player.profile.stalkTotalLength / player.profile.stalkSegmentCount,
+        gravity: player.profile.stalkGravity,
+        damping: player.profile.stalkDamping,
+        goalPull: stalk.held ? player.profile.stalkDrivePull : player.profile.stalkIdlePull,
+        constraintIterations: player.profile.stalkConstraintIterations
+      });
+
+      stalk.tipPosition.copy(getTipWorldPosition(stalk.nodes));
+      if (delta > 0) {
+        stalk.tipVelocity.copy(stalk.tipPosition).sub(stalk.previousTipPosition).divideScalar(delta);
+      } else {
+        stalk.tipVelocity.set(0, 0, 0);
+      }
+
+      const rootToTip = stalk.tipPosition.clone().sub(rootWorld);
+      if (rootToTip.lengthSq() === 0) {
+        stalk.currentVector.copy(stalk.targetVector);
+      } else {
+        stalk.currentVector.copy(getBodyLocalDirection(rootToTip.normalize(), player.rotationY));
+      }
+    }
+  }
+
+  getTrailCells() {
+    return Array.from(this.wetTrailCells.values()).map((cell) => ({
+      x: cell.x,
+      z: cell.z
+    }));
+  }
+
+  markTrailAtPosition(position) {
+    const cellX = quantizeTrailCoord(position.x, this.trailCellSize);
+    const cellZ = quantizeTrailCoord(position.z, this.trailCellSize);
+    const key = createTrailCellKey(cellX, cellZ);
+
+    if (!this.wetTrailCells.has(key)) {
+      this.wetTrailCells.set(key, {
+        x: cellX * this.trailCellSize,
+        z: cellZ * this.trailCellSize
+      });
+    }
+  }
+
+  depositTrailForPlayer(player) {
+    const start = player.previousPosition;
+    const end = player.position;
+    const distance = Math.hypot(end.x - start.x, end.z - start.z);
+    const steps = Math.max(1, Math.ceil(distance / (this.trailCellSize * 0.45)));
+
+    for (let index = 0; index <= steps; index += 1) {
+      const alpha = steps === 0 ? 1 : index / steps;
+      this.markTrailAtPosition({
+        x: THREE.MathUtils.lerp(start.x, end.x, alpha),
+        z: THREE.MathUtils.lerp(start.z, end.z, alpha)
+      });
+    }
+  }
+
+  isPlayerOnWetTrail(player) {
+    const contactRadius = Math.max(this.trailContactRadius, player.bodyRadius * 0.55);
+    const centerCellX = quantizeTrailCoord(player.position.x, this.trailCellSize);
+    const centerCellZ = quantizeTrailCoord(player.position.z, this.trailCellSize);
+    const searchRadius = Math.ceil((contactRadius + this.trailCellSize) / this.trailCellSize);
+
+    for (let cellX = centerCellX - searchRadius; cellX <= centerCellX + searchRadius; cellX += 1) {
+      for (let cellZ = centerCellZ - searchRadius; cellZ <= centerCellZ + searchRadius; cellZ += 1) {
+        const cell = this.wetTrailCells.get(createTrailCellKey(cellX, cellZ));
+        if (!cell) {
+          continue;
+        }
+
+        if (circleIntersectsTrailCell(
+          player.position.x,
+          player.position.z,
+          contactRadius,
+          cell,
+          this.trailCellSize
+        )) {
+          return true;
+        }
+      }
+    }
+
+    return false;
   }
 
   clampPlanarPosition(player) {
@@ -468,7 +798,7 @@ export class MatchSimulation {
   }
 
   resolveBodyCollision(playerA, playerB) {
-    if (!playerA.connected || !playerB.connected) {
+    if (!playerA.connected || !playerB.connected || playerA.health <= 0 || playerB.health <= 0) {
       return;
     }
 
@@ -492,59 +822,59 @@ export class MatchSimulation {
     playerB.position.add(displacement);
     this.clampPlanarPosition(playerA);
     this.clampPlanarPosition(playerB);
-  }
-
-  resolveImpacts(playerA, playerB, delta) {
-    this.resolveImpact(playerA, playerB, delta);
-    this.resolveImpact(playerB, playerA, delta);
-
-    if (playerA.health <= 0 && playerB.health <= 0) {
-      this.endMatch(null, 'draw');
-      return;
-    }
-
-    if (playerA.health <= 0) {
-      this.endMatch(playerB.slot, 'knockout');
-      return;
-    }
-
-    if (playerB.health <= 0) {
-      this.endMatch(playerA.slot, 'knockout');
-    }
+    snapPlayerToGroundIfGrounded(playerA, this.terrainConfig);
+    snapPlayerToGroundIfGrounded(playerB, this.terrainConfig);
   }
 
   resolveImpact(attacker, target, delta) {
-    if (!attacker.connected || !target.connected || attacker.health <= 0 || target.health <= 0) {
-      return;
-    }
-
-    const segmentSamples = buildStalkSegmentSamples(
-      attacker.stalkNodes,
-      attacker.previousStalkNodes,
-      delta,
-      attacker.stalkSegmentRadius
-    );
-    const impactResult = evaluateStalkImpact(
-      segmentSamples,
-      target.position,
-      target.bodyRadius,
-      attacker.bodyVelocity,
-      attacker.profile.impactMomentumFactor
-    );
-
-    attacker.impactPower = impactResult.collision
-      ? impactResult.contactImpactPower
-      : impactResult.impactPower;
-
     if (
-      !impactResult.collision ||
-      impactResult.contactImpactPower < attacker.profile.impactThreshold ||
-      target.invincibilityTime > 0
+      !attacker.connected ||
+      !target.connected ||
+      attacker.health <= 0 ||
+      target.health <= 0
     ) {
       return;
     }
 
-    target.health = Math.max(0, target.health - 1);
+    let totalDamage = 0;
+    let strongestImpact = attacker.impactPower;
+
+    for (const [, stalk] of getStalkEntries(attacker)) {
+      const segmentSamples = buildStalkSegmentSamples(
+        stalk.nodes,
+        stalk.previousNodes,
+        delta,
+        stalk.segmentRadius
+      );
+      const impactResult = evaluateStalkImpact(
+        segmentSamples,
+        target.position,
+        target.bodyRadius,
+        attacker.bodyVelocity,
+        attacker.profile.impactMomentumFactor
+      );
+
+      const measuredImpact = impactResult.collision
+        ? impactResult.contactImpactPower
+        : impactResult.impactPower;
+      stalk.impactPower = measuredImpact;
+      strongestImpact = Math.max(strongestImpact, measuredImpact);
+
+      if (
+        impactResult.collision &&
+        impactResult.contactImpactPower >= attacker.profile.impactThreshold
+      ) {
+        totalDamage += computeImpactDamage(attacker, stalk, impactResult.contactImpactPower);
+      }
+    }
+
+    attacker.impactPower = strongestImpact;
+
+    if (totalDamage === 0 || target.invincibilityTime > 0) {
+      return;
+    }
+
+    target.health = Math.max(0, target.health - totalDamage);
     target.invincibilityTime = target.profile.invincibilityDuration;
   }
 }

@@ -1,3 +1,5 @@
+import * as THREE from 'three';
+
 import { evaluateStalkImpact } from '../sim/StalkRope.js';
 
 export class CollisionDetection {
@@ -16,29 +18,62 @@ export class CollisionDetection {
   }
 
   checkImpactCollision(attacker, targetSnail) {
-    const eyeStalkPosition = attacker.getEyeStalkPosition();
-    const segmentSamples = attacker.getStalkSegmentSamples();
-    const movementAssistVelocity = attacker.getBodyVelocity();
     const targetBodyPosition = targetSnail.getBodyPosition();
     const targetBodyRadius = targetSnail.getBodyRadius();
-    const impactResult = evaluateStalkImpact(
-      segmentSamples,
-      targetBodyPosition,
-      targetBodyRadius,
-      movementAssistVelocity,
-      attacker.getImpactMomentumFactor()
-    );
-    const activeSample = impactResult.contactSample ?? impactResult.strongestSample;
-    const distance = activeSample?.surfaceDistance ?? eyeStalkPosition.distanceTo(targetBodyPosition);
-    const impactPower = impactResult.collision
-      ? impactResult.contactImpactPower
-      : impactResult.impactPower;
+    const movementAssistVelocity = attacker.getBodyVelocity();
+    const stalkSources = attacker.getStalkCollisionSources?.() ?? [
+      {
+        side: 'left',
+        tipPosition: attacker.getEyeStalkPosition(),
+        tipVelocity: attacker.getEyeStalkVelocity(),
+        segmentSamples: attacker.getStalkSegmentSamples()
+      }
+    ];
+
+    let selectedSource = stalkSources[0];
+    let selectedResult = {
+      collision: false,
+      impactPower: 0,
+      contactImpactPower: 0,
+      strongestSample: null,
+      contactSample: null
+    };
+
+    for (const source of stalkSources) {
+      const impactResult = evaluateStalkImpact(
+        source.segmentSamples,
+        targetBodyPosition,
+        targetBodyRadius,
+        movementAssistVelocity,
+        attacker.getImpactMomentumFactor()
+      );
+      const impactPower = impactResult.collision
+        ? impactResult.contactImpactPower
+        : impactResult.impactPower;
+      const selectedImpactPower = selectedResult.collision
+        ? selectedResult.contactImpactPower
+        : selectedResult.impactPower;
+
+      if (
+        (impactResult.collision && !selectedResult.collision) ||
+        (impactResult.collision === selectedResult.collision && impactPower > selectedImpactPower)
+      ) {
+        selectedSource = source;
+        selectedResult = impactResult;
+      }
+    }
+
+    const activeSample = selectedResult.contactSample ?? selectedResult.strongestSample;
+    const distance = activeSample?.surfaceDistance ?? selectedSource.tipPosition.distanceTo(targetBodyPosition);
+    const impactPower = selectedResult.collision
+      ? selectedResult.contactImpactPower
+      : selectedResult.impactPower;
     const closingSpeed = activeSample?.closingSpeed ?? 0;
     const movementAssist = activeSample?.movementAssist ?? 0;
 
     this.lastCollisionDetails = {
-      eyeStalkPosition: activeSample?.center?.clone() ?? eyeStalkPosition.clone(),
-      eyeStalkVelocity: activeSample?.velocity?.clone() ?? attacker.getEyeStalkVelocity(),
+      eyeStalkPosition: activeSample?.center?.clone() ?? selectedSource.tipPosition.clone(),
+      eyeStalkVelocity: activeSample?.velocity?.clone() ?? selectedSource.tipVelocity.clone(),
       targetBodyPosition,
       targetBodyRadius,
       distance,
@@ -46,10 +81,10 @@ export class CollisionDetection {
       closingSpeed,
       movementAssist
     };
-    this.lastCollisionResult = impactResult.collision && impactPower >= attacker.getImpactThreshold();
+    this.lastCollisionResult = selectedResult.collision && impactPower >= attacker.getImpactThreshold();
 
     return {
-      collision: impactResult.collision,
+      collision: selectedResult.collision,
       impactPower,
       closingSpeed,
       movementAssist,

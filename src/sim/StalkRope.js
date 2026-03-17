@@ -1,6 +1,10 @@
 import * as THREE from 'three';
 
-export const STALK_BASE_OFFSET = new THREE.Vector3(0.4, 0.5, 1.5);
+export const STALK_BASE_OFFSET = new THREE.Vector3(0.65, 0.55, 1.5);
+export const STALK_ROOT_OFFSETS = Object.freeze({
+  left: new THREE.Vector3(-STALK_BASE_OFFSET.x, STALK_BASE_OFFSET.y, STALK_BASE_OFFSET.z),
+  right: STALK_BASE_OFFSET.clone()
+});
 export const STALK_SEGMENT_COUNT = 6;
 export const STALK_TOTAL_LENGTH = 3.3;
 export const STALK_SEGMENT_LENGTH = STALK_TOTAL_LENGTH / STALK_SEGMENT_COUNT;
@@ -21,15 +25,26 @@ function createWorldRoot(position, rotationY, rootOffset = STALK_BASE_OFFSET) {
   return rootOffset.clone().applyQuaternion(bodyQuaternion).add(position);
 }
 
-function createGoalDirection(rotationY, yaw, pitch) {
+export function getLocalStalkDirection(yaw, pitch) {
   const localQuaternion = new THREE.Quaternion().setFromEuler(
     new THREE.Euler(pitch, 0, -yaw, 'XYZ')
   );
-  const bodyQuaternion = new THREE.Quaternion().setFromAxisAngle(UP, rotationY);
 
   return LOCAL_UP.clone()
     .applyQuaternion(localQuaternion)
+    .normalize();
+}
+
+export function getStalkGoalDirection(rotationY, yaw, pitch) {
+  const bodyQuaternion = new THREE.Quaternion().setFromAxisAngle(UP, rotationY);
+  return getLocalStalkDirection(yaw, pitch)
     .applyQuaternion(bodyQuaternion)
+    .normalize();
+}
+
+export function getBodyLocalDirection(worldDirection, rotationY) {
+  return worldDirection.clone()
+    .applyAxisAngle(UP, -rotationY)
     .normalize();
 }
 
@@ -46,7 +61,7 @@ export function getStalkGoalWorldPosition(
   rootOffset = STALK_BASE_OFFSET
 ) {
   const rootWorld = createWorldRoot(position, rotationY, rootOffset);
-  const goalDirection = createGoalDirection(rotationY, yaw, pitch);
+  const goalDirection = getStalkGoalDirection(rotationY, yaw, pitch);
   return rootWorld.addScaledVector(goalDirection, totalLength);
 }
 
