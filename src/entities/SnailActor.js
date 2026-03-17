@@ -5,7 +5,7 @@ import {
   STALK_CONSTRAINT_ITERATIONS,
   STALK_DAMPING,
   STALK_GRAVITY,
-  STALK_IDLE_PULL,
+  STALK_ROOT_OFFSETS,
   STALK_SEGMENT_COUNT,
   STALK_SEGMENT_RADIUS,
   STALK_TOTAL_LENGTH,
@@ -13,13 +13,22 @@ import {
   copyNodesInto,
   createInitialStalkNodes,
   deserializeNodes,
+  getBodyLocalDirection,
+  getLocalStalkDirection,
   getStalkGoalWorldPosition,
   getStalkRootWorldPosition,
   simulateStalkRope
 } from '../sim/StalkRope.js';
+import { DEFAULT_TERRAIN_CONFIG, getTerrainHeight, normalizeTerrainConfig } from '../world/Terrain.js';
 
 const LOCAL_UP = new THREE.Vector3(0, 1, 0);
 const LOCAL_FORWARD = new THREE.Vector3(0, 0, 1);
+const STALK_SIDE_KEYS = ['left', 'right'];
+const DEATH_BURST_DURATION = 5;
+const DEATH_BURST_SWELL_TIME = 0.2;
+const DEATH_BURST_MAX_SCALE = 2.4;
+const DEATH_BURST_GRAVITY = 12;
+const STALK_VISUAL_SPEED_REFERENCE = 14;
 
 function angleDifference(current, target) {
   return Math.atan2(Math.sin(target - current), Math.cos(target - current));
@@ -29,14 +38,31 @@ function lerpAngle(current, target, alpha) {
   return current + angleDifference(current, target) * alpha;
 }
 
+function getControlModeForHeldState(leftHeld, rightHeld) {
+  if (leftHeld && rightHeld) {
+    return 'both';
+  }
+
+  if (leftHeld) {
+    return 'left';
+  }
+
+  if (rightHeld) {
+    return 'right';
+  }
+
+  return 'idle';
+}
+
 export class SnailActor {
   constructor(config) {
     this.speed = config.speed;
     this.turnSpeed = config.turnSpeed;
     this.groundHeight = config.groundHeight ?? 1;
     this.arenaRadius = config.arenaRadius;
+    this.terrainConfig = normalizeTerrainConfig(config.terrainConfig ?? DEFAULT_TERRAIN_CONFIG);
 
-    this.health = config.health ?? config.maxHealth ?? 40;
+    this.health = config.health ?? config.maxHealth ?? 3;
     this.maxHealth = config.maxHealth ?? this.health;
     this.invincibilityDuration = config.invincibilityDuration ?? 0.45;
     this.invincibilityTime = 0;
@@ -48,13 +74,9 @@ export class SnailActor {
       yaw: config.stalkNeutralYaw ?? 0,
       pitch: config.stalkNeutralPitch ?? 0.08
     };
-    this.stalkPose = { ...this.stalkNeutralPose };
-    this.stalkTargetPose = { ...this.stalkNeutralPose };
     this.stalkYawLimit = config.stalkYawLimit ?? 1.15;
     this.stalkPitchMin = config.stalkPitchMin ?? -0.7;
     this.stalkPitchMax = config.stalkPitchMax ?? 0.8;
-    this.stalkResponse = config.stalkResponse ?? 12;
-    this.stalkRecover = config.stalkRecover ?? 8;
     this.stalkSegmentCount = config.stalkSegmentCount ?? STALK_SEGMENT_COUNT;
     this.stalkLength = config.stalkLength ?? STALK_TOTAL_LENGTH;
     this.stalkSegmentLength = this.stalkLength / this.stalkSegmentCount;
@@ -63,21 +85,24 @@ export class SnailActor {
     this.stalkDamping = config.stalkDamping ?? STALK_DAMPING;
     this.stalkConstraintIterations = config.stalkConstraintIterations ?? STALK_CONSTRAINT_ITERATIONS;
     this.stalkDrivePull = config.stalkDrivePull ?? STALK_ACTIVE_PULL;
-    this.stalkIdlePull = config.stalkIdlePull ?? STALK_IDLE_PULL;
+    this.stalkIdlePull = config.stalkIdlePull ?? 0;
 
     this.controlMode = 'idle';
     this.controlIntensity = 0;
     this.impactPower = 0;
     this.impactThreshold = config.impactThreshold ?? 5.4;
     this.impactMomentumFactor = config.impactMomentumFactor ?? 0.3;
+    this.deathBurstEnabled = config.deathBurstEnabled ?? false;
+    this.deathBurstDuration = config.deathBurstDuration ?? DEATH_BURST_DURATION;
+    this.deathBurstGravity = config.deathBurstGravity ?? DEATH_BURST_GRAVITY;
+    this.hasReceivedMatchState = false;
 
     this.mesh = new THREE.Group();
     this.mesh.position.copy(config.position);
+    this.mesh.position.y = this.getGroundHeightAt(this.mesh.position.x, this.mesh.position.z);
 
     this.body = this.createBody(config.bodyColor);
     this.shell = this.createShell(config.shellColor);
-    this.eyeStalk = this.createEyeStalk();
-
     this.bodyCenter = new THREE.Object3D();
     this.bodyCenter.position.set(0, 0, 0);
     this.body.add(this.bodyCenter);
@@ -89,18 +114,24 @@ export class SnailActor {
 
     this.mesh.add(this.body);
     this.mesh.add(this.shell);
-    this.mesh.add(this.eyeStalk);
 
-    this.stalkNodes = [];
-    this.previousStalkNodes = [];
+    this.stalks = {
+      left: this.createEyeStalk('left'),
+      right: this.createEyeStalk('right')
+    };
+    this.mesh.add(this.stalks.left.group);
+    this.mesh.add(this.stalks.right.group);
+
     this.eyeTipPosition = new THREE.Vector3();
+    this.previousEyeTipPosition = new THREE.Vector3();
     this.bodyPosition = new THREE.Vector3();
     this.eyeTipVelocity = new THREE.Vector3();
     this.bodyVelocity = new THREE.Vector3();
     this.lastMotionDelta = 1 / 60;
 
     this.initializeLocalStalkState();
-    this.renderStalk();
+    this.renderStalks();
+    this.initializeDeathBurstState();
     this.syncMotionState();
   }
 
@@ -138,8 +169,8 @@ export class SnailActor {
     return shell;
   }
 
-  createEyeStalk() {
-    const stalk = new THREE.Group();
+  createEyeStalk(side) {
+    const group = new THREE.Group();
     const stalkMaterial = new THREE.MeshStandardMaterial({
       color: 0x98fb98,
       roughness: 0.7,
@@ -153,16 +184,16 @@ export class SnailActor {
     );
     segmentGeometry.translate(0, 0.5, 0);
 
-    this.stalkSegments = [];
+    const segments = [];
     for (let index = 0; index < this.stalkSegmentCount; index += 1) {
       const segment = new THREE.Mesh(segmentGeometry, stalkMaterial);
       segment.castShadow = true;
       segment.receiveShadow = true;
-      this.stalkSegments.push(segment);
-      stalk.add(segment);
+      segments.push(segment);
+      group.add(segment);
     }
 
-    this.eye = new THREE.Mesh(
+    const eye = new THREE.Mesh(
       new THREE.SphereGeometry(this.stalkSegmentRadius * 1.35, 16, 16),
       new THREE.MeshStandardMaterial({
         color: 0xffffff,
@@ -171,85 +202,174 @@ export class SnailActor {
       })
     );
 
-    this.pupil = new THREE.Mesh(
+    const pupil = new THREE.Mesh(
       new THREE.SphereGeometry(this.stalkSegmentRadius * 0.55, 12, 12),
       new THREE.MeshStandardMaterial({ color: 0x000000 })
     );
-    this.pupil.position.set(0, 0, this.stalkSegmentRadius * 0.9);
+    pupil.position.set(0, 0, this.stalkSegmentRadius * 0.9);
 
-    this.eyeStalkTip = new THREE.Object3D();
-    this.eyeStalkTip.position.set(0, 0, this.stalkSegmentRadius * 1.2);
+    const tipAnchor = new THREE.Object3D();
+    tipAnchor.position.set(0, 0, this.stalkSegmentRadius * 1.2);
 
-    this.eye.add(this.pupil);
-    this.eye.add(this.eyeStalkTip);
-    stalk.add(this.eye);
+    eye.add(pupil);
+    eye.add(tipAnchor);
+    group.add(eye);
 
-    return stalk;
+    return {
+      side,
+      group,
+      segments,
+      eye,
+      pupil,
+      tipAnchor,
+      stalkMaterial,
+      eyeMaterial: eye.material,
+      baseStalkColor: new THREE.Color(0x98fb98),
+      baseEyeColor: new THREE.Color(0xffffff),
+      velocityColor: new THREE.Color(0xff0000),
+      rootOffset: STALK_ROOT_OFFSETS[side].clone(),
+      nodes: [],
+      previousNodes: [],
+      tipPosition: new THREE.Vector3(),
+      previousTipPosition: new THREE.Vector3(),
+      tipVelocity: new THREE.Vector3(),
+      targetYaw: this.stalkNeutralPose.yaw,
+      targetPitch: this.stalkNeutralPose.pitch,
+      targetVector: getLocalStalkDirection(this.stalkNeutralPose.yaw, this.stalkNeutralPose.pitch),
+      currentVector: getLocalStalkDirection(this.stalkNeutralPose.yaw, this.stalkNeutralPose.pitch),
+      impactPower: 0,
+      held: false,
+      segmentRadius: this.stalkSegmentRadius
+    };
   }
 
   initializeLocalStalkState() {
-    const rootWorld = getStalkRootWorldPosition(this.mesh.position, this.mesh.rotation.y);
-    const goalWorld = getStalkGoalWorldPosition(
-      this.mesh.position,
-      this.mesh.rotation.y,
-      this.stalkPose.yaw,
-      this.stalkPose.pitch,
-      this.stalkLength
-    );
-    const nodes = createInitialStalkNodes(rootWorld, goalWorld, this.stalkSegmentCount);
-    copyNodesInto(this.stalkNodes, nodes);
-    copyNodesInto(this.previousStalkNodes, nodes);
+    for (const stalk of Object.values(this.stalks)) {
+      const rootWorld = getStalkRootWorldPosition(this.mesh.position, this.mesh.rotation.y, stalk.rootOffset);
+      const goalWorld = getStalkGoalWorldPosition(
+        this.mesh.position,
+        this.mesh.rotation.y,
+        stalk.targetYaw,
+        stalk.targetPitch,
+        this.stalkLength,
+        stalk.rootOffset
+      );
+      const nodes = createInitialStalkNodes(rootWorld, goalWorld, this.stalkSegmentCount);
+      copyNodesInto(stalk.nodes, nodes);
+      copyNodesInto(stalk.previousNodes, nodes);
+      stalk.tipPosition.copy(nodes[nodes.length - 1]);
+      stalk.previousTipPosition.copy(stalk.tipPosition);
+      stalk.currentVector.copy(stalk.targetVector);
+    }
+  }
+
+  initializeDeathBurstState() {
+    const burstMeshes = [
+      this.body,
+      this.shell,
+      ...Object.values(this.stalks).flatMap((stalk) => [stalk.eye, stalk.pupil, ...stalk.segments])
+    ];
+
+    this.deathBurstPieces = burstMeshes.map((mesh) => ({
+      mesh,
+      defaultPosition: mesh.position.clone(),
+      defaultQuaternion: mesh.quaternion.clone(),
+      defaultScale: mesh.scale.clone(),
+      burstPosition: mesh.position.clone(),
+      burstQuaternion: mesh.quaternion.clone(),
+      burstScale: mesh.scale.clone(),
+      offset: new THREE.Vector3(),
+      velocity: new THREE.Vector3(),
+      angularVelocity: new THREE.Vector3(),
+      scaleBoost: 1,
+      radialScale: 1
+    }));
+
+    this.deathBurst = {
+      active: false,
+      elapsed: 0,
+      completed: false
+    };
   }
 
   updateShared(delta) {
-    this.updateStalkControlPose(delta);
-    this.simulateLocalStalk(delta);
-    this.renderStalk();
+    this.simulateLocalStalks(delta);
+    this.renderStalks();
     this.updateDamageState(delta);
     this.updateShellColor();
     this.updateMotionState(delta);
+    this.updateStalkVisualState();
   }
 
-  updateStalkControlPose(delta) {
-    const response = this.controlMode === 'idle' ? this.stalkRecover : this.stalkResponse;
-    const alpha = Math.min(1, response * delta);
-
-    this.stalkPose.yaw = THREE.MathUtils.lerp(this.stalkPose.yaw, this.stalkTargetPose.yaw, alpha);
-    this.stalkPose.pitch = THREE.MathUtils.lerp(this.stalkPose.pitch, this.stalkTargetPose.pitch, alpha);
+  getGroundHeightAt(x, z) {
+    return getTerrainHeight(x, z, this.terrainConfig);
   }
 
-  simulateLocalStalk(delta) {
-    const rootWorld = getStalkRootWorldPosition(this.mesh.position, this.mesh.rotation.y);
-    const goalWorld = getStalkGoalWorldPosition(
-      this.mesh.position,
-      this.mesh.rotation.y,
-      this.stalkPose.yaw,
-      this.stalkPose.pitch,
-      this.stalkLength
-    );
-
-    simulateStalkRope({
-      nodes: this.stalkNodes,
-      previousNodes: this.previousStalkNodes,
-      rootWorld,
-      goalWorld,
-      delta,
-      segmentLength: this.stalkSegmentLength,
-      gravity: this.stalkGravity,
-      damping: this.stalkDamping,
-      goalPull: this.controlMode === 'idle' ? this.stalkIdlePull : this.stalkDrivePull,
-      constraintIterations: this.stalkConstraintIterations
-    });
+  getGroundHeight() {
+    return this.getGroundHeightAt(this.mesh.position.x, this.mesh.position.z);
   }
 
-  renderStalk() {
+  setTerrainConfig(nextTerrainConfig = DEFAULT_TERRAIN_CONFIG) {
+    this.terrainConfig = normalizeTerrainConfig(nextTerrainConfig);
+  }
+
+  simulateLocalStalks(delta) {
+    for (const stalk of Object.values(this.stalks)) {
+      stalk.previousTipPosition.copy(stalk.tipPosition);
+
+      const rootWorld = getStalkRootWorldPosition(this.mesh.position, this.mesh.rotation.y, stalk.rootOffset);
+      const goalWorld = getStalkGoalWorldPosition(
+        this.mesh.position,
+        this.mesh.rotation.y,
+        stalk.targetYaw,
+        stalk.targetPitch,
+        this.stalkLength,
+        stalk.rootOffset
+      );
+
+      simulateStalkRope({
+        nodes: stalk.nodes,
+        previousNodes: stalk.previousNodes,
+        rootWorld,
+        goalWorld,
+        delta,
+        segmentLength: this.stalkSegmentLength,
+        gravity: this.stalkGravity,
+        damping: this.stalkDamping,
+        goalPull: stalk.held ? this.stalkDrivePull : this.stalkIdlePull,
+        constraintIterations: this.stalkConstraintIterations
+      });
+
+      stalk.tipPosition.copy(stalk.nodes[stalk.nodes.length - 1]);
+      if (delta > 0) {
+        stalk.tipVelocity.copy(stalk.tipPosition).sub(stalk.previousTipPosition).divideScalar(delta);
+      } else {
+        stalk.tipVelocity.set(0, 0, 0);
+      }
+
+      const rootToTip = stalk.tipPosition.clone().sub(rootWorld);
+      if (rootToTip.lengthSq() > 0) {
+        stalk.currentVector.copy(getBodyLocalDirection(rootToTip.normalize(), this.mesh.rotation.y));
+      } else {
+        stalk.currentVector.copy(stalk.targetVector);
+      }
+    }
+  }
+
+  renderStalks() {
+    for (const stalk of Object.values(this.stalks)) {
+      this.renderStalk(stalk);
+    }
+  }
+
+  renderStalk(stalk) {
     this.mesh.updateMatrixWorld(true);
     const inverseWorld = this.mesh.matrixWorld.clone().invert();
 
-    for (let index = 0; index < this.stalkSegments.length; index += 1) {
-      const segment = this.stalkSegments[index];
-      const startLocal = this.stalkNodes[index]?.clone().applyMatrix4(inverseWorld);
-      const endLocal = this.stalkNodes[index + 1]?.clone().applyMatrix4(inverseWorld);
+    for (let index = 0; index < stalk.segments.length; index += 1) {
+      const segment = stalk.segments[index];
+      const startLocal = stalk.nodes[index]?.clone().applyMatrix4(inverseWorld);
+      const endLocal = stalk.nodes[index + 1]?.clone().applyMatrix4(inverseWorld);
 
       if (!startLocal || !endLocal) {
         segment.visible = false;
@@ -269,8 +389,8 @@ export class SnailActor {
       segment.scale.set(1, length, 1);
     }
 
-    const tipNode = this.stalkNodes[this.stalkNodes.length - 1];
-    const previousNode = this.stalkNodes[this.stalkNodes.length - 2] ?? tipNode;
+    const tipNode = stalk.nodes[stalk.nodes.length - 1];
+    const previousNode = stalk.nodes[stalk.nodes.length - 2] ?? tipNode;
     if (!tipNode || !previousNode) {
       return;
     }
@@ -284,8 +404,120 @@ export class SnailActor {
       eyeForward.normalize();
     }
 
-    this.eye.position.copy(tipLocal);
-    this.eye.quaternion.setFromUnitVectors(LOCAL_FORWARD, eyeForward);
+    stalk.eye.position.copy(tipLocal);
+    stalk.eye.quaternion.setFromUnitVectors(LOCAL_FORWARD, eyeForward);
+  }
+
+  updateStalkVisualState() {
+    for (const stalk of Object.values(this.stalks)) {
+      const speedRatio = THREE.MathUtils.clamp(
+        stalk.tipVelocity.length() / STALK_VISUAL_SPEED_REFERENCE,
+        0,
+        1
+      );
+      const stalkTint = stalk.held
+        ? Math.max(0.28, speedRatio)
+        : speedRatio * 0.08;
+
+      stalk.eyeMaterial.color.copy(stalk.baseEyeColor).lerp(stalk.velocityColor, speedRatio);
+      stalk.stalkMaterial.color.copy(stalk.baseStalkColor).lerp(stalk.velocityColor, stalkTint);
+    }
+  }
+
+  resetDeathBurst() {
+    for (const piece of this.deathBurstPieces) {
+      piece.mesh.position.copy(piece.defaultPosition);
+      piece.mesh.quaternion.copy(piece.defaultQuaternion);
+      piece.mesh.scale.copy(piece.defaultScale);
+      piece.offset.set(0, 0, 0);
+      piece.velocity.set(0, 0, 0);
+      piece.angularVelocity.set(0, 0, 0);
+      piece.scaleBoost = 1;
+      piece.radialScale = 1;
+    }
+
+    this.mesh.scale.setScalar(1);
+    this.deathBurst.active = false;
+    this.deathBurst.elapsed = 0;
+    this.deathBurst.completed = false;
+  }
+
+  startDeathBurst() {
+    if (!this.deathBurstEnabled) {
+      return;
+    }
+
+    this.deathBurst.active = true;
+    this.deathBurst.elapsed = 0;
+    this.deathBurst.completed = false;
+
+    for (const [index, piece] of this.deathBurstPieces.entries()) {
+      piece.burstPosition.copy(piece.mesh.position);
+      piece.burstQuaternion.copy(piece.mesh.quaternion);
+      piece.burstScale.copy(piece.mesh.scale);
+      piece.offset.set(0, 0, 0);
+
+      const velocity = new THREE.Vector3(
+        Math.random() * 2 - 1,
+        Math.random() * 0.7 + 0.35,
+        Math.random() * 2 - 1
+      );
+      if (velocity.lengthSq() === 0) {
+        velocity.z = 1;
+      }
+
+      velocity.normalize().multiplyScalar(3.5 + Math.random() * 6 + index * 0.1);
+      velocity.y += 2 + Math.random() * 4;
+
+      piece.velocity.copy(velocity);
+      piece.angularVelocity.set(
+        (Math.random() * 2 - 1) * 10,
+        (Math.random() * 2 - 1) * 10,
+        (Math.random() * 2 - 1) * 10
+      );
+      piece.scaleBoost = 0.35 + Math.random() * 0.8;
+      piece.radialScale = 1 + Math.random() * 0.9;
+    }
+  }
+
+  updateDeathBurst(delta) {
+    if (!this.deathBurst.active) {
+      return;
+    }
+
+    this.deathBurst.elapsed += delta;
+    const burstAlpha = Math.min(1, this.deathBurst.elapsed / DEATH_BURST_SWELL_TIME);
+    const fadeAlpha = Math.min(1, this.deathBurst.elapsed / this.deathBurstDuration);
+    const volumeScale = 1 + (DEATH_BURST_MAX_SCALE - 1) * burstAlpha * (1 - fadeAlpha * 0.15);
+    const spinEuler = new THREE.Euler();
+    const spinQuaternion = new THREE.Quaternion();
+
+    this.mesh.scale.setScalar(volumeScale);
+
+    for (const piece of this.deathBurstPieces) {
+      piece.velocity.y -= this.deathBurstGravity * delta;
+      piece.offset.addScaledVector(piece.velocity, delta);
+
+      piece.mesh.position.copy(piece.burstPosition)
+        .multiplyScalar(1 + burstAlpha * piece.radialScale)
+        .add(piece.offset);
+
+      spinEuler.set(
+        piece.angularVelocity.x * this.deathBurst.elapsed,
+        piece.angularVelocity.y * this.deathBurst.elapsed,
+        piece.angularVelocity.z * this.deathBurst.elapsed
+      );
+      spinQuaternion.setFromEuler(spinEuler);
+      piece.mesh.quaternion.copy(piece.burstQuaternion).multiply(spinQuaternion);
+      piece.mesh.scale.copy(piece.burstScale).multiplyScalar(1 + piece.scaleBoost * burstAlpha);
+    }
+
+    if (this.deathBurst.elapsed >= this.deathBurstDuration) {
+      this.deathBurst.active = false;
+      this.deathBurst.completed = true;
+      this.mesh.visible = false;
+      this.mesh.scale.setScalar(1);
+    }
   }
 
   updateDamageState(delta) {
@@ -338,40 +570,95 @@ export class SnailActor {
     this.mesh.position.z = THREE.MathUtils.clamp(this.mesh.position.z, -this.arenaRadius, this.arenaRadius);
   }
 
-  setStalkTargetPose(pose, mode = this.controlMode, intensity = this.controlIntensity) {
-    this.stalkTargetPose.yaw = THREE.MathUtils.clamp(
-      pose.yaw ?? this.stalkTargetPose.yaw,
-      -this.stalkYawLimit,
-      this.stalkYawLimit
-    );
-    this.stalkTargetPose.pitch = THREE.MathUtils.clamp(
-      pose.pitch ?? this.stalkTargetPose.pitch,
-      this.stalkPitchMin,
-      this.stalkPitchMax
-    );
+  updateStalkTargetVector(stalk) {
+    stalk.targetVector.copy(getLocalStalkDirection(stalk.targetYaw, stalk.targetPitch));
+  }
+
+  applyPoseToSides(pose, side, mode, intensity, held) {
+    const sides = side === 'both' ? STALK_SIDE_KEYS : [side];
+
+    for (const stalkSide of sides) {
+      const stalk = this.stalks[stalkSide];
+      stalk.targetYaw = THREE.MathUtils.clamp(
+        pose.yaw ?? stalk.targetYaw,
+        -this.stalkYawLimit,
+        this.stalkYawLimit
+      );
+      stalk.targetPitch = THREE.MathUtils.clamp(
+        pose.pitch ?? stalk.targetPitch,
+        this.stalkPitchMin,
+        this.stalkPitchMax
+      );
+      if (typeof held === 'boolean') {
+        stalk.held = held;
+      }
+      this.updateStalkTargetVector(stalk);
+    }
+
     this.controlMode = mode;
     this.controlIntensity = intensity;
   }
 
-  adjustStalkTargetPose(pose, mode = this.controlMode, intensity = this.controlIntensity) {
-    this.setStalkTargetPose({
-      yaw: this.stalkTargetPose.yaw + (pose.yaw ?? 0),
-      pitch: this.stalkTargetPose.pitch + (pose.pitch ?? 0)
-    }, mode, intensity);
+  setStalkTargetPose(pose, mode = this.controlMode, intensity = this.controlIntensity, side = 'both', held = true) {
+    this.applyPoseToSides(pose, side, mode, intensity, held);
   }
 
-  relaxStalk(mode = 'idle') {
-    this.setStalkTargetPose(this.stalkNeutralPose, mode, 0);
+  adjustStalkTargetPose(pose, mode = this.controlMode, intensity = this.controlIntensity, side = 'both', held = true) {
+    const sides = side === 'both' ? STALK_SIDE_KEYS : [side];
+
+    for (const stalkSide of sides) {
+      const stalk = this.stalks[stalkSide];
+      this.applyPoseToSides({
+        yaw: stalk.targetYaw + (pose.yaw ?? 0),
+        pitch: stalk.targetPitch + (pose.pitch ?? 0)
+      }, stalkSide, mode, intensity, held);
+    }
+  }
+
+  setStalkHeld(side, held) {
+    const sides = side === 'both' ? STALK_SIDE_KEYS : [side];
+    for (const stalkSide of sides) {
+      this.stalks[stalkSide].held = held;
+    }
+
+    this.controlMode = getControlModeForHeldState(this.stalks.left.held, this.stalks.right.held);
+    if (this.controlMode === 'idle') {
+      this.controlIntensity = 0;
+    }
+  }
+
+  relaxStalk(mode = 'idle', side = 'both') {
+    this.applyPoseToSides(this.stalkNeutralPose, side, mode, 0, false);
+    this.controlMode = mode;
+    this.controlIntensity = 0;
   }
 
   applyMatchState(state, delta = 0) {
     if (!state) {
+      this.resetDeathBurst();
       this.mesh.visible = false;
       return;
     }
 
-    this.mesh.visible = state.connected !== false;
+    if (state.health > 0 && (this.deathBurst.active || this.deathBurst.completed)) {
+      this.resetDeathBurst();
+    }
+
+    if (this.deathBurstEnabled && !this.hasReceivedMatchState && state.health <= 0) {
+      this.deathBurst.completed = true;
+    }
+
+    const shouldStartDeathBurst = this.deathBurstEnabled
+      && this.hasReceivedMatchState
+      && this.health > 0
+      && state.health <= 0;
+    const shouldHideDeadState = this.deathBurstEnabled
+      && state.health <= 0
+      && (this.deathBurst.completed || !this.hasReceivedMatchState);
+
+    this.mesh.visible = state.connected !== false && !shouldHideDeadState;
     if (!this.mesh.visible) {
+      this.hasReceivedMatchState = true;
       return;
     }
 
@@ -381,35 +668,83 @@ export class SnailActor {
     this.controlMode = state.controlMode;
     this.controlIntensity = state.controlIntensity ?? 0;
     this.invincibilityTime = state.invincible ? this.invincibilityDuration * 0.5 : 0;
-    this.stalkSegmentRadius = state.stalkSegmentRadius ?? this.stalkSegmentRadius;
 
     this.mesh.position.set(state.position.x, state.position.y, state.position.z);
     this.mesh.rotation.y = state.rotationY;
 
-    this.stalkTargetPose.yaw = state.stalkYaw;
-    this.stalkTargetPose.pitch = state.stalkPitch;
-    this.stalkPose.yaw = state.stalkYaw;
-    this.stalkPose.pitch = state.stalkPitch;
+    for (const side of STALK_SIDE_KEYS) {
+      const stalk = this.stalks[side];
+      const incoming = state.stalks?.[side];
+      if (!incoming) {
+        continue;
+      }
 
-    const incomingNodes = deserializeNodes(state.stalkNodes ?? []);
-    if (incomingNodes.length > 0) {
-      if (!this.mesh.userData.hasAppliedMatchState) {
-        copyNodesInto(this.stalkNodes, incomingNodes);
-        copyNodesInto(this.previousStalkNodes, incomingNodes);
-        this.mesh.userData.hasAppliedMatchState = true;
+      stalk.held = Boolean(incoming.held);
+      stalk.impactPower = incoming.impactPower ?? 0;
+      stalk.segmentRadius = incoming.segmentRadius ?? this.stalkSegmentRadius;
+      stalk.targetYaw = incoming.targetYaw ?? stalk.targetYaw;
+      stalk.targetPitch = incoming.targetPitch ?? stalk.targetPitch;
+
+      if (incoming.targetVector) {
+        stalk.targetVector.set(
+          incoming.targetVector.x,
+          incoming.targetVector.y,
+          incoming.targetVector.z
+        );
       } else {
-        copyNodesInto(this.previousStalkNodes, this.stalkNodes);
-        copyNodesInto(this.stalkNodes, incomingNodes);
+        this.updateStalkTargetVector(stalk);
+      }
+
+      if (incoming.currentVector) {
+        stalk.currentVector.set(
+          incoming.currentVector.x,
+          incoming.currentVector.y,
+          incoming.currentVector.z
+        );
+      }
+
+      const incomingNodes = deserializeNodes(incoming.nodes ?? []);
+      if (incomingNodes.length > 0) {
+        const previousTipPosition = stalk.tipPosition.clone();
+        if (!this.mesh.userData.hasAppliedMatchState) {
+          copyNodesInto(stalk.nodes, incomingNodes);
+          copyNodesInto(stalk.previousNodes, incomingNodes);
+        } else {
+          copyNodesInto(stalk.previousNodes, stalk.nodes);
+          copyNodesInto(stalk.nodes, incomingNodes);
+        }
+
+        stalk.previousTipPosition.copy(previousTipPosition);
+        stalk.tipPosition.copy(stalk.nodes[stalk.nodes.length - 1]);
+        if (this.mesh.userData.hasAppliedMatchState && delta > 0) {
+          stalk.tipVelocity.copy(stalk.tipPosition).sub(previousTipPosition).divideScalar(delta);
+        } else {
+          stalk.tipVelocity.set(0, 0, 0);
+        }
       }
     }
 
-    this.renderStalk();
+    if (!this.deathBurst.active) {
+      this.renderStalks();
+    }
+
+    if (shouldStartDeathBurst) {
+      this.startDeathBurst();
+    }
+
     this.updateDamageState(delta);
     this.updateShellColor();
+    this.updateDeathBurst(delta);
     this.updateMotionState(delta);
+    this.updateStalkVisualState();
+    this.mesh.userData.hasAppliedMatchState = true;
+    this.hasReceivedMatchState = true;
   }
 
   setVisible(visible) {
+    if (!visible) {
+      this.resetDeathBurst();
+    }
     this.mesh.visible = visible;
   }
 
@@ -427,7 +762,7 @@ export class SnailActor {
 
   clampToArena() {
     this.clampPlanarPosition();
-    this.mesh.position.y = this.groundHeight;
+    this.mesh.position.y = this.getGroundHeight();
   }
 
   takeDamage(amount = 1) {
@@ -447,28 +782,47 @@ export class SnailActor {
     return this.invincibilityTime > 0;
   }
 
-  getEyeStalkPosition() {
-    this.mesh.updateMatrixWorld(true);
-    const position = new THREE.Vector3();
-    this.eyeStalkTip.getWorldPosition(position);
-    return position;
+  getStalk(side = 'left') {
+    return this.stalks[side] ?? this.stalks.left;
   }
 
-  getStalkNodes() {
-    return this.stalkNodes.map((node) => node.clone());
+  getEyeStalkPosition(side = null) {
+    if (side) {
+      const position = new THREE.Vector3();
+      this.getStalk(side).tipAnchor.getWorldPosition(position);
+      return position;
+    }
+
+    return this.getEyeStalkPosition('left')
+      .add(this.getEyeStalkPosition('right'))
+      .multiplyScalar(0.5);
   }
 
-  getStalkSegmentRadius() {
-    return this.stalkSegmentRadius;
+  getStalkNodes(side = 'left') {
+    return this.getStalk(side).nodes.map((node) => node.clone());
   }
 
-  getStalkSegmentSamples() {
+  getStalkSegmentRadius(side = 'left') {
+    return this.getStalk(side).segmentRadius;
+  }
+
+  getStalkSegmentSamples(side = 'left') {
+    const stalk = this.getStalk(side);
     return buildStalkSegmentSamples(
-      this.stalkNodes,
-      this.previousStalkNodes,
+      stalk.nodes,
+      stalk.previousNodes,
       this.lastMotionDelta,
-      this.stalkSegmentRadius
+      stalk.segmentRadius
     );
+  }
+
+  getStalkCollisionSources() {
+    return STALK_SIDE_KEYS.map((side) => ({
+      side,
+      tipPosition: this.getEyeStalkPosition(side),
+      tipVelocity: this.getEyeStalkVelocity(side),
+      segmentSamples: this.getStalkSegmentSamples(side)
+    }));
   }
 
   getBodyPosition() {
@@ -482,8 +836,14 @@ export class SnailActor {
     return this.bodyRadius;
   }
 
-  getEyeStalkVelocity() {
-    return this.eyeTipVelocity.clone();
+  getEyeStalkVelocity(side = null) {
+    if (side) {
+      return this.getStalk(side).tipVelocity.clone();
+    }
+
+    return this.getEyeStalkVelocity('left')
+      .add(this.getEyeStalkVelocity('right'))
+      .multiplyScalar(0.5);
   }
 
   getBodyVelocity() {
@@ -502,6 +862,10 @@ export class SnailActor {
     return this.impactPower;
   }
 
+  getStalkImpactPower(side = 'left') {
+    return this.getStalk(side).impactPower;
+  }
+
   setImpactPower(value) {
     this.impactPower = value;
   }
@@ -514,8 +878,8 @@ export class SnailActor {
     return this.controlIntensity;
   }
 
-  getTipSpeed() {
-    return this.eyeTipVelocity.length();
+  getTipSpeed(side = null) {
+    return this.getEyeStalkVelocity(side).length();
   }
 
   getFacingVector() {
@@ -526,9 +890,22 @@ export class SnailActor {
     );
   }
 
+  getStalkTargetVector(side = 'left') {
+    return this.getStalk(side).targetVector.clone();
+  }
+
+  getStalkCurrentVector(side = 'left') {
+    return this.getStalk(side).currentVector.clone();
+  }
+
   syncMotionState() {
     this.refreshPositionCache();
-    copyNodesInto(this.previousStalkNodes, this.stalkNodes);
+    for (const stalk of Object.values(this.stalks)) {
+      copyNodesInto(stalk.previousNodes, stalk.nodes);
+      stalk.tipVelocity.set(0, 0, 0);
+      stalk.previousTipPosition.copy(stalk.tipPosition);
+    }
+
     this.bodyVelocity.set(0, 0, 0);
     this.eyeTipVelocity.set(0, 0, 0);
     this.lastMotionDelta = 1 / 60;
@@ -537,27 +914,33 @@ export class SnailActor {
   refreshPositionCache() {
     this.mesh.updateMatrixWorld(true);
     this.bodyCenter.getWorldPosition(this.bodyPosition);
-    this.eyeStalkTip.getWorldPosition(this.eyeTipPosition);
+    this.eyeTipPosition.copy(this.getEyeStalkPosition());
+    this.previousEyeTipPosition.copy(this.eyeTipPosition);
   }
 
   updateMotionState(delta) {
     this.mesh.updateMatrixWorld(true);
 
     const nextBodyPosition = new THREE.Vector3();
-    const nextEyeTipPosition = new THREE.Vector3();
     this.bodyCenter.getWorldPosition(nextBodyPosition);
-    this.eyeStalkTip.getWorldPosition(nextEyeTipPosition);
 
     if (delta > 0) {
       this.bodyVelocity.copy(nextBodyPosition).sub(this.bodyPosition).divideScalar(delta);
-      this.eyeTipVelocity.copy(nextEyeTipPosition).sub(this.eyeTipPosition).divideScalar(delta);
       this.lastMotionDelta = delta;
     } else {
       this.bodyVelocity.set(0, 0, 0);
-      this.eyeTipVelocity.set(0, 0, 0);
     }
 
     this.bodyPosition.copy(nextBodyPosition);
+
+    const nextEyeTipPosition = this.getEyeStalkPosition();
+    if (delta > 0) {
+      this.eyeTipVelocity.copy(nextEyeTipPosition).sub(this.eyeTipPosition).divideScalar(delta);
+    } else {
+      this.eyeTipVelocity.set(0, 0, 0);
+    }
+
+    this.previousEyeTipPosition.copy(this.eyeTipPosition);
     this.eyeTipPosition.copy(nextEyeTipPosition);
   }
 }

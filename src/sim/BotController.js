@@ -4,17 +4,29 @@ import { createIdleInput } from './MatchSimulation.js';
 
 export class BotController {
   constructor(options = {}) {
-    this.preferredDistance = options.preferredDistance ?? 5.2;
-    this.attackRange = options.attackRange ?? 6.1;
-    this.attackCooldown = options.attackCooldown ?? 0.9;
-    this.windupDuration = options.windupDuration ?? 0.35;
-    this.recoverDuration = options.recoverDuration ?? 0.3;
+    this.setConfig(options);
 
     this.attackCooldownRemaining = 0.5;
     this.state = 'approach';
     this.stateTimer = 0;
     this.attackSide = 1;
     this.strafeDirection = 1;
+    this.attackPattern = 'left';
+  }
+
+  setConfig(options = {}) {
+    this.preferredDistance = options.preferredDistance ?? 5.2;
+    this.attackRange = options.attackRange ?? 6.1;
+    this.attackCooldown = options.attackCooldown ?? 0.9;
+    this.windupDuration = options.windupDuration ?? 0.35;
+    this.strikeDuration = options.strikeDuration ?? 0.24;
+    this.recoverDuration = options.recoverDuration ?? 0.3;
+    this.approachMoveScale = options.approachMoveScale ?? 1;
+    this.backoffMoveScale = options.backoffMoveScale ?? 0.6;
+    this.strafeMoveScale = options.strafeMoveScale ?? 0.5;
+    this.strikeMoveScale = options.strikeMoveScale ?? 0.8;
+    this.recoverMoveScale = options.recoverMoveScale ?? 0.5;
+    this.bothAttackChance = options.bothAttackChance ?? 0.25;
   }
 
   reset() {
@@ -23,6 +35,7 @@ export class BotController {
     this.stateTimer = 0;
     this.attackSide = 1;
     this.strafeDirection = 1;
+    this.attackPattern = 'left';
   }
 
   getInput(simulation, botSlot, targetSlot, delta) {
@@ -69,25 +82,31 @@ export class BotController {
 
   fillApproachInput(input, directionToTarget, strafeDirection, distanceToTarget) {
     if (distanceToTarget > this.preferredDistance) {
-      input.moveX = directionToTarget.x;
-      input.moveZ = directionToTarget.z;
+      input.moveX = directionToTarget.x * this.approachMoveScale;
+      input.moveZ = directionToTarget.z * this.approachMoveScale;
     } else if (distanceToTarget < this.preferredDistance * 0.7) {
-      input.moveX = -directionToTarget.x * 0.6;
-      input.moveZ = -directionToTarget.z * 0.6;
+      input.moveX = -directionToTarget.x * this.backoffMoveScale;
+      input.moveZ = -directionToTarget.z * this.backoffMoveScale;
     } else {
-      input.moveX = strafeDirection.x * 0.5;
-      input.moveZ = strafeDirection.z * 0.5;
+      input.moveX = strafeDirection.x * this.strafeMoveScale;
+      input.moveZ = strafeDirection.z * this.strafeMoveScale;
     }
 
     if (distanceToTarget <= this.attackRange && this.attackCooldownRemaining === 0) {
       this.attackSide = Math.random() > 0.5 ? 1 : -1;
       this.strafeDirection = -this.attackSide;
+      this.attackPattern = Math.random() < this.bothAttackChance
+        ? 'both'
+        : this.attackSide > 0
+          ? 'right'
+          : 'left';
       this.setState('windup');
     }
   }
 
   fillWindupInput(input, distanceToTarget) {
-    input.combatMode = 'swing';
+    input.leftHeld = this.attackPattern === 'left' || this.attackPattern === 'both';
+    input.rightHeld = this.attackPattern === 'right' || this.attackPattern === 'both';
     input.lookX = this.attackSide * -18;
     input.lookY = -10;
 
@@ -102,16 +121,17 @@ export class BotController {
   }
 
   fillStrikeInput(input, directionToTarget, distanceToTarget) {
-    input.combatMode = 'thrust';
+    input.leftHeld = this.attackPattern === 'left' || this.attackPattern === 'both';
+    input.rightHeld = this.attackPattern === 'right' || this.attackPattern === 'both';
     input.lookX = this.attackSide * 8;
     input.lookY = -18;
 
     if (distanceToTarget <= this.attackRange * 1.1) {
-      input.moveX = directionToTarget.x * 0.8;
-      input.moveZ = directionToTarget.z * 0.8;
+      input.moveX = directionToTarget.x * this.strikeMoveScale;
+      input.moveZ = directionToTarget.z * this.strikeMoveScale;
     }
 
-    if (this.stateTimer >= 0.24) {
+    if (this.stateTimer >= this.strikeDuration) {
       this.attackCooldownRemaining = this.attackCooldown;
       this.setState('recover');
     }
@@ -119,8 +139,8 @@ export class BotController {
 
   fillRecoverInput(input, directionToTarget, distanceToTarget) {
     if (distanceToTarget < this.preferredDistance * 1.05) {
-      input.moveX = -directionToTarget.x * 0.5;
-      input.moveZ = -directionToTarget.z * 0.5;
+      input.moveX = -directionToTarget.x * this.recoverMoveScale;
+      input.moveZ = -directionToTarget.z * this.recoverMoveScale;
     }
 
     if (this.stateTimer >= this.recoverDuration) {

@@ -3,7 +3,7 @@ import * as THREE from 'three';
 import { SnailActor } from './SnailActor.js';
 
 export class NPCSnail extends SnailActor {
-  constructor() {
+  constructor(overrides = {}) {
     super({
       position: new THREE.Vector3(0, 1, -6),
       speed: 4.2,
@@ -20,7 +20,9 @@ export class NPCSnail extends SnailActor {
       stalkResponse: 11,
       stalkRecover: 7,
       impactThreshold: 5.1,
-      impactMomentumFactor: 0.28
+      impactMomentumFactor: 0.28,
+      deathBurstEnabled: true,
+      ...overrides
     });
 
     this.attackRange = 6.1;

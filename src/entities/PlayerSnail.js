@@ -1,9 +1,10 @@
 import * as THREE from 'three';
 
 import { SnailActor } from './SnailActor.js';
+import { DEFAULT_JUMP_VELOCITY } from '../sim/MatchSimulation.js';
 
 export class PlayerSnail extends SnailActor {
-  constructor() {
+  constructor(overrides = {}) {
     super({
       position: new THREE.Vector3(0, 1, 6),
       speed: 7.5,
@@ -20,19 +21,18 @@ export class PlayerSnail extends SnailActor {
       stalkResponse: 15,
       stalkRecover: 9,
       impactThreshold: 5.4,
-      impactMomentumFactor: 0.35
+      impactMomentumFactor: 0.35,
+      ...overrides
     });
 
     this.lockedMoveSpeed = 7.5;
     this.freeMoveSpeed = 10;
     this.speed = this.freeMoveSpeed;
 
-    this.sweepYawSensitivity = 0.011;
-    this.sweepPitchSensitivity = 0.014;
-    this.thrustYawSensitivity = 0.005;
-    this.thrustPitchSensitivity = 0.011;
+    this.stalkYawSensitivity = 0.011;
+    this.stalkPitchSensitivity = 0.014;
 
-    this.jumpVelocity = 8.5;
+    this.jumpVelocity = DEFAULT_JUMP_VELOCITY;
     this.gravity = 24;
     this.verticalVelocity = 0;
     this.isGrounded = true;
@@ -56,25 +56,35 @@ export class PlayerSnail extends SnailActor {
 
   applyCombatInput(combatInput) {
     if (!combatInput?.engaged) {
-      this.relaxStalk('idle');
+      this.setStalkHeld('both', false);
+      this.controlMode = 'idle';
+      this.controlIntensity = 0;
       return;
     }
 
     const movementAmount = Math.hypot(combatInput.lookX, combatInput.lookY);
     const intensity = Math.min(1, movementAmount / 18);
+    this.controlMode = combatInput.leftHeld && combatInput.rightHeld
+      ? 'both'
+      : combatInput.leftHeld
+        ? 'left'
+        : combatInput.rightHeld
+          ? 'right'
+          : 'idle';
+    this.controlIntensity = intensity;
+    this.setStalkHeld('left', combatInput.leftHeld);
+    this.setStalkHeld('right', combatInput.rightHeld);
 
-    if (combatInput.mode === 'thrust') {
+    for (const side of ['left', 'right']) {
+      if (!(side === 'left' ? combatInput.leftHeld : combatInput.rightHeld)) {
+        continue;
+      }
+
       this.adjustStalkTargetPose({
-        yaw: -combatInput.lookX * this.thrustYawSensitivity,
-        pitch: -combatInput.lookY * this.thrustPitchSensitivity
-      }, 'thrust', intensity);
-      return;
+        yaw: -combatInput.lookX * this.stalkYawSensitivity,
+        pitch: -combatInput.lookY * this.stalkPitchSensitivity
+      }, this.controlMode, intensity, side, true);
     }
-
-    this.adjustStalkTargetPose({
-      yaw: -combatInput.lookX * this.sweepYawSensitivity,
-      pitch: -combatInput.lookY * this.sweepPitchSensitivity
-    }, 'swing', intensity);
   }
 
   setLockOnEnabled(isLockedOn) {
@@ -92,16 +102,18 @@ export class PlayerSnail extends SnailActor {
   }
 
   updateJump(delta) {
+    const groundHeight = this.getGroundHeight();
+
     if (this.isGrounded) {
-      this.mesh.position.y = this.groundHeight;
+      this.mesh.position.y = groundHeight;
       return;
     }
 
     this.verticalVelocity -= this.gravity * delta;
     this.mesh.position.y += this.verticalVelocity * delta;
 
-    if (this.mesh.position.y <= this.groundHeight) {
-      this.mesh.position.y = this.groundHeight;
+    if (this.mesh.position.y <= groundHeight) {
+      this.mesh.position.y = groundHeight;
       this.verticalVelocity = 0;
       this.isGrounded = true;
     }
