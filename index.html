@@ -19,7 +19,7 @@
       <div class="hud-card" id="player-health">
         <div class="hud-header">
           <span class="health-label" id="player-label">Player</span>
-          <span class="health-value" id="player-health-value">40/40</span>
+          <span class="health-value" id="player-health-value">15/15</span>
         </div>
         <div class="health-bar">
           <div class="health-bar-fill player-health-bar-fill"></div>
@@ -29,7 +29,7 @@
       <div class="hud-card" id="enemy-health">
         <div class="hud-header">
           <span class="health-label" id="enemy-label">Enemy</span>
-          <span class="health-value" id="enemy-health-value">40/40</span>
+          <span class="health-value" id="enemy-health-value">2/2</span>
         </div>
         <div class="health-bar">
           <div class="health-bar-fill enemy-health-bar-fill"></div>
@@ -37,7 +37,18 @@
       </div>
 
       <div class="hud-card controls-card" id="controls-hint">
-        WASD move · Space jump · LMB sweep · RMB thrust · Hold Shift lock-on · Click arena
+        WASD move · Space jump · Hold LMB left stalk · Hold RMB right stalk · Hold both for both · Hold Shift lock-on · Click arena
+      </div>
+    </div>
+
+    <div id="stalk-hud">
+      <div class="stalk-indicator stalk-indicator--left">
+        <canvas id="left-stalk-indicator"></canvas>
+        <div class="stalk-indicator-label">Left Stalk</div>
+      </div>
+      <div class="stalk-indicator stalk-indicator--right">
+        <canvas id="right-stalk-indicator"></canvas>
+        <div class="stalk-indicator-label">Right Stalk</div>
       </div>
     </div>
 
@@ -45,14 +56,34 @@
       <div class="menu-card">
         <p class="menu-kicker">BattleSnails</p>
         <h1>Choose A Mode</h1>
-        <p class="menu-copy">Single-player stays local. LAN multiplayer auto-pairs two browser clients through a server
-          on this machine, either locally or from another device on the same network.</p>
+        <p class="menu-copy">Single player, a live tuning lab, or LAN. The snails keep getting stranger.</p>
         <div class="menu-actions">
-          <button id="start-singleplayer" type="button">Single Player</button>
-          <button id="start-multiplayer" type="button">LAN Multiplayer</button>
+          <button id="start-singleplayer" type="button">Vs placeholder pete</button>
+          <button id="start-testmode" type="button">test lab</button>
+          <button id="start-multiplayer" type="button">the gauntlet</button>
         </div>
       </div>
     </div>
+
+    <aside id="test-panel">
+      <div class="test-panel__header">
+        <p class="test-panel__kicker">Test Mode</p>
+        <h2>Snail Lab</h2>
+        <p class="test-panel__copy">Stage changes, apply them explicitly, and keep tuning locally on this browser.</p>
+      </div>
+
+      <div id="test-status" class="test-panel__status">
+        Player alive · 1 bot active
+      </div>
+
+      <div class="test-panel__actions">
+        <button id="test-apply" type="button">Apply</button>
+        <button id="test-reset-arena" type="button">Reset Arena</button>
+        <button id="test-reset-defaults" type="button">Defaults</button>
+      </div>
+
+      <div id="test-controls"></div>
+    </aside>
 
     <div id="debug-panel">
       <button id="debug-toggle" type="button">Debug</button>
@@ -73,7 +104,7 @@
           <div>Mouse capture: <span id="mouse-capture-status">No</span></div>
           <div>Opponent state: <span id="opponent-state">idle</span></div>
           <div>Opponent invincible: <span id="opponent-invincibility">No</span></div>
-          <div>Opponent health: <span id="opponent-health">40/40</span></div>
+          <div>Opponent health: <span id="opponent-health">2/2</span></div>
         </div>
 
         <div class="debug-section">
