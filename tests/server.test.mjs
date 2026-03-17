@@ -55,7 +55,7 @@ class TestClient {
   }
 }
 
-test('multiplayer server auto-pairs two clients and starts a match', async () => {
+test('multiplayer server auto-pairs two clients and starts a match with 40 NPCs by default', async () => {
   const server = createLocalMultiplayerServer({ port: 0 });
   await server.start();
   const port = server.getPort();
@@ -77,9 +77,15 @@ test('multiplayer server auto-pairs two clients and starts a match', async () =>
   assert.equal(welcomeA.slot, 1);
   assert.equal(welcomeB.slot, 2);
   assert.equal(matchStartA.snapshot.phase, 'running');
-  assert.equal(matchStartB.snapshot.players.length, 2);
-  assert.equal(Array.isArray(matchStartA.snapshot.players[0].stalkNodes), true);
-  assert.equal(matchStartA.snapshot.players[0].stalkNodes.length > 4, true);
+  assert.equal(matchStartB.snapshot.players.length, 42);
+  assert.equal(Array.isArray(matchStartA.snapshot.players[0].stalks.left.nodes), true);
+  assert.equal(matchStartA.snapshot.players[0].stalks.left.nodes.length > 4, true);
+  assert.equal(Array.isArray(matchStartA.snapshot.trailCells), true);
+  assert.equal(typeof matchStartA.snapshot.trailCellSize, 'number');
+  assert.equal(matchStartA.snapshot.terrain?.preset, 'hyperboloid_bowl');
+  assert.equal(matchStartA.snapshot.players.filter((player) => player.profileName === 'bot').length, 40);
+  assert.equal(matchStartA.snapshot.players.find((player) => player.slot === 1)?.maxHealth, 15);
+  assert.equal(matchStartA.snapshot.players.find((player) => player.profileName === 'bot')?.maxHealth, 2);
 
   clientA.close();
   clientB.close();

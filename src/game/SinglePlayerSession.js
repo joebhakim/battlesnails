@@ -28,7 +28,9 @@ export class SinglePlayerSession {
       const dividedInput = normalizePlayerInput({
         ...localInput,
         lookX: localInput.lookX / steps,
-        lookY: localInput.lookY / steps
+        lookY: localInput.lookY / steps,
+        leftHeld: localInput.leftHeld,
+        rightHeld: localInput.rightHeld
       });
 
       for (let index = 0; index < steps && this.accumulator >= MATCH_TICK_DURATION; index += 1) {
@@ -71,13 +73,25 @@ export class SinglePlayerSession {
   }
 
   getOpponentPlayerState() {
+    return this.getFocusTargetState();
+  }
+
+  getOtherPlayerStates() {
+    return this.snapshot.players.filter((player) => player.slot !== this.localSlot);
+  }
+
+  getFocusTargetState() {
     return this.snapshot.players.find((player) => player.slot === this.opponentSlot) ?? null;
   }
 
-  getHudLabels() {
+  getHudLabels(targetState = this.getFocusTargetState()) {
     return {
-      opponent: 'Enemy'
+      opponent: targetState?.profileName === 'bot' ? 'Enemy' : 'Opponent'
     };
+  }
+
+  getDefaultOpponentMaxHealth() {
+    return this.snapshot?.players.find((player) => player.slot === this.opponentSlot)?.maxHealth ?? 2;
   }
 
   getOverlayState() {

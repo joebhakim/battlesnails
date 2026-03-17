@@ -104,17 +104,55 @@ export class MultiplayerSession {
   }
 
   getOpponentPlayerState() {
+    return this.getFocusTargetState();
+  }
+
+  getOtherPlayerStates() {
     if (!this.snapshot || !this.localSlot) {
+      return [];
+    }
+
+    return this.snapshot.players.filter((player) => player.slot !== this.localSlot);
+  }
+
+  getFocusTargetState() {
+    const localPlayer = this.getLocalPlayerState();
+    const others = this.getOtherPlayerStates();
+    if (others.length === 0) {
       return null;
     }
 
-    return this.snapshot.players.find((player) => player.slot !== this.localSlot) ?? null;
+    const livingOthers = others.filter((player) => player.connected && player.health > 0);
+    const pool = livingOthers.length > 0 ? livingOthers : others;
+    if (!localPlayer) {
+      return pool[0];
+    }
+
+    return pool.reduce((nearest, player) => {
+      if (!nearest) {
+        return player;
+      }
+
+      const nearestDistance = (
+        (nearest.position.x - localPlayer.position.x) ** 2 +
+        (nearest.position.z - localPlayer.position.z) ** 2
+      );
+      const candidateDistance = (
+        (player.position.x - localPlayer.position.x) ** 2 +
+        (player.position.z - localPlayer.position.z) ** 2
+      );
+      return candidateDistance < nearestDistance ? player : nearest;
+    }, null);
   }
 
-  getHudLabels() {
+  getHudLabels(targetState = this.getFocusTargetState()) {
     return {
-      opponent: 'Opponent'
+      opponent: targetState?.profileName === 'bot' ? 'NPC' : 'Opponent'
     };
+  }
+
+  getDefaultOpponentMaxHealth() {
+    return this.snapshot?.players.find((player) => player.slot !== this.localSlot)?.maxHealth ?? 2;
   }
 
   getOverlayState() {
@@ -128,7 +166,7 @@ export class MultiplayerSession {
         };
       case 'waiting':
         return {
-          variant: 'info',
+          variant: this.waitingReason === 'opponent_disconnected' ? 'warning' : 'info',
           title: 'Waiting',
           body: this.waitingReason === 'opponent_disconnected'
             ? 'the Coward snailed away'
@@ -146,7 +184,7 @@ export class MultiplayerSession {
         const body = isDraw
           ? 'Both snails fell in the same exchange.'
           : playerWon
-            ? 'Snailed em, well done, you really SNAILED that other snail. Remember: this game is all about the snailing.'
+            ? 'Snailed. (btw snailed equals winning in this game)'
             : 'SALTED.';
         const variant = isDraw
           ? 'info'
@@ -162,7 +200,7 @@ export class MultiplayerSession {
       }
       case 'error':
         return {
-          variant: 'info',
+          variant: 'error',
           title: 'Multiplayer Error',
           body: this.errorMessage || 'Unable to run multiplayer.',
           actions: [{ id: 'leave', label: 'Back to Menu' }]

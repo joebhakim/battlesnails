@@ -1,5 +1,17 @@
 import { createMinimalWebSocketServer } from './MinimalWebSocketServer.mjs';
 import { MatchSimulation, MATCH_TICK_DURATION, createIdleInput, normalizePlayerInput } from '../src/sim/MatchSimulation.js';
+import { BotController } from '../src/sim/BotController.js';
+
+const DEFAULT_MULTIPLAYER_NPC_COUNT = 40;
+
+function clampNpcCount(value) {
+  const numericValue = Number(value);
+  if (!Number.isFinite(numericValue)) {
+    return DEFAULT_MULTIPLAYER_NPC_COUNT;
+  }
+
+  return Math.min(40, Math.max(1, Math.floor(numericValue)));
+}
 
 function createBufferedInput() {
   return {
@@ -7,9 +19,10 @@ function createBufferedInput() {
     moveZ: 0,
     jumpPressed: false,
     lockOnHeld: false,
-    combatMode: 'idle',
     lookX: 0,
-    lookY: 0
+    lookY: 0,
+    leftHeld: false,
+    rightHeld: false
   };
 }
 
@@ -17,6 +30,7 @@ export function createLocalMultiplayerServer(options = {}) {
   const port = options.port ?? 2567;
   const host = options.host ?? '0.0.0.0';
   const tickDuration = options.tickDuration ?? MATCH_TICK_DURATION;
+  const npcCount = clampNpcCount(options.npcCount ?? process.env.NPC_COUNT ?? DEFAULT_MULTIPLAYER_NPC_COUNT);
   const { server, onConnection } = createMinimalWebSocketServer((request, response) => {
     response.writeHead(200, { 'content-type': 'application/json' });
     response.end(JSON.stringify({ ok: true, mode: 'localhost-multiplayer' }));
@@ -25,6 +39,7 @@ export function createLocalMultiplayerServer(options = {}) {
   const room = {
     clients: new Map(),
     inputs: new Map(),
+    botControllers: new Map(),
     simulation: null,
     intervalId: null,
     phase: 'waiting'
@@ -58,22 +73,75 @@ export function createLocalMultiplayerServer(options = {}) {
     room.inputs.get(slot).moveX = buffered.moveX;
     room.inputs.get(slot).moveZ = buffered.moveZ;
     room.inputs.get(slot).lockOnHeld = buffered.lockOnHeld;
-    room.inputs.get(slot).combatMode = buffered.combatMode;
+    room.inputs.get(slot).leftHeld = buffered.leftHeld;
+    room.inputs.get(slot).rightHeld = buffered.rightHeld;
     return frame;
   }
 
+  function getBotSlots() {
+    return Array.from(room.botControllers.keys()).sort((left, right) => left - right);
+  }
+
+  function chooseBotTargetSlot(botSlot) {
+    if (!room.simulation) {
+      return null;
+    }
+
+    const bot = room.simulation.getPlayerState(botSlot);
+    if (!bot || bot.health <= 0 || !bot.connected) {
+      return null;
+    }
+
+    const allCandidates = Array.from(room.simulation.players.values()).filter((candidate) => (
+      candidate.slot !== botSlot &&
+      candidate.connected &&
+      candidate.health > 0
+    ));
+    if (allCandidates.length === 0) {
+      return null;
+    }
+
+    const humanCandidates = allCandidates.filter((candidate) => candidate.profileName !== 'bot');
+    const pool = humanCandidates.length > 0 ? humanCandidates : allCandidates;
+
+    return pool.reduce((bestSlot, candidate) => {
+      if (bestSlot === null) {
+        return candidate.slot;
+      }
+
+      const bestCandidate = room.simulation.getPlayerState(bestSlot);
+      const bestDistance = bestCandidate.position.distanceToSquared(bot.position);
+      const candidateDistance = candidate.position.distanceToSquared(bot.position);
+      return candidateDistance < bestDistance ? candidate.slot : bestSlot;
+    }, null);
+  }
+
   function startMatch() {
+    const participants = [
+      { slot: 1, profile: 'human', connected: true },
+      { slot: 2, profile: 'human', connected: true },
+      ...Array.from({ length: npcCount }, (_, index) => ({
+        slot: index + 3,
+        profile: 'bot',
+        connected: true
+      }))
+    ];
+
     room.simulation = new MatchSimulation({
       mode: 'multiplayer',
-      players: [
-        { slot: 1, profile: 'human', connected: true },
-        { slot: 2, profile: 'human', connected: true }
-      ]
+      players: participants
     });
 
     room.phase = 'running';
+    room.inputs.clear();
+    room.botControllers.clear();
     room.inputs.set(1, createBufferedInput());
     room.inputs.set(2, createBufferedInput());
+    for (const participant of participants) {
+      if (participant.profile === 'bot') {
+        room.botControllers.set(participant.slot, new BotController());
+      }
+    }
 
     const snapshot = room.simulation.getSnapshot();
     for (const [slot, connection] of room.clients.entries()) {
@@ -92,6 +160,16 @@ export function createLocalMultiplayerServer(options = {}) {
 
       room.simulation.setPlayerInput(1, consumeBufferedInput(1));
       room.simulation.setPlayerInput(2, consumeBufferedInput(2));
+      for (const botSlot of getBotSlots()) {
+        const botController = room.botControllers.get(botSlot);
+        const targetSlot = chooseBotTargetSlot(botSlot);
+        room.simulation.setPlayerInput(
+          botSlot,
+          botController && targetSlot !== null
+            ? botController.getInput(room.simulation, botSlot, targetSlot, tickDuration)
+            : createIdleInput()
+        );
+      }
       const nextSnapshot = room.simulation.step(tickDuration);
       broadcast({ type: 'snapshot', snapshot: nextSnapshot });
 
@@ -111,6 +189,7 @@ export function createLocalMultiplayerServer(options = {}) {
       room.phase = 'waiting';
       room.simulation = null;
       room.inputs.clear();
+      room.botControllers.clear();
       return;
     }
 
@@ -120,6 +199,7 @@ export function createLocalMultiplayerServer(options = {}) {
     room.simulation = null;
     room.inputs.delete(disconnectedSlot);
     room.inputs.set(remainingSlot, createBufferedInput());
+    room.botControllers.clear();
 
     remainingConnection.sendJson({
       type: 'match_end',
@@ -177,7 +257,8 @@ export function createLocalMultiplayerServer(options = {}) {
           buffered.moveX = input.moveX;
           buffered.moveZ = input.moveZ;
           buffered.lockOnHeld = input.lockOnHeld;
-          buffered.combatMode = input.combatMode;
+          buffered.leftHeld = input.leftHeld;
+          buffered.rightHeld = input.rightHeld;
           buffered.lookX += input.lookX;
           buffered.lookY += input.lookY;
           buffered.jumpPressed = buffered.jumpPressed || input.jumpPressed;
@@ -215,6 +296,7 @@ export function createLocalMultiplayerServer(options = {}) {
       }
       room.clients.clear();
       room.inputs.clear();
+      room.botControllers.clear();
       room.simulation = null;
 
       await new Promise((resolve, reject) => {
@@ -237,7 +319,8 @@ export function createLocalMultiplayerServer(options = {}) {
     getState() {
       return {
         phase: room.phase,
-        connectedSlots: Array.from(room.clients.keys()).sort((left, right) => left - right)
+        connectedSlots: Array.from(room.clients.keys()).sort((left, right) => left - right),
+        npcCount
       };
     }
   };
