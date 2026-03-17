@@ -13,56 +13,50 @@ function roundVector(vector) {
   };
 }
 
-function roundPose(pose) {
+function createCombatInput(side, lookX, lookY) {
   return {
-    yaw: Number(pose.yaw.toFixed(4)),
-    pitch: Number(pose.pitch.toFixed(4))
-  };
-}
-
-function createCombatInput(mode, lookX, lookY) {
-  return {
-    engaged: mode !== 'idle',
-    mode,
-    primaryHeld: mode === 'swing',
-    secondaryHeld: mode === 'thrust',
+    engaged: side !== 'idle',
+    leftHeld: side === 'left' || side === 'both',
+    rightHeld: side === 'right' || side === 'both',
     lookX,
     lookY,
     pointerLocked: true
   };
 }
 
-const [modeArg = 'swing', lookXArg = '0', lookYArg = '0', framesArg = '1'] = process.argv.slice(2);
-const mode = ['idle', 'swing', 'thrust'].includes(modeArg) ? modeArg : 'swing';
+const [sideArg = 'left', lookXArg = '0', lookYArg = '0', framesArg = '1'] = process.argv.slice(2);
+const side = ['idle', 'left', 'right', 'both'].includes(sideArg) ? sideArg : 'left';
 const lookX = parseNumber(lookXArg, 0);
 const lookY = parseNumber(lookYArg, 0);
 const frames = Math.max(1, Math.floor(parseNumber(framesArg, 1)));
 const delta = 1 / 60;
 
 const player = new PlayerSnail();
-const input = createCombatInput(mode, lookX, lookY);
+const input = createCombatInput(side, lookX, lookY);
 
 for (let index = 0; index < frames; index += 1) {
   player.update(delta, input);
 }
 
 const snapshot = {
-  mode,
+  side,
   lookX,
   lookY,
   frames,
-  targetPose: roundPose(player.stalkTargetPose),
-  pose: roundPose(player.stalkPose),
-  eyeRotation: {
-    x: Number(player.eyeStalk.rotation.x.toFixed(4)),
-    y: Number(player.eyeStalk.rotation.y.toFixed(4)),
-    z: Number(player.eyeStalk.rotation.z.toFixed(4))
-  },
-  eyeScaleY: Number(player.eyeStalk.scale.y.toFixed(4)),
   controlMode: player.getCombatMode(),
   intensity: Number(player.getControlIntensity().toFixed(4)),
-  tipPosition: roundVector(player.getEyeStalkPosition()),
-  tipVelocity: roundVector(player.getEyeStalkVelocity())
+  left: {
+    targetVector: roundVector(player.getStalkTargetVector('left')),
+    currentVector: roundVector(player.getStalkCurrentVector('left')),
+    tipPosition: roundVector(player.getEyeStalkPosition('left')),
+    tipVelocity: roundVector(player.getEyeStalkVelocity('left'))
+  },
+  right: {
+    targetVector: roundVector(player.getStalkTargetVector('right')),
+    currentVector: roundVector(player.getStalkCurrentVector('right')),
+    tipPosition: roundVector(player.getEyeStalkPosition('right')),
+    tipVelocity: roundVector(player.getEyeStalkVelocity('right'))
+  }
 };
 
 console.log(JSON.stringify(snapshot, null, 2));

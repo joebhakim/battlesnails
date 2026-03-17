@@ -83,12 +83,10 @@ export class MouseControls {
   }
 
   consumeCombatInput() {
-    const mode = this.secondaryHeld ? 'thrust' : this.primaryHeld ? 'swing' : 'idle';
     const input = {
       engaged: this.primaryHeld || this.secondaryHeld,
-      mode,
-      primaryHeld: this.primaryHeld,
-      secondaryHeld: this.secondaryHeld,
+      leftHeld: this.primaryHeld,
+      rightHeld: this.secondaryHeld,
       lookX: this.lookDeltaX,
       lookY: this.lookDeltaY,
       pointerLocked: this.pointerLocked
