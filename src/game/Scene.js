@@ -1,8 +1,20 @@
 import * as THREE from 'three';
 
+import {
+  DEFAULT_TERRAIN_CONFIG,
+  createTerrainGeometry,
+  getTerrainConfigKey,
+  normalizeTerrainConfig,
+  TERRAIN_VISUAL_SIZE
+} from '../world/Terrain.js';
+
 export class Scene {
   constructor() {
     this.scene = new THREE.Scene();
+    this.ground = null;
+    this.groundMaterial = null;
+    this.terrainConfig = normalizeTerrainConfig(DEFAULT_TERRAIN_CONFIG);
+    this.terrainKey = getTerrainConfigKey(this.terrainConfig);
   }
 
   init() {
@@ -20,21 +32,34 @@ export class Scene {
     directionalLight.shadow.camera.far = 60;
     this.scene.add(directionalLight);
 
-    const groundSize = 100;
-    const ground = new THREE.Mesh(
-      new THREE.PlaneGeometry(groundSize, groundSize),
-      new THREE.MeshStandardMaterial({
-        color: 0x6e9f55,
-        roughness: 0.9,
-        metalness: 0.05
-      })
-    );
-    ground.rotation.x = -Math.PI / 2;
-    ground.receiveShadow = true;
-    this.scene.add(ground);
+    this.groundMaterial = new THREE.MeshStandardMaterial({
+      color: 0x6e9f55,
+      roughness: 0.9,
+      metalness: 0.05
+    });
 
-    const grid = new THREE.GridHelper(groundSize, 40, 0x456e3c, 0x5f8f4f);
-    grid.position.y = 0.02;
-    this.scene.add(grid);
+    this.ground = new THREE.Mesh(
+      createTerrainGeometry(this.terrainConfig, TERRAIN_VISUAL_SIZE),
+      this.groundMaterial
+    );
+    this.ground.rotation.x = -Math.PI / 2;
+    this.ground.receiveShadow = true;
+    this.scene.add(this.ground);
+  }
+
+  setTerrainConfig(nextTerrainConfig = DEFAULT_TERRAIN_CONFIG) {
+    const normalized = normalizeTerrainConfig(nextTerrainConfig);
+    const nextKey = getTerrainConfigKey(normalized);
+    if (!this.ground || nextKey === this.terrainKey) {
+      this.terrainConfig = normalized;
+      this.terrainKey = nextKey;
+      return;
+    }
+
+    const nextGeometry = createTerrainGeometry(normalized, TERRAIN_VISUAL_SIZE);
+    this.ground.geometry.dispose();
+    this.ground.geometry = nextGeometry;
+    this.terrainConfig = normalized;
+    this.terrainKey = nextKey;
   }
 }

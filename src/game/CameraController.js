@@ -10,14 +10,14 @@ export class CameraController {
     this.lookAtBuffer = new THREE.Vector3();
     this.focusBuffer = new THREE.Vector3();
 
-    this.distance = 10.5;
-    this.height = 4.6;
-    this.playerFocusHeight = 1.4;
-    this.enemyFocusHeight = 1.1;
-    this.lookAheadDistance = 4.4;
+    this.distance = 5.4;
+    this.height = 2.9;
+    this.playerFocusHeight = 2.15;
+    this.enemyFocusHeight = 1.35;
+    this.lookAheadDistance = 5.6;
     this.positionLerp = 0.12;
     this.lookLerp = 0.16;
-    this.playerFocusBias = 0.35;
+    this.playerFocusBias = 0.55;
     this.lockOnEnabled = true;
     this.movementForward = new THREE.Vector3(0, 0, -1);
   }
