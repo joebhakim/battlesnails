@@ -3,6 +3,7 @@ import {
   TERRAIN_PRESET_OPTIONS,
   normalizeTerrainConfig
 } from '../world/Terrain.js';
+import { DEFAULT_ABOVE_GROUND_HEIGHT, DEFAULT_SPAWN_DROP_HEIGHT } from '../world/TerrainClearance.js';
 
 const TERRAIN_SECTION = 'Terrain';
 const STALK_CONTROL_OPTIONS = Object.freeze([
@@ -180,6 +181,25 @@ const RAW_TUNING_SCHEMA = Object.freeze([
     structural: true
   },
   {
+    id: 'aboveGroundHeight',
+    label: 'Ground Skin',
+    section: 'Movement',
+    min: 0,
+    max: 0.1,
+    step: 0.01,
+    defaultValue: DEFAULT_ABOVE_GROUND_HEIGHT
+  },
+  {
+    id: 'spawnDropHeight',
+    label: 'Spawn Drop Height',
+    section: 'Movement',
+    min: 0,
+    max: 14,
+    step: 0.25,
+    defaultValue: DEFAULT_SPAWN_DROP_HEIGHT,
+    structural: true
+  },
+  {
     id: 'trailSpeedMultiplier',
     label: 'Trail Speed Multiplier',
     section: 'Trails',
@@ -224,24 +244,6 @@ const RAW_TUNING_SCHEMA = Object.freeze([
     max: 2,
     step: 0.01,
     defaultValue: 0.35
-  },
-  {
-    id: 'innervatedDamageMultiplier',
-    label: 'Innervated Damage Multiplier',
-    section: 'Combat',
-    min: 1,
-    max: 12,
-    step: 0.1,
-    defaultValue: 5
-  },
-  {
-    id: 'invincibilityDuration',
-    label: 'Invincibility Duration',
-    section: 'Combat',
-    min: 0,
-    max: 3,
-    step: 0.01,
-    defaultValue: 0.45
   },
   {
     id: 'stalkControlMode',
@@ -613,9 +615,19 @@ export function getDefaultTuningConfig() {
 
 export function normalizeTuningConfig(rawConfig = {}) {
   const normalized = {};
+  const configWithMigrations = { ...rawConfig };
+  const legacyAboveGroundHeight = Number(rawConfig.aboveGroundHeight);
+  if (
+    configWithMigrations.spawnDropHeight === undefined &&
+    Number.isFinite(legacyAboveGroundHeight) &&
+    legacyAboveGroundHeight > 0.5
+  ) {
+    configWithMigrations.spawnDropHeight = legacyAboveGroundHeight;
+    configWithMigrations.aboveGroundHeight = DEFAULT_ABOVE_GROUND_HEIGHT;
+  }
 
   for (const entry of TUNING_SCHEMA) {
-    normalized[entry.id] = normalizeEntryValue(entry, rawConfig[entry.id]);
+    normalized[entry.id] = normalizeEntryValue(entry, configWithMigrations[entry.id]);
   }
 
   if (normalized.stalkPitchMin > normalized.stalkPitchMax) {
@@ -677,10 +689,10 @@ export function isTuningEntryVisible(entry, values = DEFAULT_TUNING_CONFIG) {
 export function createSimulationProfiles(config = DEFAULT_TUNING_CONFIG) {
   const tuning = normalizeTuningConfig(config);
   const sharedProfile = {
-    groundHeight: 1,
+    groundHeight: tuning.aboveGroundHeight,
+    spawnDropHeight: tuning.spawnDropHeight,
     arenaRadius: 22,
     bodyRadius: tuning.bodyRadius,
-    invincibilityDuration: tuning.invincibilityDuration,
     jumpVelocity: tuning.jumpVelocity,
     gravity: tuning.bodyGravity,
     turnSpeed: tuning.turnSpeed,
@@ -706,7 +718,6 @@ export function createSimulationProfiles(config = DEFAULT_TUNING_CONFIG) {
     stalkMass: tuning.stalkMass,
     impactThreshold: tuning.impactThreshold,
     impactMomentumFactor: tuning.impactMomentumFactor,
-    innervatedDamageMultiplier: tuning.innervatedDamageMultiplier,
     stalkYawSensitivity: tuning.stalkYawSensitivity,
     stalkPitchSensitivity: tuning.stalkPitchSensitivity
   };

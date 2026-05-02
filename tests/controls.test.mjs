@@ -14,7 +14,8 @@ import {
   createSimulationProfiles
 } from '../src/sim/Tuning.js';
 import { getLocalStalkDirection } from '../src/sim/StalkRope.js';
-import { getTerrainHeight, normalizeTerrainConfig } from '../src/world/Terrain.js';
+import { normalizeTerrainConfig } from '../src/world/Terrain.js';
+import { getTerrainBodyGroundHeight } from '../src/world/TerrainClearance.js';
 
 function createCombatInput({
   leftHeld = false,
@@ -70,7 +71,6 @@ function createMatchState(actor, overrides = {}) {
     impactPower: actor.getImpactPower(),
     controlMode: actor.getCombatMode(),
     controlIntensity: actor.getControlIntensity(),
-    invincible: false,
     position: {
       x: actor.mesh.position.x,
       y: actor.mesh.position.y,
@@ -385,19 +385,23 @@ test('presentation actor defaults track shared tuning defaults', () => {
   assert.equal(player.gravity, DEFAULT_TUNING_CONFIG.bodyGravity);
   assert.equal(player.getImpactThreshold(), DEFAULT_TUNING_CONFIG.impactThreshold);
   assert.equal(player.stalkLength, DEFAULT_TUNING_CONFIG.stalkTotalLength);
+  assert.equal(player.groundHeight, DEFAULT_TUNING_CONFIG.aboveGroundHeight);
+  assert.equal(player.spawnDropHeight, DEFAULT_TUNING_CONFIG.spawnDropHeight);
 
   assert.equal(npc.speed, botProfile.freeMoveSpeed);
   assert.equal(npc.turnSpeed, botProfile.turnSpeed);
   assert.equal(npc.arenaRadius, botProfile.arenaRadius);
   assert.equal(npc.getImpactThreshold(), botProfile.impactThreshold);
   assert.equal(npc.stalkLength, botProfile.stalkTotalLength);
+  assert.equal(npc.groundHeight, botProfile.groundHeight);
+  assert.equal(npc.spawnDropHeight, botProfile.spawnDropHeight);
   assert.equal(npc.attackRange, botControllerConfig.attackRange);
   assert.equal(npc.preferredDistance, botControllerConfig.preferredDistance);
   assert.equal(npc.attackCooldown, botControllerConfig.attackCooldown);
 });
 
 test('jump lifts the player above ground before settling back down', () => {
-  const player = new PlayerSnail();
+  const player = new PlayerSnail({ spawnDropHeight: 0 });
   const startHeight = player.mesh.position.y;
 
   assert.equal(player.jump(), true);
@@ -413,14 +417,23 @@ test('jump lifts the player above ground before settling back down', () => {
 
 test('grounded player actor follows the bowl height when moving uphill', () => {
   const terrain = normalizeTerrainConfig({ preset: 'hyperboloid_bowl' });
-  const player = new PlayerSnail({ terrainConfig: terrain });
+  const player = new PlayerSnail({ terrainConfig: terrain, spawnDropHeight: 0 });
   const initialHeight = player.mesh.position.y;
 
   player.move(new THREE.Vector3(1, 0, 0), 0.5, new THREE.Vector3(1, 0, 0));
   player.update(1 / 60, createCombatInput());
 
   assert(player.mesh.position.y > initialHeight);
-  assert.equal(player.mesh.position.y, getTerrainHeight(player.mesh.position.x, player.mesh.position.z, terrain));
+  assert.equal(
+    player.mesh.position.y,
+    getTerrainBodyGroundHeight({
+      x: player.mesh.position.x,
+      z: player.mesh.position.z,
+      rotationY: player.mesh.rotation.y,
+      terrainConfig: terrain,
+      aboveGroundHeight: player.groundHeight
+    })
+  );
 });
 
 test('npc death burst scatters pieces, lasts about five seconds, then hides the corpse', () => {

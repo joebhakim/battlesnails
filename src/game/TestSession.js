@@ -7,6 +7,7 @@ import {
   hasStructuralTuningChanges,
   normalizeTuningConfig
 } from '../sim/Tuning.js';
+import { TEST_PLAYGROUND_FIXTURES } from '../sim/TestFixtures.js';
 
 function getSafeStorage(storageOverride) {
   if (storageOverride) {
@@ -73,6 +74,7 @@ export class TestSession {
   rebuildSimulation() {
     const participants = [
       { slot: this.localSlot, profile: 'human', connected: true },
+      ...TEST_PLAYGROUND_FIXTURES,
       ...Array.from({ length: this.tuningConfig.botCount }, (_, index) => ({
         slot: index + 2,
         profile: 'bot',
@@ -210,7 +212,11 @@ export class TestSession {
 
   getHudLabels(targetState = this.getFocusTargetState()) {
     return {
-      opponent: targetState?.profileName === 'bot' ? 'Target' : 'Opponent'
+      opponent: targetState?.displayName
+        ? `${targetState.displayName}${targetState.immortal ? ' (infinite health)' : ''}`
+        : targetState?.profileName === 'bot'
+          ? 'Target'
+          : 'Opponent'
     };
   }
 
@@ -237,12 +243,14 @@ export class TestSession {
   getTestPanelState() {
     const localPlayer = this.getLocalPlayerState();
     const bots = this.snapshot?.players.filter((player) => player.profileName === 'bot') ?? [];
+    const fixtures = this.snapshot?.players.filter((player) => player.profileName === 'fixture') ?? [];
     const livingBots = bots.filter((player) => player.health > 0).length;
 
     return {
       playerAlive: Boolean(localPlayer && localPlayer.health > 0),
       livingBots,
       totalBots: bots.length,
+      fixtures: fixtures.length,
       storedLocally: Boolean(this.storage),
       values: this.getTuningConfig()
     };

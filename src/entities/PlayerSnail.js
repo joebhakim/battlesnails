@@ -9,6 +9,8 @@ export class PlayerSnail extends SnailActor {
       position: new THREE.Vector3(0, 1, 6),
       speed: DEFAULT_TUNING_CONFIG.freeMoveSpeed,
       turnSpeed: DEFAULT_TUNING_CONFIG.turnSpeed,
+      groundHeight: DEFAULT_TUNING_CONFIG.aboveGroundHeight,
+      spawnDropHeight: DEFAULT_TUNING_CONFIG.spawnDropHeight,
       arenaRadius: 22,
       bodyRadius: DEFAULT_TUNING_CONFIG.bodyRadius,
       maxHealth: DEFAULT_TUNING_CONFIG.playerMaxHealth,
@@ -44,7 +46,7 @@ export class PlayerSnail extends SnailActor {
     this.jumpVelocity = DEFAULT_TUNING_CONFIG.jumpVelocity;
     this.gravity = DEFAULT_TUNING_CONFIG.bodyGravity;
     this.verticalVelocity = 0;
-    this.isGrounded = true;
+    this.isGrounded = this.mesh.position.y <= this.getGroundHeight();
   }
 
   move(direction, delta, facingDirection = direction) {

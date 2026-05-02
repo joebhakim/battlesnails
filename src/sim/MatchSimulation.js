@@ -1,9 +1,12 @@
 import * as THREE from 'three';
 
 import {
+  STALK_EYE_BOUNCE_RESTITUTION,
+  STALK_EYE_RADIUS_SCALE,
   STALK_HEMISPHERE_FORWARD_TILT,
   STALK_ROOT_OFFSETS,
-  buildStalkSegmentSamples,
+  STALK_SEGMENT_RADIUS,
+  buildStalkEyeSamples,
   cloneNodeArray,
   createInitialStalkNodes,
   evaluateStalkImpact,
@@ -22,6 +25,7 @@ import {
   normalizeTuningConfig
 } from './Tuning.js';
 import { createTerrainPosition, getTerrainHeight } from '../world/Terrain.js';
+import { estimateTerrainBodyClearance, getTerrainBodyGroundHeight } from '../world/TerrainClearance.js';
 
 export const MATCH_TICK_RATE = 60;
 export const MATCH_TICK_DURATION = 1 / MATCH_TICK_RATE;
@@ -80,6 +84,10 @@ const HEMISPHERE_EPSILON = 0.001;
 const STALK_OUTSIDE_ARC_SPEED_SCALE = 0.12;
 const TOP_DOWN_MIN_FORWARD = 0.02;
 const TOP_DOWN_EPSILON = 0.000001;
+const BASH_DAMAGE_SCALE = 0.2;
+const MIN_DAMAGE_EVENT_AMOUNT = 0.025;
+const CONTACT_RENEWAL_IMPULSE_MARGIN = 10;
+const CONTACT_HYSTERESIS_TICKS = 5;
 
 function angleDifference(current, target) {
   return Math.atan2(Math.sin(target - current), Math.cos(target - current));
@@ -99,6 +107,49 @@ function clamp(value, min, max) {
 
 function cloneVector(vector) {
   return { x: vector.x, y: vector.y, z: vector.z };
+}
+
+function clonePlainVector(vector) {
+  return vector ? { x: vector.x, y: vector.y, z: vector.z } : null;
+}
+
+function cloneCollisionShape(shape) {
+  if (!shape) {
+    return null;
+  }
+
+  return {
+    ...shape,
+    halfExtents: clonePlainVector(shape.halfExtents)
+  };
+}
+
+function cloneEvent(event) {
+  return {
+    ...event,
+    position: event.position ? { ...event.position } : null
+  };
+}
+
+function createContactKey(attacker, target, side) {
+  return `${attacker.slot}:${target.slot}:${side}`;
+}
+
+function getImpactSite(target, contactSample) {
+  if (contactSample?.surfacePoint) {
+    return contactSample.surfacePoint.clone();
+  }
+
+  if (!contactSample?.center) {
+    return target.position.clone();
+  }
+
+  const toSample = contactSample.center.clone().sub(target.position);
+  if (toSample.lengthSq() <= 0.000001) {
+    return contactSample.center.clone();
+  }
+
+  return target.position.clone().addScaledVector(toSample.normalize(), target.bodyRadius);
 }
 
 function clampReticleToDisk(x, y, radius = 0.995) {
@@ -393,16 +444,88 @@ function applyTangentVelocityControl(stalk, input, profile) {
   );
 }
 
-function computeImpactDamage(attacker, stalk, impactPower) {
-  const threshold = Math.max(0.0001, attacker.profile.impactThreshold);
-  const innervationMultiplier = stalk.held
-    ? attacker.profile.innervatedDamageMultiplier ?? 1
-    : 1;
+function getContactSurfaceNormal(target, contactSample) {
+  const normal = contactSample?.surfaceNormal?.clone()
+    ?? contactSample?.center?.clone().sub(target.position)
+    ?? new THREE.Vector3(1, 0, 0);
 
-  return Math.max(
-    1,
-    Math.round((impactPower / threshold) * innervationMultiplier)
-  );
+  if (normal.lengthSq() <= TOP_DOWN_EPSILON) {
+    return new THREE.Vector3(1, 0, 0);
+  }
+
+  return normal.normalize();
+}
+
+function computeImpactDamageDetails(attacker, target, stalk, contactSample, contactState = null) {
+  const threshold = Math.max(0.0001, attacker.profile.impactThreshold);
+  const radius = Math.max(0.0001, stalk.segmentRadius ?? STALK_SEGMENT_RADIUS);
+  const massScale = clamp((radius / STALK_SEGMENT_RADIUS) ** 2, 0.25, 4);
+  const surfaceNormal = getContactSurfaceNormal(target, contactSample);
+  const sampleVelocity = contactSample?.velocity?.clone() ?? new THREE.Vector3();
+  const targetVelocity = target.bodyVelocity ?? new THREE.Vector3();
+  const attackerVelocity = attacker.bodyVelocity ?? new THREE.Vector3();
+  const movementAssist = Math.max(0, -attackerVelocity.dot(surfaceNormal));
+  const incidentVelocity = sampleVelocity
+    .sub(targetVelocity)
+    .addScaledVector(surfaceNormal, -movementAssist * attacker.profile.impactMomentumFactor);
+  const impactSpeed = Math.max(0, -incidentVelocity.dot(surfaceNormal));
+  const normalVelocity = surfaceNormal.clone().multiplyScalar(incidentVelocity.dot(surfaceNormal));
+  const tangentVelocity = incidentVelocity.clone().sub(normalVelocity);
+  const tangentSpeed = tangentVelocity.length();
+  const bashImpulse = impactSpeed * (1 + STALK_EYE_BOUNCE_RESTITUTION) * massScale;
+  const contactAlreadyActive = Boolean(contactState?.active && (contactState.peakBashImpulse ?? 0) > 0);
+  const renewedBashImpulse = contactAlreadyActive
+    ? bashImpulse > (contactState.peakBashImpulse + CONTACT_RENEWAL_IMPULSE_MARGIN)
+    : true;
+  const activeBashImpulse = renewedBashImpulse ? bashImpulse : 0;
+  // Innervation changes damage by changing stalk motion, not by multiplying the final hit.
+  // Pressure is intentionally not used because larger eyes should hit harder, not softer.
+  const bashDamage = (activeBashImpulse / threshold) * BASH_DAMAGE_SCALE;
+  const amount = bashDamage;
+
+  return {
+    amount,
+    impactImpulse: activeBashImpulse,
+    bashDamage,
+    bashImpulse: activeBashImpulse,
+    rawBashImpulse: bashImpulse,
+    impactSpeed,
+    tangentSpeed,
+    massScale
+  };
+}
+
+function createDamageEvent({
+  tick,
+  attacker,
+  target,
+  side,
+  contactSample,
+  damageDetails,
+  amount
+}) {
+  const detailScale = damageDetails.amount > 0
+    ? Math.min(1, amount / damageDetails.amount)
+    : 0;
+
+  return {
+    id: `${tick}:damage:${attacker.slot}:${target.slot}:${side}`,
+    type: 'damage',
+    tick,
+    attackerSlot: attacker.slot,
+    targetSlot: target.slot,
+    side,
+    amount,
+    measurement: 'bash',
+    impactSpeed: damageDetails.impactSpeed,
+    tangentSpeed: damageDetails.tangentSpeed,
+    impactImpulse: damageDetails.impactImpulse,
+    bashImpulse: damageDetails.bashImpulse,
+    rawBashImpulse: damageDetails.rawBashImpulse,
+    bashDamage: damageDetails.bashDamage * detailScale,
+    massScale: damageDetails.massScale,
+    position: cloneVector(getImpactSite(target, contactSample))
+  };
 }
 
 function createTrailCellKey(cellX, cellZ) {
@@ -422,15 +545,69 @@ function circleIntersectsTrailCell(x, z, radius, cell, cellSize) {
   return (deltaX * deltaX) + (deltaZ * deltaZ) <= radius * radius;
 }
 
-function createInitialPosition(slot, terrainConfig) {
+function getInitialStartPoint(slot) {
   if (PLAYER_STARTS.has(slot)) {
-    const point = PLAYER_STARTS.get(slot);
-    return createTerrainPosition(point.x, point.z, terrainConfig);
+    return PLAYER_STARTS.get(slot);
   }
 
   const botIndex = Math.max(0, slot - 3);
-  const point = BOT_STARTS[botIndex % BOT_STARTS.length];
-  return createTerrainPosition(point.x, point.z, terrainConfig);
+  return BOT_STARTS[botIndex % BOT_STARTS.length];
+}
+
+function createInitialPosition(point, terrainConfig, profile, rotationY) {
+  const position = createTerrainPosition(point.x, point.z, terrainConfig);
+  position.y += estimateTerrainBodyClearance({
+    x: point.x,
+    z: point.z,
+    rotationY,
+    terrainConfig,
+    aboveGroundHeight: profile.groundHeight ?? 0
+  });
+  position.y += Math.max(0, profile.spawnDropHeight ?? 0);
+  return position;
+}
+
+function getFixtureHalfHeight(fixture) {
+  const shape = fixture.collisionShape ?? {};
+  if (shape.type === 'box') {
+    return Number.isFinite(shape.halfExtents?.y) ? shape.halfExtents.y : fixture.bodyRadius ?? 1;
+  }
+
+  if (shape.type === 'cylinder') {
+    return Number.isFinite(shape.halfHeight)
+      ? shape.halfHeight
+      : Number.isFinite(shape.height)
+        ? shape.height / 2
+        : fixture.bodyRadius ?? 1;
+  }
+
+  return null;
+}
+
+function createFixturePosition(fixture, terrainConfig) {
+  const x = fixture.position?.x ?? 0;
+  const z = fixture.position?.z ?? 0;
+  const shapeHalfHeight = getFixtureHalfHeight(fixture);
+
+  if (shapeHalfHeight !== null) {
+    const position = createTerrainPosition(x, z, terrainConfig);
+    position.y += shapeHalfHeight;
+    return position;
+  }
+
+  const position = createTerrainPosition(x, z, terrainConfig);
+  position.y += estimateTerrainBodyClearance({
+    x,
+    z,
+    rotationY: fixture.rotationY ?? 0,
+    terrainConfig,
+    aboveGroundHeight: 0
+  });
+  return position;
+}
+
+function getProfileSpawnDropHeight(profile) {
+  return Math.max(0, profile.spawnDropHeight ?? 0);
 }
 
 function normalizeInput(rawInput = {}) {
@@ -448,7 +625,13 @@ function normalizeInput(rawInput = {}) {
 }
 
 function getPlayerGroundHeight(player, terrainConfig) {
-  return getTerrainHeight(player.position.x, player.position.z, terrainConfig);
+  return getTerrainBodyGroundHeight({
+    x: player.position.x,
+    z: player.position.z,
+    rotationY: player.rotationY,
+    terrainConfig,
+    aboveGroundHeight: player.profile.groundHeight ?? 0
+  });
 }
 
 function snapPlayerToGroundIfGrounded(player, terrainConfig) {
@@ -513,6 +696,8 @@ function createStalkState(profile, position, rotationY, side) {
     rootOffset: rootOffset.clone(),
     nodes,
     previousNodes: cloneNodeArray(nodes),
+    incidentNodes: cloneNodeArray(nodes),
+    incidentPreviousNodes: cloneNodeArray(nodes),
     tipPosition,
     previousTipPosition: tipPosition.clone(),
     tipVelocity: new THREE.Vector3(),
@@ -542,10 +727,55 @@ function createStalkState(profile, position, rotationY, side) {
 }
 
 function getStalkEntries(player) {
+  if (!player.stalks) {
+    return [];
+  }
+
   return STALK_SIDE_KEYS.map((side) => [side, player.stalks[side]]);
 }
 
+function createBodyObstacles(players) {
+  return players
+    .filter((player) => player.connected && player.health > 0)
+    .map((player) => ({
+      slot: player.slot,
+      position: player.position,
+      radius: player.bodyRadius,
+      shape: player.collisionShape
+    }));
+}
+
+function getStalkObstacleBroadphaseRadius(player) {
+  return (
+    player.bodyRadius +
+    (player.profile.stalkTotalLength * Math.max(1, player.profile.stalkReachMax)) +
+    (player.profile.stalkSegmentRadius * 3)
+  );
+}
+
+function getStalkBodyObstacles(player, bodyObstacles) {
+  const broadphaseRadius = getStalkObstacleBroadphaseRadius(player);
+
+  return bodyObstacles
+    .filter((obstacle) => {
+      if (obstacle.slot === player.slot) {
+        return true;
+      }
+
+      const maximumDistance = broadphaseRadius + obstacle.radius;
+      return player.position.distanceToSquared(obstacle.position) <= maximumDistance * maximumDistance;
+    })
+    .map((obstacle) => ({
+      ...obstacle,
+      self: obstacle.slot === player.slot
+    }));
+}
+
 function getCompositeTipPosition(player) {
+  if (!player.stalks) {
+    return player.position.clone();
+  }
+
   const left = player.stalks.left.tipPosition;
   const right = player.stalks.right.tipPosition;
   return left.clone().add(right).multiplyScalar(0.5);
@@ -583,16 +813,77 @@ function serializeStalk(stalk) {
   };
 }
 
+function serializeStalks(player) {
+  if (!player.stalks) {
+    return null;
+  }
+
+  return {
+    left: serializeStalk(player.stalks.left),
+    right: serializeStalk(player.stalks.right)
+  };
+}
+
+function createFixtureState(participant, terrainConfig) {
+  const position = createFixturePosition(participant, terrainConfig);
+  const maxHealth = participant.maxHealth ?? 1;
+  const profile = {
+    maxHealth,
+    bodyRadius: participant.bodyRadius ?? 1,
+    groundHeight: 0,
+    arenaRadius: 22,
+    staticBody: true
+  };
+  const fixtureKind = participant.fixtureKind ?? 'fixture';
+
+  return {
+    slot: participant.slot,
+    profileName: participant.profile ?? 'fixture',
+    fixtureKind,
+    displayName: participant.displayName ?? fixtureKind,
+    connected: participant.connected ?? true,
+    profile,
+    position,
+    previousPosition: position.clone(),
+    bodyVelocity: new THREE.Vector3(),
+    eyeTipPosition: position.clone(),
+    previousEyeTipPosition: position.clone(),
+    eyeTipVelocity: new THREE.Vector3(),
+    stalks: null,
+    rotationY: participant.rotationY ?? 0,
+    health: maxHealth,
+    maxHealth,
+    immortal: Boolean(participant.immortal),
+    staticBody: true,
+    onTrail: false,
+    grounded: true,
+    verticalVelocity: 0,
+    lockOnHeld: false,
+    controlMode: 'static',
+    controlIntensity: 0,
+    impactPower: 0,
+    bodyRadius: participant.bodyRadius ?? 1,
+    collisionShape: cloneCollisionShape(participant.collisionShape)
+  };
+}
+
 function createPlayerState(
   slot,
   profileName,
   connected = true,
   profileTemplates = createSimulationProfiles(),
-  terrainConfig
+  terrainConfig,
+  participant = null
 ) {
+  if (participant?.fixtureKind) {
+    return createFixtureState(participant, terrainConfig);
+  }
+
   const profile = profileTemplates[profileName] ?? profileTemplates.human;
-  const position = createInitialPosition(slot, terrainConfig);
-  const initialRotation = slot === 1 ? Math.PI : slot === 2 ? 0 : Math.atan2(-position.x, -position.z);
+  const startPoint = getInitialStartPoint(slot);
+  const initialRotation = slot === 1 ? Math.PI : slot === 2 ? 0 : Math.atan2(-startPoint.x, -startPoint.z);
+  const position = createInitialPosition(startPoint, terrainConfig, profile, initialRotation);
+  const spawnDropHeight = getProfileSpawnDropHeight(profile);
   const stalks = Object.fromEntries(
     STALK_SIDE_KEYS.map((side) => [side, createStalkState(profile, position, initialRotation, side)])
   );
@@ -614,8 +905,7 @@ function createPlayerState(
     health: profile.maxHealth,
     maxHealth: profile.maxHealth,
     onTrail: false,
-    invincibilityTime: 0,
-    grounded: true,
+    grounded: spawnDropHeight <= 0,
     verticalVelocity: 0,
     lockOnHeld: false,
     controlMode: 'idle',
@@ -626,6 +916,10 @@ function createPlayerState(
 }
 
 function applyProfileToPlayer(player, profile) {
+  if (player.fixtureKind) {
+    return;
+  }
+
   player.profile = profile;
   player.maxHealth = profile.maxHealth;
   player.health = Math.min(player.health, player.maxHealth);
@@ -688,6 +982,8 @@ export class MatchSimulation {
     this.trailSpeedMultiplier = options.trailSpeedMultiplier ?? this.tuningConfig.trailSpeedMultiplier;
     this.trailContactRadius = options.trailContactRadius ?? this.tuningConfig.trailContactRadius;
     this.wetTrailCells = new Map();
+    this.events = [];
+    this.contactMemory = new Map();
 
     this.players = new Map();
     this.inputs = new Map();
@@ -698,7 +994,8 @@ export class MatchSimulation {
         participant.profile ?? 'human',
         participant.connected ?? true,
         this.profileTemplates,
-        this.terrainConfig
+        this.terrainConfig,
+        participant
       );
       this.players.set(player.slot, player);
       this.inputs.set(player.slot, { ...DEFAULT_INPUT });
@@ -709,7 +1006,15 @@ export class MatchSimulation {
     const descriptors = Array.from(this.players.values()).map((player) => ({
       slot: player.slot,
       profile: player.profileName,
-      connected: player.connected
+      connected: player.connected,
+      fixtureKind: player.fixtureKind,
+      displayName: player.displayName,
+      immortal: player.immortal,
+      maxHealth: player.maxHealth,
+      position: player.fixtureKind ? cloneVector(player.position) : null,
+      rotationY: player.rotationY,
+      bodyRadius: player.bodyRadius,
+      collisionShape: cloneCollisionShape(player.collisionShape)
     }));
 
     this.players.clear();
@@ -721,7 +1026,8 @@ export class MatchSimulation {
         descriptor.profile,
         descriptor.connected,
         this.profileTemplates,
-        this.terrainConfig
+        this.terrainConfig,
+        descriptor
       );
       this.players.set(player.slot, player);
       this.inputs.set(player.slot, { ...DEFAULT_INPUT });
@@ -732,6 +1038,8 @@ export class MatchSimulation {
     this.endReason = null;
     this.tick = 0;
     this.wetTrailCells.clear();
+    this.events = [];
+    this.contactMemory.clear();
   }
 
   setPlayerConnected(slot, connected) {
@@ -787,36 +1095,40 @@ export class MatchSimulation {
         x: cell.x,
         z: cell.z
       })),
+      events: this.events.map(cloneEvent),
       players: Array.from(this.players.values())
         .sort((left, right) => left.slot - right.slot)
         .map((player) => ({
           slot: player.slot,
           profileName: player.profileName,
+          fixtureKind: player.fixtureKind ?? null,
+          displayName: player.displayName ?? null,
+          immortal: Boolean(player.immortal),
+          collisionShape: cloneCollisionShape(player.collisionShape),
           connected: player.connected,
           position: cloneVector(player.position),
           rotationY: player.rotationY,
           health: player.health,
           maxHealth: player.maxHealth,
+          groundHeight: player.profile.groundHeight,
           onTrail: player.onTrail,
           grounded: player.grounded,
           lockOn: player.lockOnHeld,
           controlMode: player.controlMode,
           controlIntensity: player.controlIntensity,
           impactPower: player.impactPower,
-          invincible: player.invincibilityTime > 0,
-          stalks: {
-            left: serializeStalk(player.stalks.left),
-            right: serializeStalk(player.stalks.right)
-          }
+          stalks: serializeStalks(player)
         }))
     };
   }
 
   step(delta = this.tickDuration) {
     if (this.phase !== 'running') {
+      this.events = [];
       return this.getSnapshot();
     }
 
+    this.events = [];
     const orderedPlayers = Array.from(this.players.values()).sort((left, right) => left.slot - right.slot);
 
     for (const player of orderedPlayers) {
@@ -833,15 +1145,22 @@ export class MatchSimulation {
     for (const player of orderedPlayers) {
       if (!player.connected || player.health <= 0) {
         player.onTrail = false;
-        player.controlMode = 'idle';
+        player.controlMode = player.fixtureKind ? 'static' : 'idle';
         for (const [, stalk] of getStalkEntries(player)) {
           stalk.held = false;
         }
         continue;
       }
 
+      if (player.fixtureKind) {
+        player.controlMode = 'static';
+        player.controlIntensity = 0;
+        player.lockOnHeld = false;
+        continue;
+      }
+
       const target = this.findPreferredTarget(player, {
-        preferHumans: this.mode === 'multiplayer' && player.profileName === 'bot'
+        preferHumans: player.profileName === 'bot'
       });
       const input = this.inputs.get(player.slot) ?? DEFAULT_INPUT;
       this.applyInput(player, target, input, delta);
@@ -853,8 +1172,16 @@ export class MatchSimulation {
       }
     }
 
+    const bodyObstacles = createBodyObstacles(orderedPlayers);
+
     for (const player of orderedPlayers) {
       if (!player.connected) {
+        player.onTrail = false;
+        continue;
+      }
+
+      if (player.fixtureKind) {
+        player.bodyVelocity.copy(player.position).sub(player.previousPosition).divideScalar(Math.max(delta, 0.0001));
         player.onTrail = false;
         continue;
       }
@@ -869,10 +1196,9 @@ export class MatchSimulation {
         }
       }
 
-      this.updateStalkRopes(player, delta);
+      this.updateStalkRopes(player, delta, bodyObstacles);
       player.bodyVelocity.copy(player.position).sub(player.previousPosition).divideScalar(Math.max(delta, 0.0001));
       updateCompositeTipState(player, delta);
-      player.invincibilityTime = Math.max(0, player.invincibilityTime - delta);
       player.onTrail = player.health > 0 && this.isPlayerOnWetTrail(player);
     }
 
@@ -948,6 +1274,28 @@ export class MatchSimulation {
     }
 
     const livingPlayers = this.getLivingPlayers();
+    const hasBots = Array.from(this.players.values()).some((player) => player.profileName === 'bot');
+    if (hasBots) {
+      const livingHumans = livingPlayers.filter((player) => player.profileName !== 'bot');
+      const livingBots = livingPlayers.filter((player) => player.profileName === 'bot');
+      if (livingHumans.length > 0 && livingBots.length > 0) {
+        return;
+      }
+
+      if (livingHumans.length > 0) {
+        this.endMatch(livingHumans[0].slot, 'knockout');
+        return;
+      }
+
+      if (livingBots.length > 0) {
+        this.endMatch(livingBots[0].slot, 'knockout');
+        return;
+      }
+
+      this.endMatch(null, 'draw');
+      return;
+    }
+
     if (livingPlayers.length > 1) {
       return;
     }
@@ -1087,7 +1435,10 @@ export class MatchSimulation {
     }
   }
 
-  updateStalkRopes(player, delta) {
+  updateStalkRopes(player, delta, bodyObstacles = []) {
+    const collisionBodyObstacles = getStalkBodyObstacles(player, bodyObstacles);
+    const terrainHeightAt = (x, z) => getTerrainHeight(x, z, this.terrainConfig);
+
     for (const [, stalk] of getStalkEntries(player)) {
       if (stalk.held) {
         advanceAppliedStalkTarget(stalk, player.profile, delta);
@@ -1105,6 +1456,8 @@ export class MatchSimulation {
       simulateStalkRope({
         nodes: stalk.nodes,
         previousNodes: stalk.previousNodes,
+        incidentNodes: stalk.incidentNodes,
+        incidentPreviousNodes: stalk.incidentPreviousNodes,
         rootWorld,
         goalWorld,
         delta,
@@ -1113,7 +1466,12 @@ export class MatchSimulation {
         damping: player.profile.stalkDamping,
         goalPull: stalk.held ? player.profile.stalkDrivePull : player.profile.stalkIdlePull,
         constraintIterations: player.profile.stalkConstraintIterations,
-        turgidity: stalk.held ? player.profile.stalkTurgidity : 0
+        turgidity: stalk.held ? player.profile.stalkTurgidity : 0,
+        collision: {
+          terrainHeightAt,
+          bodyObstacles: collisionBodyObstacles,
+          segmentRadius: stalk.segmentRadius
+        }
       });
 
       stalk.tipPosition.copy(getTipWorldPosition(stalk.nodes));
@@ -1224,9 +1582,16 @@ export class MatchSimulation {
     }
 
     const overlap = minimumDistance - distance;
-    const displacement = planarDirection.multiplyScalar(overlap / 2);
-    playerA.position.addScaledVector(displacement, -1);
-    playerB.position.add(displacement);
+    const playerAMovable = playerA.staticBody ? 0 : 1;
+    const playerBMovable = playerB.staticBody ? 0 : 1;
+    const movableTotal = playerAMovable + playerBMovable;
+    if (movableTotal === 0) {
+      return;
+    }
+
+    const displacement = planarDirection.multiplyScalar(overlap);
+    playerA.position.addScaledVector(displacement, -playerAMovable / movableTotal);
+    playerB.position.addScaledVector(displacement, playerBMovable / movableTotal);
     this.clampPlanarPosition(playerA);
     this.clampPlanarPosition(playerB);
     snapPlayerToGroundIfGrounded(playerA, this.terrainConfig);
@@ -1245,44 +1610,110 @@ export class MatchSimulation {
 
     let totalDamage = 0;
     let strongestImpact = attacker.impactPower;
+    const pendingDamageEvents = [];
 
-    for (const [, stalk] of getStalkEntries(attacker)) {
-      const segmentSamples = buildStalkSegmentSamples(
-        stalk.nodes,
-        stalk.previousNodes,
+    for (const [side, stalk] of getStalkEntries(attacker)) {
+      const eyeRadius = (stalk.segmentRadius ?? STALK_SEGMENT_RADIUS) * STALK_EYE_RADIUS_SCALE;
+      const eyeSamples = buildStalkEyeSamples(
+        stalk.incidentNodes ?? stalk.nodes,
+        stalk.incidentPreviousNodes ?? stalk.previousNodes,
         delta,
-        stalk.segmentRadius
+        eyeRadius
       );
       const impactResult = evaluateStalkImpact(
-        segmentSamples,
+        eyeSamples,
         target.position,
         target.bodyRadius,
         attacker.bodyVelocity,
-        attacker.profile.impactMomentumFactor
+        attacker.profile.impactMomentumFactor,
+        target.collisionShape
       );
 
-      const measuredImpact = impactResult.collision
-        ? impactResult.contactImpactPower
+      const contactKey = createContactKey(attacker, target, side);
+      const contactState = this.contactMemory.get(contactKey) ?? {
+        active: false,
+        peakBashImpulse: 0,
+        missedTicks: 0,
+        featureId: null,
+        normal: null
+      };
+      if (!impactResult.collision) {
+        if (contactState.active || contactState.peakBashImpulse > 0) {
+          contactState.missedTicks = (contactState.missedTicks ?? 0) + 1;
+          if (contactState.missedTicks > CONTACT_HYSTERESIS_TICKS) {
+            contactState.active = false;
+            contactState.peakBashImpulse = 0;
+            contactState.featureId = null;
+            contactState.normal = null;
+          }
+          this.contactMemory.set(contactKey, contactState);
+        }
+      }
+
+      const damageDetails = impactResult.collision
+        ? computeImpactDamageDetails(attacker, target, stalk, impactResult.contactSample, contactState)
+        : null;
+      const measuredImpact = damageDetails
+        ? damageDetails.impactImpulse
         : impactResult.impactPower;
       stalk.impactPower = measuredImpact;
       strongestImpact = Math.max(strongestImpact, measuredImpact);
 
+      if (impactResult.collision) {
+        contactState.active = true;
+        contactState.missedTicks = 0;
+        contactState.featureId = impactResult.contactSample.contactFeatureId ?? null;
+        contactState.normal = clonePlainVector(impactResult.contactSample.surfaceNormal);
+        contactState.peakBashImpulse = Math.max(
+          contactState.peakBashImpulse,
+          damageDetails.amount >= MIN_DAMAGE_EVENT_AMOUNT
+            ? damageDetails.rawBashImpulse
+            : 0
+        );
+        this.contactMemory.set(contactKey, contactState);
+      }
+
       if (
         impactResult.collision &&
-        impactResult.contactImpactPower >= attacker.profile.impactThreshold
+        damageDetails.amount >= MIN_DAMAGE_EVENT_AMOUNT
       ) {
-        totalDamage += computeImpactDamage(attacker, stalk, impactResult.contactImpactPower);
+        totalDamage += damageDetails.amount;
+        pendingDamageEvents.push({
+          side,
+          contactSample: impactResult.contactSample,
+          damageDetails,
+          amount: damageDetails.amount
+        });
       }
     }
 
     attacker.impactPower = strongestImpact;
 
-    if (totalDamage === 0 || target.invincibilityTime > 0) {
+    if (totalDamage === 0) {
       return;
     }
 
-    target.health = Math.max(0, target.health - totalDamage);
-    target.invincibilityTime = target.profile.invincibilityDuration;
+    const appliedDamage = target.immortal ? totalDamage : Math.min(target.health, totalDamage);
+    if (!target.immortal) {
+      target.health = Math.max(0, target.health - totalDamage);
+    }
+
+    let remainingVisibleDamage = appliedDamage;
+    for (const pendingEvent of pendingDamageEvents) {
+      const visibleAmount = Math.min(pendingEvent.amount, remainingVisibleDamage);
+      if (visibleAmount <= 0) {
+        continue;
+      }
+
+      remainingVisibleDamage -= visibleAmount;
+      this.events.push(createDamageEvent({
+        tick: this.tick,
+        attacker,
+        target,
+        ...pendingEvent,
+        amount: visibleAmount
+      }));
+    }
   }
 }
 
