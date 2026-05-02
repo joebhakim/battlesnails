@@ -2,9 +2,11 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
-  SINGLE_PLAYER_TUNING_STORAGE_KEY,
-  SinglePlayerSession
+  SINGLE_PLAYER_OPTIONS_STORAGE_KEY,
+  SinglePlayerSession,
+  getStoredSinglePlayerOptions
 } from '../src/game/SinglePlayerSession.js';
+import { Game } from '../src/game/Game.js';
 import { DEFAULT_TUNING_CONFIG } from '../src/sim/Tuning.js';
 
 class MemoryStorage {
@@ -25,16 +27,16 @@ class MemoryStorage {
   }
 }
 
-test('single player exposes match tuning with sane shipped defaults', () => {
+test('single player exposes only simple stage and encounter options', () => {
   const session = new SinglePlayerSession({ storage: new MemoryStorage() });
   const schemaIds = session.getTuningSchema().map((entry) => entry.id);
   const snapshot = session.getSnapshot();
   const player = snapshot.players.find((state) => state.slot === 1);
   const bot = snapshot.players.find((state) => state.slot === 2);
 
-  assert(schemaIds.includes('terrainPreset'));
-  assert(schemaIds.includes('playerMaxHealth'));
-  assert(schemaIds.includes('botMaxHealth'));
+  assert.deepEqual(schemaIds, ['stagePreset', 'encounterPreset']);
+  assert(!schemaIds.includes('playerMaxHealth'));
+  assert(!schemaIds.includes('botMaxHealth'));
   assert(!schemaIds.includes('botCount'));
   assert.equal(snapshot.players.length, 2);
   assert.equal(snapshot.terrain.preset, 'plane');
@@ -42,54 +44,76 @@ test('single player exposes match tuning with sane shipped defaults', () => {
   assert.equal(bot.maxHealth, DEFAULT_TUNING_CONFIG.botMaxHealth);
 });
 
-test('single player stage and HP tuning rebuilds the duel while keeping one bot', () => {
+test('single player stage and encounter options rebuild the match', () => {
   const session = new SinglePlayerSession({ storage: new MemoryStorage() });
 
   const result = session.setTuningConfig({
     ...session.getTuningConfig(),
-    terrainPreset: 'sphere_dome',
-    playerMaxHealth: 21,
-    botMaxHealth: 7,
-    botCount: 20
+    stagePreset: 'sphere_dome',
+    encounterPreset: 'many_weak'
   });
   const snapshot = session.getSnapshot();
+  const enemies = snapshot.players.filter((state) => state.slot !== 1);
 
   assert.equal(result.rebuilt, true);
-  assert.equal(snapshot.players.length, 2);
+  assert.equal(snapshot.players.length, 9);
   assert.equal(snapshot.terrain.preset, 'sphere_dome');
-  assert.equal(snapshot.players.find((state) => state.slot === 1).maxHealth, 21);
-  assert.equal(snapshot.players.find((state) => state.slot === 2).maxHealth, 7);
-  assert.equal(session.getTuningConfig().botCount, DEFAULT_TUNING_CONFIG.botCount);
+  assert(enemies.every((state) => state.maxHealth === 80));
+  assert.equal(session.getTestPanelState().livingBots, 8);
+  assert.equal(session.getTestPanelState().entityLabel, 'enemies');
 });
 
-test('single player movement tuning applies without rebuilding the arena', () => {
-  const session = new SinglePlayerSession({ storage: new MemoryStorage() });
-  const initialTick = session.getSnapshot().tick;
-
-  const result = session.setTuningValue('freeMoveSpeed', 13.5);
-
-  assert.equal(result.rebuilt, false);
-  assert.equal(session.getSnapshot().tick, initialTick);
-  assert.equal(session.getTuningConfig().freeMoveSpeed, 13.5);
-});
-
-test('single player tuning persists separately from test mode tuning', () => {
+test('single player options persist separately from test mode tuning', () => {
   const storage = new MemoryStorage();
   const firstSession = new SinglePlayerSession({ storage });
 
   firstSession.setTuningConfig({
     ...firstSession.getTuningConfig(),
-    terrainPreset: 'cone',
-    botMaxHealth: 9
+    stagePreset: 'cone',
+    encounterPreset: 'one_weak'
   });
 
   const secondSession = new SinglePlayerSession({ storage });
-  assert.equal(secondSession.getTuningConfig().terrainPreset, 'cone');
-  assert.equal(secondSession.getTuningConfig().botMaxHealth, 9);
+  assert.equal(secondSession.getTuningConfig().stagePreset, 'cone');
+  assert.equal(secondSession.getTuningConfig().encounterPreset, 'one_weak');
+  assert.equal(secondSession.getSnapshot().players.find((state) => state.slot === 2).maxHealth, 120);
 
   secondSession.resetToDefaults();
 
-  assert.equal(secondSession.getTuningConfig().terrainPreset, DEFAULT_TUNING_CONFIG.terrainPreset);
-  assert.equal(secondSession.getTuningConfig().botMaxHealth, DEFAULT_TUNING_CONFIG.botMaxHealth);
-  assert.equal(storage.getItem(SINGLE_PLAYER_TUNING_STORAGE_KEY), null);
+  assert.equal(secondSession.getTuningConfig().stagePreset, DEFAULT_TUNING_CONFIG.terrainPreset);
+  assert.equal(secondSession.getTuningConfig().encounterPreset, 'one_strong');
+  assert.equal(storage.getItem(SINGLE_PLAYER_OPTIONS_STORAGE_KEY), null);
+});
+
+test('single player launch options are stored from the mode menu flow', () => {
+  const storage = new MemoryStorage();
+
+  new SinglePlayerSession({
+    storage,
+    options: {
+      stagePreset: 'saddle',
+      encounterPreset: 'many_strong_comical'
+    }
+  });
+
+  assert.deepEqual(getStoredSinglePlayerOptions(storage), {
+    stagePreset: 'saddle',
+    encounterPreset: 'many_strong_comical'
+  });
+});
+
+test('single player does not use the in-game tuning panel hook', () => {
+  const game = Object.create(Game.prototype);
+  game.currentSession = new SinglePlayerSession({ storage: new MemoryStorage() });
+
+  assert.equal(game.isTuningSession(), false);
+
+  game.currentSession = {
+    mode: 'test',
+    getTuningSchema() {},
+    getTuningConfig() {},
+    setTuningConfig() {},
+    getTestPanelState() {}
+  };
+  assert.equal(game.isTuningSession(), true);
 });

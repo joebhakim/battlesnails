@@ -5,17 +5,23 @@ import { Renderer } from './Renderer.js';
 import { CameraController } from './CameraController.js';
 import { PlayerSnail } from '../entities/PlayerSnail.js';
 import { NPCSnail } from '../entities/NPCSnail.js';
+import { TestFixtureActor } from '../entities/TestFixtureActor.js';
 import { MouseControls } from '../controls/MouseControls.js';
 import { KeyboardControls } from '../controls/KeyboardControls.js';
 import { CollisionDetection } from '../utils/CollisionDetection.js';
 import { UI } from '../utils/UI.js';
 import { Debug } from '../utils/Debug.js';
 import { AudioController } from '../audio/AudioController.js';
-import { SinglePlayerSession } from './SinglePlayerSession.js';
+import {
+  SINGLE_PLAYER_OPTIONS_SCHEMA,
+  SinglePlayerSession,
+  getStoredSinglePlayerOptions
+} from './SinglePlayerSession.js';
 import { MultiplayerSession } from './MultiplayerSession.js';
 import { TestSession } from './TestSession.js';
 import { SimulatorSession } from './SimulatorSession.js';
 import { TrailRenderer } from './TrailRenderer.js';
+import { DamageIndicators } from './DamageIndicators.js';
 import { DEFAULT_BOT_MAX_HEALTH, DEFAULT_MAX_HEALTH } from '../sim/MatchSimulation.js';
 import { DEFAULT_TERRAIN_CONFIG } from '../world/Terrain.js';
 
@@ -31,6 +37,25 @@ const REMOTE_PLAYER_OVERRIDES = {
   shellCriticalColor: 0xa7411f
 };
 
+function createSifuStatueActor(state) {
+  return new NPCSnail({
+    position: new THREE.Vector3(state.position.x, state.position.y, state.position.z),
+    spawnDropHeight: 0,
+    speed: 0,
+    turnSpeed: 0,
+    bodyRadius: state.bodyRadius,
+    maxHealth: state.maxHealth,
+    health: state.health,
+    deathBurstEnabled: false,
+    bodyColor: 0x7f9386,
+    shellColor: 0x5a5144,
+    shellDamagedColor: 0x5a5144,
+    shellCriticalColor: 0x5a5144,
+    stalkIdlePull: 0,
+    stalkDrivePull: 0
+  });
+}
+
 export class Game {
   constructor(container) {
     this.container = container;
@@ -39,6 +64,7 @@ export class Game {
     this.camera = new THREE.PerspectiveCamera(120, window.innerWidth / window.innerHeight, 0.1, 1000);
     this.cameraController = new CameraController(this.camera);
     this.trailRenderer = null;
+    this.damageIndicators = null;
 
     this.playerSnail = null;
     this.otherActorViews = new Map();
@@ -51,6 +77,7 @@ export class Game {
 
     this.currentSession = null;
     this.currentOverlayKey = null;
+    this.latestSnapshotEvents = [];
     this.hasRenderedMatchState = false;
     this.isRunning = false;
     this.lastFrameTime = performance.now();
@@ -68,6 +95,10 @@ export class Game {
     this.keyboardControls = new KeyboardControls();
     this.collisionDetection = new CollisionDetection();
     this.ui = new UI();
+    this.damageIndicators = new DamageIndicators({
+      container: this.container,
+      camera: this.camera
+    });
     this.debug = new Debug(this);
 
     this.ui.updatePlayerHealth(DEFAULT_MAX_HEALTH, DEFAULT_MAX_HEALTH);
@@ -77,10 +108,15 @@ export class Game {
     this.ui.setMusicState(false);
     this.ui.setupMusicButton(this.toggleMusic.bind(this));
     this.ui.setupModeButtons({
-      onSinglePlayer: this.startSinglePlayerSession.bind(this),
+      onSinglePlayer: this.showSinglePlayerSetup.bind(this),
       onTestMode: this.startTestSession.bind(this),
       onSimulator: this.startSimulatorSession.bind(this),
       onMultiplayer: this.startMultiplayerSession.bind(this)
+    });
+    this.ui.setupSinglePlayerSetup({
+      schema: SINGLE_PLAYER_OPTIONS_SCHEMA,
+      values: getStoredSinglePlayerOptions(),
+      onStart: this.startSinglePlayerSession.bind(this)
     });
     this.ui.showStartMenu();
 
@@ -134,6 +170,8 @@ export class Game {
       this.playerSnail.setTerrainConfig(DEFAULT_TERRAIN_CONFIG);
       this.trailRenderer?.setTerrainConfig(DEFAULT_TERRAIN_CONFIG);
       this.ui?.updateStalkIndicators(null);
+      this.latestSnapshotEvents = [];
+      this.damageIndicators?.clear();
       if (this.debug) {
         this.debug.update();
       }
@@ -153,6 +191,12 @@ export class Game {
     const focusState = this.currentSession.getFocusTargetState?.() ?? this.currentSession.getOpponentPlayerState();
     const viewLockOnHeld = localState?.lockOn ?? localInput.lockOnHeld;
     this.applyViewState(localState, otherStates, focusState, viewLockOnHeld, delta);
+    this.latestSnapshotEvents = snapshot?.events ?? [];
+    this.damageIndicators?.handleSnapshotEvents(
+      this.latestSnapshotEvents,
+      this.getDamageIndicatorColors(localState)
+    );
+    this.damageIndicators?.update(delta);
     this.updateHud(localState, focusState);
     this.ui.updateStalkIndicators(localState?.stalks ?? null);
     this.updateTestPanel();
@@ -183,9 +227,20 @@ export class Game {
   }
 
   createActorViewForState(state) {
-    const actor = state.profileName === 'bot'
-      ? new NPCSnail()
-      : new PlayerSnail(REMOTE_PLAYER_OVERRIDES);
+    let actor = null;
+    if (state.fixtureKind && state.fixtureKind !== 'snail') {
+      actor = new TestFixtureActor({
+        fixtureKind: state.fixtureKind,
+        collisionShape: state.collisionShape
+      });
+    } else if (state.fixtureKind === 'snail') {
+      actor = createSifuStatueActor(state);
+    } else if (state.profileName === 'bot') {
+      actor = new NPCSnail();
+    } else {
+      actor = new PlayerSnail(REMOTE_PLAYER_OVERRIDES);
+    }
+
     actor.setTerrainConfig(this.currentSession?.getSnapshot?.()?.terrain ?? DEFAULT_TERRAIN_CONFIG);
     return actor;
   }
@@ -264,13 +319,35 @@ export class Game {
     }
 
     if (focusState) {
-      this.ui.updateEnemyHealth(focusState.health, focusState.maxHealth);
+      this.ui.updateEnemyHealth(
+        focusState.immortal ? 1 : focusState.health,
+        focusState.immortal ? 1 : focusState.maxHealth
+      );
     } else {
       this.ui.updateEnemyHealth(0, this.currentSession?.getDefaultOpponentMaxHealth?.() ?? DEFAULT_BOT_MAX_HEALTH);
     }
 
     const labels = this.currentSession?.getHudLabels?.(focusState) ?? { opponent: 'Enemy' };
     this.ui.setHealthLabels('Player', labels.opponent);
+  }
+
+  getActorBodyColor(actor) {
+    return actor?.originalBodyColor
+      ? `#${actor.originalBodyColor.getHexString()}`
+      : null;
+  }
+
+  getDamageIndicatorColors(localState) {
+    const colors = new Map();
+    if (localState) {
+      colors.set(localState.slot, this.getActorBodyColor(this.playerSnail));
+    }
+
+    for (const [slot, actor] of this.otherActorViews.entries()) {
+      colors.set(slot, this.getActorBodyColor(actor));
+    }
+
+    return colors;
   }
 
   updateOverlay() {
@@ -323,8 +400,12 @@ export class Game {
     }
   }
 
-  startSinglePlayerSession() {
-    this.enterSession(new SinglePlayerSession());
+  showSinglePlayerSetup() {
+    this.ui.showSinglePlayerSetup(getStoredSinglePlayerOptions());
+  }
+
+  startSinglePlayerSession(options = {}) {
+    this.enterSession(new SinglePlayerSession({ options }));
   }
 
   startTestSession() {
@@ -392,7 +473,7 @@ export class Game {
     }
 
     if (this.currentSession?.mode === 'singleplayer') {
-      this.ui.setInstructions('WASD move · Space jump · Hold LMB/RMB stalks · Mouse Y reach · Wheel plane height · Hold both for both · Hold Shift lock-on · Tune match knobs on the right · Click arena');
+      this.ui.setInstructions('WASD move · Space jump · Hold LMB/RMB stalks · Mouse Y reach · Wheel plane height · Hold both for both · Hold Shift lock-on · Click arena');
       return;
     }
 
@@ -406,6 +487,7 @@ export class Game {
 
   resetViewActors() {
     this.trailRenderer?.reset();
+    this.damageIndicators?.clear();
     this.playerSnail.setVisible(false);
     delete this.playerSnail.mesh.userData.hasAppliedMatchState;
 
@@ -437,6 +519,7 @@ export class Game {
       localSlot: this.currentSession?.getLocalSlot() ?? null,
       localPlayer: this.currentSession?.getLocalPlayerState() ?? null,
       opponentPlayer: focusState,
+      events: this.latestSnapshotEvents ?? [],
       playerView: this.playerSnail.mesh.visible ? this.playerSnail : null,
       opponentView: focusState ? this.otherActorViews.get(focusState.slot) ?? null : null
     };
@@ -450,6 +533,7 @@ export class Game {
 
   isTuningSession() {
     return Boolean(
+      this.currentSession?.mode === 'test' &&
       this.currentSession?.getTuningSchema &&
       this.currentSession?.getTuningConfig &&
       this.currentSession?.setTuningConfig &&
@@ -458,14 +542,6 @@ export class Game {
   }
 
   getTuningPanelHeader() {
-    if (this.currentSession?.mode === 'singleplayer') {
-      return {
-        kicker: 'Single Player',
-        title: 'Match Knobs',
-        copy: 'Stage shape, HP, movement, combat, stalk, and bot settings are saved for solo play.'
-      };
-    }
-
     return {
       kicker: 'Test Mode',
       title: 'Snail Lab',
@@ -480,8 +556,10 @@ export class Game {
     this.ui.setHealthLabels('Player', labels.opponent);
     this.ui.updatePlayerHealth(localState?.health ?? DEFAULT_MAX_HEALTH, localState?.maxHealth ?? DEFAULT_MAX_HEALTH);
     this.ui.updateEnemyHealth(
-      focusState?.health ?? 0,
-      focusState?.maxHealth ?? this.currentSession?.getDefaultOpponentMaxHealth?.() ?? DEFAULT_BOT_MAX_HEALTH
+      focusState ? (focusState.immortal ? 1 : focusState.health) : 0,
+      focusState
+        ? (focusState.immortal ? 1 : focusState.maxHealth)
+        : this.currentSession?.getDefaultOpponentMaxHealth?.() ?? DEFAULT_BOT_MAX_HEALTH
     );
 
     if (this.isTuningSession()) {

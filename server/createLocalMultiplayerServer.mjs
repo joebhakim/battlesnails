@@ -286,8 +286,19 @@ export function createLocalMultiplayerServer(options = {}) {
 
   return {
     async start() {
-      await new Promise((resolve) => {
-        server.listen(port, host, resolve);
+      await new Promise((resolve, reject) => {
+        const handleError = (error) => {
+          server.off('listening', handleListening);
+          reject(error);
+        };
+        const handleListening = () => {
+          server.off('error', handleError);
+          resolve();
+        };
+
+        server.once('error', handleError);
+        server.once('listening', handleListening);
+        server.listen(port, host);
       });
       return server.address();
     },

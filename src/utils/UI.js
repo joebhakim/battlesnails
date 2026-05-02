@@ -5,6 +5,7 @@ const INDICATOR_CURRENT_COLOR = '#8fd3ff';
 const INDICATOR_GRID_COLOR = 'rgba(210, 225, 255, 0.22)';
 const INDICATOR_RIM_COLOR = 'rgba(232, 184, 48, 0.38)';
 const INDICATOR_PLANE_SCALE = 1.35;
+const INDICATOR_IMPACT_REFERENCE = 14;
 
 function ensureIndicatorResolution(canvas) {
   const width = Math.max(1, Math.round(canvas.clientWidth * window.devicePixelRatio));
@@ -127,6 +128,31 @@ function drawHeightGauge(ctx, targetPoint, currentPoint, width, height) {
   }
 }
 
+function drawImpactGauge(ctx, impactPower, width, centerX, centerY, radius) {
+  const power = Math.max(0, Number.isFinite(impactPower) ? impactPower : 0);
+  const ratio = clamp(power / INDICATOR_IMPACT_REFERENCE, 0, 1);
+  if (ratio <= 0.005) {
+    return;
+  }
+
+  ctx.strokeStyle = `rgba(255, 92, 64, ${0.35 + (ratio * 0.55)})`;
+  ctx.lineWidth = Math.max(2, width * 0.012);
+  ctx.beginPath();
+  ctx.arc(
+    centerX,
+    centerY,
+    radius * 1.12,
+    -Math.PI / 2,
+    -Math.PI / 2 + (Math.PI * 2 * ratio)
+  );
+  ctx.stroke();
+
+  ctx.font = `${Math.max(10, width * 0.062)}px ui-monospace, SFMono-Regular, Consolas, monospace`;
+  ctx.textAlign = 'left';
+  ctx.fillStyle = `rgba(255, 132, 96, ${0.6 + (ratio * 0.35)})`;
+  ctx.fillText(`power ${power.toFixed(1)}`, width * 0.08, centerY + radius * 0.9);
+}
+
 export class UI {
   constructor() {
     this.app = document.getElementById('app');
@@ -138,10 +164,17 @@ export class UI {
     this.enemyHealthValue = document.getElementById('enemy-health-value');
     this.instructions = document.getElementById('controls-hint');
     this.startMenu = document.getElementById('start-menu');
+    this.startMenuTitle = this.startMenu.querySelector('h1');
+    this.startMenuCopy = this.startMenu.querySelector('.menu-copy');
+    this.modeActions = document.getElementById('mode-actions');
     this.startSinglePlayerButton = document.getElementById('start-singleplayer');
     this.startTestModeButton = document.getElementById('start-testmode');
     this.startSimulatorButton = document.getElementById('start-simulator');
     this.startMultiplayerButton = document.getElementById('start-multiplayer');
+    this.singlePlayerSetup = document.getElementById('singleplayer-setup');
+    this.singlePlayerSetupControls = document.getElementById('singleplayer-setup-controls');
+    this.singlePlayerStartButton = document.getElementById('singleplayer-start');
+    this.singlePlayerBackButton = document.getElementById('singleplayer-back');
     this.musicButton = document.getElementById('music-toggle');
     this.gameMessage = document.getElementById('game-message');
     this.leftStalkIndicator = document.getElementById('left-stalk-indicator');
@@ -180,6 +213,8 @@ export class UI {
     this.pendingSimulatorTuningValues = null;
     this.appliedSimulatorTuningValues = null;
     this.onSimulatorTuningApply = null;
+    this.singlePlayerOptionValues = {};
+    this.singlePlayerOptionRefs = new Map();
 
     this.drawStalkIndicator(this.leftStalkIndicator, null);
     this.drawStalkIndicator(this.rightStalkIndicator, null);
@@ -202,10 +237,20 @@ export class UI {
     this.updateHealthBar(this.enemyHealthBarFill, this.enemyHealthValue, currentHealth, maxHealth, '#888078');
   }
 
+  formatHealthValue(value) {
+    if (!Number.isFinite(value)) {
+      return '0';
+    }
+
+    return Math.abs(value - Math.round(value)) < 0.05
+      ? `${Math.round(value)}`
+      : value.toFixed(1);
+  }
+
   updateHealthBar(fillElement, valueElement, currentHealth, maxHealth, healthyColor) {
-    const percentage = (currentHealth / maxHealth) * 100;
+    const percentage = Math.max(0, (currentHealth / maxHealth) * 100);
     fillElement.style.width = `${percentage}%`;
-    valueElement.textContent = `${currentHealth}/${maxHealth}`;
+    valueElement.textContent = `${this.formatHealthValue(currentHealth)}/${this.formatHealthValue(maxHealth)}`;
 
     if (percentage > 66) {
       fillElement.style.backgroundColor = healthyColor;
@@ -227,12 +272,86 @@ export class UI {
     this.startMultiplayerButton.addEventListener('click', onMultiplayer);
   }
 
+  setupSinglePlayerSetup({ schema = [], values = {}, onStart, onBack }) {
+    this.singlePlayerOptionValues = { ...values };
+    this.renderSinglePlayerSetupControls(schema, this.singlePlayerOptionValues);
+    this.singlePlayerStartButton.onclick = () => {
+      onStart?.({ ...this.singlePlayerOptionValues });
+    };
+    this.singlePlayerBackButton.onclick = () => {
+      this.showModeSelect();
+      onBack?.();
+    };
+  }
+
   showStartMenu() {
     this.startMenu.classList.add('visible');
+    this.showModeSelect();
   }
 
   hideStartMenu() {
     this.startMenu.classList.remove('visible');
+  }
+
+  showModeSelect() {
+    this.startMenuTitle.textContent = 'Choose A Mode';
+    this.startMenuCopy.textContent = 'Single Player, Test Mode, Simulator, or LAN Multiplayer. The snails keep getting stranger.';
+    this.modeActions.classList.remove('hidden');
+    this.singlePlayerSetup.classList.add('hidden');
+  }
+
+  showSinglePlayerSetup(values = {}) {
+    this.startMenuTitle.textContent = 'Single Player';
+    this.startMenuCopy.textContent = 'Pick a stage and enemy setup.';
+    this.modeActions.classList.add('hidden');
+    this.singlePlayerSetup.classList.remove('hidden');
+    this.updateSinglePlayerSetupValues(values);
+  }
+
+  renderSinglePlayerSetupControls(schema, values) {
+    this.singlePlayerSetupControls.innerHTML = '';
+    this.singlePlayerOptionRefs.clear();
+
+    for (const entry of schema) {
+      const label = document.createElement('label');
+      label.className = 'singleplayer-control';
+
+      const labelText = document.createElement('span');
+      labelText.className = 'singleplayer-control__label';
+      labelText.textContent = entry.label;
+
+      const select = document.createElement('select');
+      select.className = 'singleplayer-control__select';
+      select.id = `singleplayer-option-${entry.id}`;
+      for (const option of entry.options ?? []) {
+        const optionElement = document.createElement('option');
+        optionElement.value = option.value;
+        optionElement.textContent = option.label;
+        select.appendChild(optionElement);
+      }
+
+      select.value = `${values[entry.id] ?? entry.defaultValue}`;
+      select.addEventListener('change', (event) => {
+        this.singlePlayerOptionValues[entry.id] = event.currentTarget.value;
+      });
+
+      label.append(labelText, select);
+      this.singlePlayerSetupControls.appendChild(label);
+      this.singlePlayerOptionRefs.set(entry.id, { select, entry });
+    }
+  }
+
+  updateSinglePlayerSetupValues(values) {
+    this.singlePlayerOptionValues = {
+      ...this.singlePlayerOptionValues,
+      ...values
+    };
+
+    for (const [id, refs] of this.singlePlayerOptionRefs.entries()) {
+      const nextValue = this.singlePlayerOptionValues[id] ?? refs.entry.defaultValue;
+      refs.select.value = `${nextValue}`;
+      this.singlePlayerOptionValues[id] = nextValue;
+    }
   }
 
   showTestPanel({ schema, values, onApply, onResetArena, onResetDefaults, header = {} }) {
@@ -384,6 +503,36 @@ export class UI {
       labelElement.textContent = label;
       const valueElement = document.createElement('strong');
       valueElement.textContent = `${value}`;
+      item.append(labelElement, valueElement);
+      this.simulatorMetrics.appendChild(item);
+    }
+
+    if ((report.scenarios?.length ?? 0) <= 1) {
+      return;
+    }
+
+    const scenarioHeader = document.createElement('div');
+    scenarioHeader.className = 'simulator-metric simulator-metric--wide';
+    const scenarioHeaderLabel = document.createElement('span');
+    scenarioHeaderLabel.textContent = 'Scenario Search';
+    const scenarioHeaderValue = document.createElement('strong');
+    scenarioHeaderValue.textContent = `${report.scenarios.length} cases`;
+    scenarioHeader.append(scenarioHeaderLabel, scenarioHeaderValue);
+    this.simulatorMetrics.appendChild(scenarioHeader);
+
+    for (const scenarioReport of report.scenarios) {
+      const scenario = scenarioReport.scenario;
+      const scenarioSummary = scenarioReport.summary;
+      const item = document.createElement('div');
+      item.className = 'simulator-metric simulator-metric--wide';
+      const labelElement = document.createElement('span');
+      labelElement.textContent = scenario.label;
+      const valueElement = document.createElement('strong');
+      valueElement.textContent = [
+        `H ${Math.round(scenarioSummary.humanWinRate * 100)}%`,
+        `B ${Math.round(scenarioSummary.botWinRate * 100)}%`,
+        `${scenarioSummary.averageDurationSeconds}s`
+      ].join(' · ');
       item.append(labelElement, valueElement);
       this.simulatorMetrics.appendChild(item);
     }
@@ -702,7 +851,7 @@ export class UI {
     }
 
     const playerStatus = state.playerAlive ? 'player alive' : 'player dead';
-    const botLabel = state.totalBots === 1 ? 'bot' : 'bots';
+    const botLabel = state.entityLabel ?? (state.totalBots === 1 ? 'bot' : 'bots');
     const storageStatus = state.storedLocally ? 'saved locally' : 'not persisted';
     const pendingStatus = this.hasPendingTestChanges()
       ? `${this.countPendingTestChanges()} pending`
@@ -785,6 +934,7 @@ export class UI {
     drawPlaneVector(ctx, targetPoint, INDICATOR_TARGET_COLOR, radius, centerX, centerY);
     drawPlaneVector(ctx, currentPoint, INDICATOR_CURRENT_COLOR, radius, centerX, centerY);
     drawHeightGauge(ctx, targetPoint, currentPoint, width, height);
+    drawImpactGauge(ctx, stalkState.impactPower, width, centerX, centerY, radius);
   }
 
   createTestControlInput(entry, value) {

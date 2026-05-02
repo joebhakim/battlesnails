@@ -1,5 +1,18 @@
 import { BotController } from '../sim/BotController.js';
-import { BalanceBatchJob, DEFAULT_BALANCE_OPTIONS } from '../sim/BalanceRunner.js';
+import {
+  BALANCE_ENCOUNTER_SEARCH_OPTIONS,
+  BALANCE_STAGE_SEARCH_OPTIONS,
+  BalanceBatchJob,
+  DEFAULT_BALANCE_OPTIONS,
+  DEFAULT_BALANCE_SEARCH_CONFIG,
+  createBalanceScenarios,
+  normalizeBalanceSearchConfig
+} from '../sim/BalanceRunner.js';
+import {
+  ENCOUNTER_PRESETS,
+  createParticipantsForScenario,
+  createTuningConfigFromScenario
+} from '../sim/EncounterPresets.js';
 import { HumanLikeController } from '../sim/HumanLikeController.js';
 import { createVisionMemory, createVisionObservation } from '../sim/HumanVision.js';
 import { MatchSimulation, MATCH_TICK_DURATION } from '../sim/MatchSimulation.js';
@@ -13,12 +26,42 @@ import { SeededRandom, createRandomSeed, normalizeSeed } from '../sim/SeededRand
 
 export const SIMULATOR_TUNING_STORAGE_KEY = 'battlesnails:simulator-tuning-v4';
 
-function createParticipants() {
-  return [
-    { slot: 1, profile: 'human', connected: true },
-    { slot: 2, profile: 'bot', connected: true }
-  ];
-}
+const SIMULATOR_SEARCH_SCHEMA = Object.freeze([
+  Object.freeze({
+    id: 'stageSearch',
+    label: 'Stage Search',
+    section: 'Search',
+    defaultValue: DEFAULT_BALANCE_SEARCH_CONFIG.stageSearch,
+    structural: true,
+    kind: 'choice',
+    options: BALANCE_STAGE_SEARCH_OPTIONS
+  }),
+  Object.freeze({
+    id: 'encounterSearch',
+    label: 'Mode Search',
+    section: 'Search',
+    defaultValue: DEFAULT_BALANCE_SEARCH_CONFIG.encounterSearch,
+    structural: true,
+    kind: 'choice',
+    options: BALANCE_ENCOUNTER_SEARCH_OPTIONS
+  }),
+  Object.freeze({
+    id: 'encounterPreset',
+    label: 'Mode',
+    section: 'Search',
+    defaultValue: DEFAULT_BALANCE_SEARCH_CONFIG.encounterPreset,
+    structural: true,
+    kind: 'choice',
+    options: ENCOUNTER_PRESETS.map((preset) => ({
+      value: preset.value,
+      label: preset.label
+    })),
+    visibleWhen: {
+      id: 'encounterSearch',
+      equals: 'selected'
+    }
+  })
+]);
 
 function getSafeStorage(storageOverride) {
   if (storageOverride) {
@@ -36,33 +79,47 @@ function getSafeStorage(storageOverride) {
   }
 }
 
-function loadStoredTuningConfig(storage, fallbackConfig) {
+function normalizeSimulatorConfig(rawConfig = {}) {
+  return {
+    tuningConfig: normalizeDuelTuningConfig(rawConfig),
+    searchConfig: normalizeBalanceSearchConfig(rawConfig)
+  };
+}
+
+function getDefaultSimulatorConfig() {
+  return normalizeSimulatorConfig(getDefaultTuningConfig());
+}
+
+function loadStoredSimulatorConfig(storage, fallbackConfig) {
   if (fallbackConfig) {
-    return normalizeDuelTuningConfig(fallbackConfig);
+    return normalizeSimulatorConfig(fallbackConfig);
   }
 
   if (!storage?.getItem) {
-    return getDefaultTuningConfig();
+    return getDefaultSimulatorConfig();
   }
 
   try {
     const raw = storage.getItem(SIMULATOR_TUNING_STORAGE_KEY);
     if (!raw) {
-      return getDefaultTuningConfig();
+      return getDefaultSimulatorConfig();
     }
 
-    return normalizeDuelTuningConfig(JSON.parse(raw));
+    return normalizeSimulatorConfig(JSON.parse(raw));
   } catch {
-    return getDefaultTuningConfig();
+    return getDefaultSimulatorConfig();
   }
 }
 
-function saveStoredTuningConfig(storage, tuningConfig) {
+function saveStoredSimulatorConfig(storage, tuningConfig, searchConfig) {
   if (!storage?.setItem) {
     return;
   }
 
-  storage.setItem(SIMULATOR_TUNING_STORAGE_KEY, JSON.stringify(tuningConfig));
+  storage.setItem(SIMULATOR_TUNING_STORAGE_KEY, JSON.stringify({
+    ...tuningConfig,
+    ...searchConfig
+  }));
 }
 
 function clearStoredTuningConfig(storage) {
@@ -79,7 +136,9 @@ export class SimulatorSession {
     this.localSlot = 1;
     this.opponentSlot = 2;
     this.storage = getSafeStorage(options.storage);
-    this.tuningConfig = loadStoredTuningConfig(this.storage, options.tuning);
+    const simulatorConfig = loadStoredSimulatorConfig(this.storage, options.tuning);
+    this.tuningConfig = simulatorConfig.tuningConfig;
+    this.searchConfig = simulatorConfig.searchConfig;
     this.seed = normalizeSeed(options.seed ?? createRandomSeed());
     this.matchCount = Math.max(1, Math.floor(options.matchCount ?? DEFAULT_BALANCE_OPTIONS.matchCount));
     this.maxSeconds = options.maxSeconds ?? DEFAULT_BALANCE_OPTIONS.maxSeconds;
@@ -95,23 +154,40 @@ export class SimulatorSession {
     this.startBatch();
   }
 
-  createVisibleRuntime(seed) {
+  getDefaultVisibleScenario() {
+    return createBalanceScenarios(this.tuningConfig, this.searchConfig)[0];
+  }
+
+  createVisibleRuntime(seed, scenario = this.getDefaultVisibleScenario()) {
     const rng = new SeededRandom(seed);
-    const botRng = rng.fork('visible-bot');
+    const tuning = createTuningConfigFromScenario(scenario, this.tuningConfig);
+    const participants = createParticipantsForScenario(scenario);
+    const botControllerConfig = createBotControllerConfig(tuning);
+    const botControllers = new Map(participants
+      .filter((participant) => participant.profile === 'bot')
+      .map((participant) => {
+        const botRng = rng.fork(`visible-bot:${participant.slot}`);
+        return [
+          participant.slot,
+          new BotController({
+            ...botControllerConfig,
+            rng: () => botRng.next()
+          })
+        ];
+      }));
     const simulation = new MatchSimulation({
       mode: 'singleplayer',
-      players: createParticipants(),
-      tuning: this.tuningConfig
+      players: participants,
+      tuning
     });
 
     return {
+      scenario,
+      tuning,
       simulation,
       rng,
       humanController: new HumanLikeController({ rng: rng.fork('visible-human') }),
-      botController: new BotController({
-        ...createBotControllerConfig(this.tuningConfig),
-        rng: () => botRng.next()
-      }),
+      botControllers,
       visionMemory: createVisionMemory(),
       snapshot: simulation.getSnapshot()
     };
@@ -130,30 +206,39 @@ export class SimulatorSession {
       seed: this.seed,
       matchCount: this.matchCount,
       maxSeconds: this.maxSeconds,
-      tuning: this.tuningConfig
+      tuning: this.tuningConfig,
+      searchConfig: this.searchConfig
     });
     this.batchReport = this.batchJob.getReport();
     this.batchState = 'running';
   }
 
   setTuningConfig(nextConfig) {
-    this.tuningConfig = normalizeDuelTuningConfig(nextConfig);
-    saveStoredTuningConfig(this.storage, this.tuningConfig);
+    const simulatorConfig = normalizeSimulatorConfig(nextConfig);
+    this.tuningConfig = simulatorConfig.tuningConfig;
+    this.searchConfig = simulatorConfig.searchConfig;
+    saveStoredSimulatorConfig(this.storage, this.tuningConfig, this.searchConfig);
     this.restartVisualMatch(this.visibleSeed);
     this.startBatch();
     return { rebuilt: true };
   }
 
   resetToDefaults() {
-    this.tuningConfig = getDefaultTuningConfig();
+    const simulatorConfig = getDefaultSimulatorConfig();
+    this.tuningConfig = simulatorConfig.tuningConfig;
+    this.searchConfig = simulatorConfig.searchConfig;
     clearStoredTuningConfig(this.storage);
     this.restartVisualMatch(this.seed);
     this.startBatch();
   }
 
-  restartVisualMatch(seed = this.getRepresentativeMatchSeed() ?? this.seed) {
-    this.visibleSeed = normalizeSeed(seed);
-    this.visibleRuntime = this.createVisibleRuntime(this.visibleSeed);
+  restartVisualMatch(seed = null, scenario = null) {
+    const representative = this.getRepresentativeMatch();
+    const nextSeed = seed ?? representative?.seed ?? this.seed;
+    const nextScenario = scenario ?? representative?.scenario ?? this.getDefaultVisibleScenario();
+
+    this.visibleSeed = normalizeSeed(nextSeed);
+    this.visibleRuntime = this.createVisibleRuntime(this.visibleSeed, nextScenario);
     this.snapshot = this.visibleRuntime.snapshot;
     this.visibleAccumulator = 0;
   }
@@ -163,7 +248,8 @@ export class SimulatorSession {
       this.batchReport = this.batchJob.step(this.batchMatchesPerFrame);
       if (this.batchReport.finished) {
         this.batchState = 'complete';
-        this.restartVisualMatch(this.getRepresentativeMatchSeed() ?? this.seed);
+        const representative = this.getRepresentativeMatch();
+        this.restartVisualMatch(representative?.seed ?? this.seed, representative?.scenario);
       }
       return;
     }
@@ -191,10 +277,12 @@ export class SimulatorSession {
         this.localSlot,
         runtime.humanController.getInput(observation, MATCH_TICK_DURATION)
       );
-      runtime.simulation.setPlayerInput(
-        this.opponentSlot,
-        runtime.botController.getInput(runtime.simulation, this.opponentSlot, this.localSlot, MATCH_TICK_DURATION)
-      );
+      for (const [botSlot, botController] of runtime.botControllers.entries()) {
+        runtime.simulation.setPlayerInput(
+          botSlot,
+          botController.getInput(runtime.simulation, botSlot, this.localSlot, MATCH_TICK_DURATION)
+        );
+      }
       runtime.snapshot = runtime.simulation.step(MATCH_TICK_DURATION);
       this.visibleAccumulator -= MATCH_TICK_DURATION;
     }
@@ -204,7 +292,7 @@ export class SimulatorSession {
 
   leave() { }
 
-  getRepresentativeMatchSeed() {
+  getRepresentativeMatch() {
     const matches = this.batchReport?.matches ?? [];
     if (matches.length === 0) {
       return null;
@@ -215,7 +303,11 @@ export class SimulatorSession {
       Math.abs(match.durationSeconds - averageDuration) < Math.abs(best.durationSeconds - averageDuration)
         ? match
         : best
-    ), matches[0]).seed;
+    ), matches[0]);
+  }
+
+  getRepresentativeMatchSeed() {
+    return this.getRepresentativeMatch()?.seed ?? null;
   }
 
   getSnapshot() {
@@ -239,7 +331,29 @@ export class SimulatorSession {
   }
 
   getFocusTargetState() {
-    return this.snapshot?.players.find((player) => player.slot === this.opponentSlot) ?? null;
+    const localPlayer = this.getLocalPlayerState();
+    const enemies = this.getOtherPlayerStates();
+    const livingEnemies = enemies.filter((player) => player.connected && player.health > 0);
+    const pool = livingEnemies.length > 0 ? livingEnemies : enemies;
+    if (pool.length === 0) {
+      return null;
+    }
+
+    if (!localPlayer) {
+      return pool[0];
+    }
+
+    return pool.reduce((nearest, enemy) => {
+      if (!nearest) {
+        return enemy;
+      }
+
+      const nearestDistance = ((nearest.position.x - localPlayer.position.x) ** 2)
+        + ((nearest.position.z - localPlayer.position.z) ** 2);
+      const enemyDistance = ((enemy.position.x - localPlayer.position.x) ** 2)
+        + ((enemy.position.z - localPlayer.position.z) ** 2);
+      return enemyDistance < nearestDistance ? enemy : nearest;
+    }, null);
   }
 
   getHudLabels() {
@@ -287,10 +401,16 @@ export class SimulatorSession {
   }
 
   getTuningSchema() {
-    return DUEL_TUNING_SCHEMA;
+    return [
+      ...SIMULATOR_SEARCH_SCHEMA,
+      ...DUEL_TUNING_SCHEMA
+    ];
   }
 
   getTuningConfig() {
-    return { ...this.tuningConfig };
+    return {
+      ...this.searchConfig,
+      ...this.tuningConfig
+    };
   }
 }

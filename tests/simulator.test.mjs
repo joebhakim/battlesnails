@@ -8,6 +8,8 @@ import { MatchSimulation } from '../src/sim/MatchSimulation.js';
 import { SeededRandom } from '../src/sim/SeededRandom.js';
 import { SIMULATOR_TUNING_STORAGE_KEY, SimulatorSession } from '../src/game/SimulatorSession.js';
 import { DEFAULT_TUNING_CONFIG } from '../src/sim/Tuning.js';
+import { ENCOUNTER_PRESETS } from '../src/sim/EncounterPresets.js';
+import { TERRAIN_PRESET_OPTIONS } from '../src/world/Terrain.js';
 
 class MemoryStorage {
   constructor() {
@@ -249,6 +251,28 @@ test('balance batches are deterministic and JSON-safe', () => {
   assert.doesNotThrow(() => JSON.stringify(first));
 });
 
+test('balance batches can search stage and enemy mode grids', () => {
+  const report = runBalanceBatch({
+    seed: 'batch-grid-suite',
+    matchCount: 1,
+    maxSeconds: 0.1,
+    searchConfig: {
+      stageSearch: 'all',
+      encounterSearch: 'all'
+    }
+  });
+
+  assert.equal(report.scenarioCount, TERRAIN_PRESET_OPTIONS.length * ENCOUNTER_PRESETS.length);
+  assert.equal(report.completed, report.scenarioCount);
+  assert.equal(report.scenarios.length, report.scenarioCount);
+  assert(report.scenarios.some((entry) => entry.scenario.stagePreset === 'sphere_bowl'));
+  assert(report.scenarios.some((entry) => (
+    entry.scenario.encounterPreset === 'many_strong_comical' &&
+    entry.scenario.botCount > 1
+  )));
+  assert.doesNotThrow(() => JSON.stringify(report));
+});
+
 test('simulator session runs batches and exposes a visible match snapshot', () => {
   const session = new SimulatorSession({
     seed: 'session-suite',
@@ -282,6 +306,8 @@ test('simulator session exposes configurable duel tuning for stage and HPs', () 
 
   const result = session.setTuningConfig({
     ...session.getTuningConfig(),
+    stageSearch: 'current',
+    encounterSearch: 'selected',
     terrainPreset: 'sphere_bowl',
     playerMaxHealth: 19,
     botMaxHealth: 8,
@@ -291,6 +317,9 @@ test('simulator session exposes configurable duel tuning for stage and HPs', () 
   const snapshot = session.getSnapshot();
 
   assert(!schemaIds.includes('botCount'));
+  assert(schemaIds.includes('stageSearch'));
+  assert(schemaIds.includes('encounterSearch'));
+  assert(schemaIds.includes('encounterPreset'));
   assert.equal(result.rebuilt, true);
   assert.equal(snapshot.players.length, 2);
   assert.equal(snapshot.terrain.preset, 'sphere_bowl');
@@ -299,6 +328,49 @@ test('simulator session exposes configurable duel tuning for stage and HPs', () 
   assert.equal(session.getTuningConfig().botCount, DEFAULT_TUNING_CONFIG.botCount);
   assert.equal(state.batchState, 'running');
   assert.equal(state.tuningValues.terrainPreset, 'sphere_bowl');
+});
+
+test('simulator selected enemy modes rebuild the visible match population', () => {
+  const session = new SimulatorSession({
+    seed: 'sim-mode-suite',
+    matchCount: 1,
+    maxSeconds: 0.1,
+    storage: new MemoryStorage()
+  });
+
+  session.setTuningConfig({
+    ...session.getTuningConfig(),
+    encounterSearch: 'selected',
+    encounterPreset: 'many_strong_comical'
+  });
+
+  const snapshot = session.getSnapshot();
+
+  assert.equal(snapshot.players.length, 9);
+  assert.equal(snapshot.players.filter((player) => player.profileName === 'bot').length, 8);
+  assert.equal(session.getSimulatorPanelState().tuningValues.encounterPreset, 'many_strong_comical');
+});
+
+test('simulator session expands search progress for all stages and modes', () => {
+  const session = new SimulatorSession({
+    seed: 'sim-search-suite',
+    matchCount: 1,
+    maxSeconds: 0.1,
+    storage: new MemoryStorage()
+  });
+
+  session.setTuningConfig({
+    ...session.getTuningConfig(),
+    stageSearch: 'all',
+    encounterSearch: 'all'
+  });
+
+  const state = session.getSimulatorPanelState();
+  const scenarioCount = TERRAIN_PRESET_OPTIONS.length * ENCOUNTER_PRESETS.length;
+
+  assert.equal(state.progress.total, scenarioCount);
+  assert.equal(state.report.scenarioCount, scenarioCount);
+  assert.equal(state.report.scenarios.length, scenarioCount);
 });
 
 test('simulator tuning persists separately and resetToDefaults clears it', () => {
