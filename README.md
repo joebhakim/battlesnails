@@ -1,13 +1,14 @@
 # BattleSnails
 
-BattleSnails is a deliberately jarring third-person arena game built with Three.js and Vite. You control a blue snail, drive two floppy eye stalks with held mouse input, fight across a steep terrain surface, and leave permanent wet trails that turn the map into a speed trap.
+BattleSnails is a deliberately jarring third-person arena game built with Three.js and Vite. You control a blue snail, drive two floppy eye stalks with held mouse input, fight across configurable terrain, and leave permanent wet trails that turn the map into a speed trap.
 
-The project currently supports three modes:
-- `Single Player`: one human vs one bot
+The project currently supports four modes:
+- `Single Player`: one human vs one bot with persisted match knobs
 - `Test Mode`: a local tuning lab with staged sliders, configurable bot count, and an explicit apply step
+- `Simulator`: a visual balance harness that batch-runs a simulated humanlike player against the bot
 - `LAN Multiplayer`: two human players plus a crowd of NPC snails driven by the server
 
-The browser client handles rendering, input, HUD, music, and debug tools. The actual match rules live in a shared authoritative simulation used by both the local bot duel and the LAN server.
+The browser client handles rendering, input, HUD, music, simulator reports, and debug tools. The actual match rules live in a shared authoritative simulation used by local modes and the LAN server.
 
 ## Table Of Contents
 
@@ -44,7 +45,7 @@ The browser client handles rendering, input, HUD, music, and debug tools. The ac
    http://<host-ip>:5173
    ```
 
-5. Choose `Single Player`, `Test Mode`, or `LAN Multiplayer` from the start menu.
+5. Choose `Single Player`, `Test Mode`, `Simulator`, or `LAN Multiplayer` from the start menu.
 
 If you want to run the WebSocket server separately, use:
 
@@ -54,13 +55,14 @@ npm run mp:server
 
 ## Modes And Rules
 
-- `Single Player`: one human player vs one bot.
+- `Single Player`: one human player vs one bot, with staged tuning controls for stage shape, HP, movement, combat, stalk, and bot behavior.
 - `Test Mode`: one human player plus `0..40` local bots, staged tuning controls, local browser persistence for the last-used lab settings, and switchable terrain presets.
+- `Simulator`: an automated browser-visible balance runner. It runs an average-but-skilled simulated humanlike player against the existing bot, reports aggregate metrics, replays a representative match, and uses the same duel knobs for stage shape, HP, movement, combat, stalk, and bot behavior.
 - `LAN Multiplayer`: two human players plus `40` NPC snails by default.
-- Human players have `15 HP`.
-- Bots and NPCs have `2 HP`.
-- Each stalk can contribute `1` damage on a strong enough contact.
-- Damage is momentum-based, not button-window-based.
+- Human players have `600 HP` by default.
+- Bots and NPCs have `600 HP` by default.
+- Each stalk can deal damage independently on a strong enough contact.
+- Damage is momentum-based and scales with impact strength, not button-window-based.
 - Passive body contact does not deal damage.
 - Body overlap only pushes snails apart.
 - There is no level progression.
@@ -69,6 +71,7 @@ npm run mp:server
 ## Controls
 
 - `WASD` or arrow keys: move relative to the camera.
+- Outside lock-on, backward and pure side movement backpedal or strafe without rotating the body; forward-diagonal movement turns.
 - `Space`: jump.
 - Hold `Shift`: enable lock-on framing and target-facing behavior while held.
 - Click the arena: capture the mouse with pointer lock.
@@ -76,6 +79,7 @@ npm run mp:server
 - Hold `Left mouse` and move the mouse: innervate the left stalk.
 - Hold `Right mouse` and move the mouse: innervate the right stalk.
 - Hold both mouse buttons: drive both stalks with the same mouse motion.
+- While holding a stalk, scroll the mouse wheel to pull its target closer or push it farther forward.
 - Release a stalk: it stops actively steering and continues as an inertial rope under gravity, damping, and constraints.
 - `Music`: toggle the procedural soundtrack.
 - `Debug`: show or hide the text-only debug panel.
@@ -83,9 +87,9 @@ npm run mp:server
 On-screen HUD:
 - Top left: player health.
 - Top right: current enemy or opponent health.
-- Bottom left: left stalk dome widget showing target vector vs current vector.
-- Bottom right: right stalk dome widget showing target vector vs current vector.
-- Test mode: right-side tuning panel for terrain, movement, trail, combat, stalk, and bot-AI tuning.
+- Bottom left: left stalk top-down plane widget showing target point vs current point.
+- Bottom right: right stalk top-down plane widget showing target point vs current point.
+- Single Player, Test Mode, and Simulator: right-side tuning panel for terrain, HP, movement, trail, combat, stalk, and bot-AI tuning.
 
 ## Gameplay Flow
 
@@ -98,11 +102,20 @@ On-screen HUD:
 
 Single-player win condition:
 - The match ends when only one combatant is left alive.
+- Use the right-side panel to stage stage-shape, HP, movement, combat, stalk, and bot changes, then apply them explicitly.
+- The current single-player knob set is saved locally in the browser and remains separate from Test Mode settings.
 
 Test mode flow:
 - The match does not end automatically.
 - Use the right-side panel to stage slider changes, apply them explicitly, reset the arena, or reset back to defaults.
 - The current slider set is saved locally in the browser.
+
+Simulator flow:
+- The right-side panel runs a seeded batch of `100` matches by default.
+- Stage shape, HP, movement, combat, stalk, and bot settings can be staged and applied before a batch.
+- The simulated human uses geometric field of view, short noisy target memory, imperfect movement, and jerky slash-like stalk inputs.
+- After the batch completes, the arena shows a representative visual match.
+- The panel reports win rate, duration, damage, hit events, trail usage, remaining HP, and can copy the report as JSON.
 
 LAN multiplayer win condition:
 - The match ends when only one human player remains alive, even if NPCs are still alive.
@@ -111,8 +124,8 @@ LAN multiplayer win condition:
 
 ### Terrain
 
-- The shipped default arena is a steep hyperboloid bowl, not a flat plane.
-- Test Mode can swap the map to `hyperboloid_bowl`, `sphere_dome`, `sphere_bowl`, `cone`, `paraboloid_bowl`, `saddle`, or `ripple_bowl`.
+- The shipped default arena is a flat `plane`.
+- Single Player, Test Mode, and Simulator can swap the map to `plane`, `hyperboloid_bowl`, `sphere_dome`, `sphere_bowl`, `cone`, `paraboloid_bowl`, `saddle`, or `ripple_bowl`.
 - Terrain remains heightfield-based in every mode: the surface is always `y = f(x, z)`.
 - Snails stay upright while moving over the surface.
 - Traversing slopes is intentionally easy; the terrain affects position more than body tilt.
@@ -127,6 +140,10 @@ LAN multiplayer win condition:
 
 - Every snail has two separate rope-driven eye stalks.
 - Each stalk is simulated as a segmented chain with simple gravity and constraints.
+- Stalk aim is limited by a forward-tilted hemisphere, so neutral aim is almost straight ahead and high pitch can reach downward.
+- The default stalk control mode is `Top-Down Plane`: mouse X moves side-to-side and mouse Y moves forward/back on a body-local horizontal plane; scroll wheel raises or lowers that plane for held stalks.
+- The tuning panel can still switch stalk controls between top-down plane, the original yaw/pitch chart, absolute dome reticle, virtual trackball, tangent velocity, and spring dome reticle mappings.
+- Non-top-down modes still use scroll-wheel reach control. Held stalks also have outside-of-dome target sweep smoothing and a tunable turgidity value that blends from flaccid rope motion toward a stiff line to the target.
 - A held stalk is pulled toward the requested joystick direction.
 - An unheld stalk becomes inertial and keeps moving until gravity, damping, collisions, and constraints change it.
 - Any segment on a stalk can contribute to a hit; the strongest segment contact on that stalk is what matters for damage.
@@ -135,14 +152,14 @@ LAN multiplayer win condition:
 
 - Hits are evaluated from actual stalk movement, not from a canned attack animation or strike window.
 - The simulation combines stalk segment velocity with body movement to measure impact quality.
-- Each stalk can deal `1` damage if its strongest contact exceeds the threshold.
+- Each stalk can deal damage if its strongest contact exceeds the threshold; stronger hits can remove more HP.
 - Short invulnerability windows prevent repeated damage from one lingering collision.
 
 ### Wet Trails
 
 - Snails leave behind permanent wet trail cells wherever they move.
 - The trails are rendered as specular blue patches on the active terrain surface.
-- Any snail contacting a trail receives a `500%` movement increase.
+- Any snail contacting a trail receives `6x` movement speed, a `500%` increase.
 
 ### Death Burst
 
@@ -216,6 +233,7 @@ npm run probe:controls
 <summary>Main runtime and rendering</summary>
 
 - `src/game/Game.js`: top-level runtime that owns the scene, renderer, actors, input, UI, debug, and the active session.
+- `src/game/SinglePlayerSession.js`: local duel mode with persisted match knobs and one fixed bot opponent.
 - `src/game/TestSession.js`: local endless tuning lab with persisted slider state and dynamic bot count.
 - `src/game/Scene.js`: lights, arena mesh, and other scene setup.
 - `src/game/Renderer.js`: Three.js renderer setup with fallback profiles for weaker WebGL environments.
@@ -239,7 +257,7 @@ npm run probe:controls
 
 - `src/controls/MouseControls.js`: pointer lock, held-button stalk ownership, and relative mouse delta capture.
 - `src/controls/KeyboardControls.js`: movement axes, lock-on hold state, and jump requests.
-- `src/utils/UI.js`: menu, overlays, HUD bars, dome widgets, and music controls.
+- `src/utils/UI.js`: menu, overlays, HUD bars, stalk plane widgets, and music controls.
 - `src/sim/Tuning.js`: shared tuning schema, default values, normalization, and bot/simulation profile derivation.
 - `src/utils/Debug.js`: text-only debug panel and recent-event log.
 - `src/utils/CollisionDetection.js`: debug-facing impact inspection against rendered actors.
@@ -252,6 +270,9 @@ npm run probe:controls
 - `src/sim/MatchSimulation.js`: authoritative match rules, player state, movement, jump, rope control, collisions, wet trails, health, and victory.
 - `src/sim/StalkRope.js`: rope-chain helpers, target direction math, and impact evaluation.
 - `src/sim/BotController.js`: NPC decision loop that drives the same authoritative input model as players.
+- `src/sim/HumanLikeController.js`: deterministic simulated human input model for the balance harness.
+- `src/sim/HumanVision.js`: simple geometric FOV and short noisy memory for simulator perception.
+- `src/sim/BalanceRunner.js`: seeded batch runner and aggregate balance metrics.
 - `src/world/Terrain.js`: shared terrain-preset math and mesh generation used by both rendering and simulation.
 
 </details>
@@ -260,6 +281,7 @@ npm run probe:controls
 <summary>Sessions and networking</summary>
 
 - `src/game/SinglePlayerSession.js`: runs the shared simulation locally against one bot.
+- `src/game/SimulatorSession.js`: runs visual humanlike-vs-bot balance batches and exposes simulator reports.
 - `src/game/MultiplayerSession.js`: connects to the LAN server, sends local input, and renders authoritative snapshots.
 - `src/network/LocalMultiplayerClient.js`: minimal browser WebSocket client for the fixed LAN room.
 - `server/`: Node-side authoritative multiplayer runtime and minimal WebSocket server implementation.
@@ -306,7 +328,7 @@ The current debug mode is text-only. It does not add scene helpers, wireframes, 
 - Single-player and LAN multiplayer use the same movement, jump, stalk physics, trail, damage, and win logic.
 - The browser client is primarily a renderer and input source.
 - LAN clients do not author world state.
-- Terrain is part of authoritative snapshot state, even though only Test Mode currently exposes terrain switching in the UI.
+- Terrain is part of authoritative snapshot state, and Single Player, Test Mode, and Simulator expose terrain switching in the UI.
 
 ### Bot behavior
 
