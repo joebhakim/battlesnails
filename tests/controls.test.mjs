@@ -2,10 +2,19 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as THREE from 'three';
 
+import { KeyboardControls } from '../src/controls/KeyboardControls.js';
 import { PlayerSnail } from '../src/entities/PlayerSnail.js';
 import { NPCSnail } from '../src/entities/NPCSnail.js';
 import { CameraController } from '../src/game/CameraController.js';
-import { getTerrainHeight } from '../src/world/Terrain.js';
+import { Game } from '../src/game/Game.js';
+import { MatchSimulation, MATCH_TICK_DURATION } from '../src/sim/MatchSimulation.js';
+import {
+  DEFAULT_TUNING_CONFIG,
+  createBotControllerConfig,
+  createSimulationProfiles
+} from '../src/sim/Tuning.js';
+import { getLocalStalkDirection } from '../src/sim/StalkRope.js';
+import { getTerrainHeight, normalizeTerrainConfig } from '../src/world/Terrain.js';
 
 function createCombatInput({
   leftHeld = false,
@@ -23,12 +32,31 @@ function createCombatInput({
   };
 }
 
+function createKeyboardEvent(key) {
+  return {
+    key,
+    repeat: false,
+    defaultPrevented: false,
+    preventDefault() {
+      this.defaultPrevented = true;
+    }
+  };
+}
+
 function vectorToPojo(vector) {
   return {
     x: vector.x,
     y: vector.y,
     z: vector.z
   };
+}
+
+function getSimulationFacingVector(player) {
+  return new THREE.Vector3(Math.sin(player.rotationY), 0, Math.cos(player.rotationY));
+}
+
+function angleDelta(left, right) {
+  return Math.atan2(Math.sin(left - right), Math.cos(left - right));
 }
 
 function createMatchState(actor, overrides = {}) {
@@ -86,6 +114,32 @@ test('left held input updates only the left stalk target', () => {
   assert.equal(player.getStalk('right').targetYaw, neutralRightYaw);
 });
 
+test('game local input forwards mouse wheel reach delta', () => {
+  const game = Object.create(Game.prototype);
+  game.keyboardControls = {
+    getMovementAxes: () => ({ x: 0, z: 0 }),
+    consumeJumpRequest: () => false,
+    isLockOnHeld: () => true
+  };
+  game.cameraController = {
+    getMovementDirection: () => new THREE.Vector3(0, 0, 0)
+  };
+  game.mouseControls = {
+    consumeCombatInput: () => ({
+      lookX: 0,
+      lookY: 0,
+      reachDelta: 2.5,
+      leftHeld: true,
+      rightHeld: false
+    })
+  };
+
+  const input = game.buildLocalInput();
+
+  assert.equal(input.reachDelta, 2.5);
+  assert.equal(input.leftHeld, true);
+});
+
 test('right held input updates only the right stalk target', () => {
   const player = new PlayerSnail();
   const neutralLeftPitch = player.getStalk('left').targetPitch;
@@ -107,6 +161,20 @@ test('holding both buttons drives both stalk targets with the same mouse delta',
   assert(player.getStalk('left').targetYaw > leftBefore);
   assert(player.getStalk('right').targetYaw > rightBefore);
   assert.equal(player.getCombatMode(), 'both');
+});
+
+test('stalk limit hemisphere is tilted forward enough to reach down', () => {
+  const neutral = getLocalStalkDirection(
+    DEFAULT_TUNING_CONFIG.stalkNeutralYaw,
+    DEFAULT_TUNING_CONFIG.stalkNeutralPitch
+  );
+  const fullDown = getLocalStalkDirection(0, DEFAULT_TUNING_CONFIG.stalkPitchMax);
+
+  assert(neutral.z > 0.98);
+  assert(neutral.y > 0);
+  assert(neutral.y < 0.12);
+  assert(fullDown.y < -0.8);
+  assert(fullDown.z > 0.45);
 });
 
 test('released stalk keeps its target vector but continues moving inertially', () => {
@@ -184,6 +252,101 @@ test('lock-on camera basis keeps D moving to world-right when facing the enemy h
   assert(leftMove.x < 0);
 });
 
+test('keyboard S maps to backward movement intent', () => {
+  const controls = Object.create(KeyboardControls.prototype);
+  controls.keys = {
+    forward: false,
+    backward: false,
+    left: false,
+    right: false,
+    lockOn: false
+  };
+  controls.pendingJump = false;
+
+  const keydown = createKeyboardEvent('s');
+  controls.handleKeyChange(keydown, true);
+  assert.equal(keydown.defaultPrevented, true);
+  assert.deepEqual(controls.getMovementAxes(), { forward: -1, right: 0 });
+
+  const keyup = createKeyboardEvent('s');
+  controls.handleKeyChange(keyup, false);
+  assert.deepEqual(controls.getMovementAxes(), { forward: 0, right: 0 });
+});
+
+test('S-style movement backs away from the lock-on opponent', () => {
+  const camera = new THREE.PerspectiveCamera(70, 1, 0.1, 1000);
+  const controller = new CameraController(camera);
+  const playerPosition = new THREE.Vector3(0, 1, 6);
+  const enemyPosition = new THREE.Vector3(0, 1, -6);
+
+  controller.setLockOnEnabled(true);
+  controller.snapToTarget(playerPosition, enemyPosition, new THREE.Vector3(0, 0, -1));
+
+  const forwardMove = controller.getMovementDirection({ forward: 1, right: 0 });
+  const backwardMove = controller.getMovementDirection({ forward: -1, right: 0 });
+
+  assert(forwardMove.z < 0);
+  assert(backwardMove.z > 0);
+  assert(playerPosition.clone().add(backwardMove).distanceTo(enemyPosition) > playerPosition.distanceTo(enemyPosition));
+});
+
+test('shared simulation treats backward lock-on input as retreating from the opponent', () => {
+  const forwardSimulation = new MatchSimulation();
+  const backwardSimulation = new MatchSimulation();
+  const forwardPlayer = forwardSimulation.getPlayerState(1);
+  const forwardOpponent = forwardSimulation.getPlayerState(2);
+  const backwardPlayer = backwardSimulation.getPlayerState(1);
+  const backwardOpponent = backwardSimulation.getPlayerState(2);
+  const forwardStartDistance = forwardPlayer.position.distanceTo(forwardOpponent.position);
+  const backwardStartDistance = backwardPlayer.position.distanceTo(backwardOpponent.position);
+
+  forwardSimulation.setPlayerInput(1, { moveZ: -1, lockOnHeld: true });
+  backwardSimulation.setPlayerInput(1, { moveZ: 1, lockOnHeld: true });
+  forwardSimulation.step(MATCH_TICK_DURATION);
+  backwardSimulation.step(MATCH_TICK_DURATION);
+
+  assert(forwardSimulation.getPlayerState(1).position.distanceTo(forwardOpponent.position) < forwardStartDistance);
+  assert(backwardSimulation.getPlayerState(1).position.distanceTo(backwardOpponent.position) > backwardStartDistance);
+});
+
+test('free backward input backpedals without rotating into a camera spin', () => {
+  const simulation = new MatchSimulation();
+  const camera = new THREE.PerspectiveCamera(120, 1, 0.1, 1000);
+  const controller = new CameraController(camera);
+  const startPlayer = simulation.getPlayerState(1);
+  const opponent = simulation.getPlayerState(2);
+  const startRotation = startPlayer.rotationY;
+  const startPosition = startPlayer.position.clone();
+
+  controller.setLockOnEnabled(false);
+  controller.snapToTarget(
+    startPlayer.position.clone(),
+    opponent.position.clone(),
+    getSimulationFacingVector(startPlayer)
+  );
+
+  for (let index = 0; index < 60; index += 1) {
+    const player = simulation.getPlayerState(1);
+    const movement = controller.getMovementDirection({ forward: -1, right: 0 });
+    simulation.setPlayerInput(1, {
+      moveX: movement.x,
+      moveZ: movement.z,
+      lockOnHeld: false
+    });
+    simulation.step(MATCH_TICK_DURATION);
+    controller.update(
+      player.position.clone(),
+      opponent.position.clone(),
+      getSimulationFacingVector(player)
+    );
+  }
+
+  const endPlayer = simulation.getPlayerState(1);
+  assert(endPlayer.position.z > startPosition.z + 1);
+  assert(Math.abs(endPlayer.position.x - startPosition.x) < 0.25);
+  assert(Math.abs(angleDelta(endPlayer.rotationY, startRotation)) < 0.1);
+});
+
 test('player move can decouple movement direction from facing direction', () => {
   const player = new PlayerSnail();
   const moveDirection = new THREE.Vector3(1, 0, 0);
@@ -210,6 +373,29 @@ test('free movement speed is higher than lock-on movement speed', () => {
   assert(freePlayer.mesh.position.z < lockedPlayer.mesh.position.z);
 });
 
+test('presentation actor defaults track shared tuning defaults', () => {
+  const player = new PlayerSnail();
+  const botProfile = createSimulationProfiles(DEFAULT_TUNING_CONFIG).bot;
+  const botControllerConfig = createBotControllerConfig(DEFAULT_TUNING_CONFIG);
+  const npc = new NPCSnail();
+
+  assert.equal(player.freeMoveSpeed, DEFAULT_TUNING_CONFIG.freeMoveSpeed);
+  assert.equal(player.lockedMoveSpeed, DEFAULT_TUNING_CONFIG.lockedMoveSpeed);
+  assert.equal(player.jumpVelocity, DEFAULT_TUNING_CONFIG.jumpVelocity);
+  assert.equal(player.gravity, DEFAULT_TUNING_CONFIG.bodyGravity);
+  assert.equal(player.getImpactThreshold(), DEFAULT_TUNING_CONFIG.impactThreshold);
+  assert.equal(player.stalkLength, DEFAULT_TUNING_CONFIG.stalkTotalLength);
+
+  assert.equal(npc.speed, botProfile.freeMoveSpeed);
+  assert.equal(npc.turnSpeed, botProfile.turnSpeed);
+  assert.equal(npc.arenaRadius, botProfile.arenaRadius);
+  assert.equal(npc.getImpactThreshold(), botProfile.impactThreshold);
+  assert.equal(npc.stalkLength, botProfile.stalkTotalLength);
+  assert.equal(npc.attackRange, botControllerConfig.attackRange);
+  assert.equal(npc.preferredDistance, botControllerConfig.preferredDistance);
+  assert.equal(npc.attackCooldown, botControllerConfig.attackCooldown);
+});
+
 test('jump lifts the player above ground before settling back down', () => {
   const player = new PlayerSnail();
   const startHeight = player.mesh.position.y;
@@ -226,14 +412,15 @@ test('jump lifts the player above ground before settling back down', () => {
 });
 
 test('grounded player actor follows the bowl height when moving uphill', () => {
-  const player = new PlayerSnail();
+  const terrain = normalizeTerrainConfig({ preset: 'hyperboloid_bowl' });
+  const player = new PlayerSnail({ terrainConfig: terrain });
   const initialHeight = player.mesh.position.y;
 
   player.move(new THREE.Vector3(1, 0, 0), 0.5, new THREE.Vector3(1, 0, 0));
   player.update(1 / 60, createCombatInput());
 
   assert(player.mesh.position.y > initialHeight);
-  assert.equal(player.mesh.position.y, getTerrainHeight(player.mesh.position.x, player.mesh.position.z));
+  assert.equal(player.mesh.position.y, getTerrainHeight(player.mesh.position.x, player.mesh.position.z, terrain));
 });
 
 test('npc death burst scatters pieces, lasts about five seconds, then hides the corpse', () => {

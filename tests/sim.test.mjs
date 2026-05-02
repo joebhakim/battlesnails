@@ -4,6 +4,7 @@ import * as THREE from 'three';
 
 import { BotController } from '../src/sim/BotController.js';
 import { MatchSimulation, MATCH_TICK_DURATION } from '../src/sim/MatchSimulation.js';
+import { DEFAULT_TUNING_CONFIG } from '../src/sim/Tuning.js';
 import { buildStalkSegmentSamples, evaluateStalkImpact } from '../src/sim/StalkRope.js';
 import { getTerrainHeight } from '../src/world/Terrain.js';
 
@@ -65,7 +66,11 @@ test('jump raises the player above ground in the shared simulation', () => {
 });
 
 test('grounded players follow the bowl surface when moving across the arena', () => {
-  const simulation = new MatchSimulation();
+  const simulation = new MatchSimulation({
+    tuning: {
+      terrainPreset: 'hyperboloid_bowl'
+    }
+  });
   const player = simulation.getPlayerState(1);
   const initialHeight = player.position.y;
 
@@ -73,7 +78,7 @@ test('grounded players follow the bowl surface when moving across the arena', ()
   simulation.step(MATCH_TICK_DURATION);
 
   assert(player.position.y > initialHeight);
-  assert.equal(player.position.y, getTerrainHeight(player.position.x, player.position.z));
+  assert.equal(player.position.y, getTerrainHeight(player.position.x, player.position.z, simulation.getSnapshot().terrain));
 });
 
 test('body collisions separate overlapping snails', () => {
@@ -141,14 +146,165 @@ test('segment impact evaluation can use a non-terminal rope segment', () => {
 test('held left input changes only the left stalk target in the shared simulation', () => {
   const simulation = new MatchSimulation();
   const player = simulation.getPlayerState(1);
-  const leftBefore = player.stalks.left.targetYaw;
-  const rightBefore = player.stalks.right.targetYaw;
+  const leftBefore = player.stalks.left.targetVector.clone();
+  const rightBefore = player.stalks.right.targetVector.clone();
 
   simulation.setPlayerInput(1, { leftHeld: true, lookX: 12 });
   simulation.step(MATCH_TICK_DURATION);
 
-  assert(player.stalks.left.targetYaw < leftBefore);
-  assert.equal(player.stalks.right.targetYaw, rightBefore);
+  assert(player.stalks.left.targetVector.x < leftBefore.x);
+  assert(Math.abs(player.stalks.left.targetVector.y) < 0.0001);
+  assert(player.stalks.right.targetVector.distanceTo(rightBefore) < 0.0001);
+});
+
+test('all selectable stalk control modes produce bounded hemisphere targets', () => {
+  const modes = [
+    'top_down_plane',
+    'yaw_pitch',
+    'absolute_dome',
+    'trackball',
+    'tangent_velocity',
+    'spring_dome'
+  ];
+
+  for (const mode of modes) {
+    const simulation = new MatchSimulation({
+      tuning: {
+        stalkControlMode: mode
+      }
+    });
+    const player = simulation.getPlayerState(1);
+    const before = player.stalks.left.targetVector.clone();
+
+    stepMany(simulation, 4, { leftHeld: true, lookX: 16, lookY: -12 }, {});
+
+    const target = player.stalks.left.targetVector;
+    assert(target.distanceTo(before) > 0.001, mode);
+    assert(Math.abs(target.length() - 1) < 0.0001, mode);
+    assert.equal(Number.isFinite(target.x), true, mode);
+    assert.equal(Number.isFinite(target.y), true, mode);
+    assert.equal(Number.isFinite(target.z), true, mode);
+  }
+});
+
+test('top-down plane is the default flat stalk control mapping', () => {
+  assert.equal(DEFAULT_TUNING_CONFIG.stalkControlMode, 'top_down_plane');
+
+  const simulation = new MatchSimulation();
+  const player = simulation.getPlayerState(1);
+
+  assert.equal(player.profile.stalkControlMode, 'top_down_plane');
+  assert(Math.abs(player.stalks.left.targetVector.y) < 0.0001);
+
+  simulation.setPlayerInput(1, { leftHeld: true, lookY: -20 });
+  simulation.step(MATCH_TICK_DURATION);
+
+  const target = player.stalks.left.targetVector;
+  assert(Math.abs(target.y) < 0.0001);
+  assert(target.z > 0.99);
+  assert(player.stalks.left.targetReach > 1);
+});
+
+test('scroll moves the top-down control plane vertically', () => {
+  const simulation = new MatchSimulation();
+  const player = simulation.getPlayerState(1);
+  const before = player.stalks.left.targetVector.clone();
+
+  simulation.setPlayerInput(1, { leftHeld: true, reachDelta: 3 });
+  simulation.step(MATCH_TICK_DURATION);
+
+  const snapshotStalk = simulation.getSnapshot().players[0].stalks.left;
+  const leftPoint = player.stalks.left.targetVector.clone().multiplyScalar(player.stalks.left.targetReach);
+  const rightPoint = player.stalks.right.targetVector.clone().multiplyScalar(player.stalks.right.targetReach);
+  assert(player.stalks.left.targetVector.y > before.y);
+  assert(leftPoint.y > 0);
+  assert(Math.abs(leftPoint.x) < 0.0001);
+  assert(Math.abs(leftPoint.z - 1) < 0.0001);
+  assert.equal(rightPoint.y, 0);
+  assert.equal(typeof snapshotStalk.targetPoint.y, 'number');
+});
+
+test('scroll reach input still scales depth in yaw-pitch stalk mode', () => {
+  const simulation = new MatchSimulation({
+    tuning: {
+      stalkControlMode: 'yaw_pitch'
+    }
+  });
+  const player = simulation.getPlayerState(1);
+
+  simulation.setPlayerInput(1, { leftHeld: true, reachDelta: 3 });
+  simulation.step(MATCH_TICK_DURATION);
+
+  assert(player.stalks.left.targetReach > 1);
+  assert.equal(player.stalks.right.targetReach, 1);
+  assert.equal(typeof simulation.getSnapshot().players[0].stalks.left.targetReach, 'number');
+});
+
+test('top-down left-right thrash keeps the sweep on the forward ground plane', () => {
+  const simulation = new MatchSimulation();
+  const player = simulation.getPlayerState(1);
+
+  stepMany(simulation, 10, { leftHeld: true, lookX: 80 }, {});
+  const leftTarget = player.stalks.left.targetVector.clone();
+
+  let maxForward = -Infinity;
+  let maxAbsVertical = 0;
+  for (let index = 0; index < 12; index += 1) {
+    simulation.setPlayerInput(1, { leftHeld: true, lookX: index === 0 ? -160 : 0 });
+    simulation.step(MATCH_TICK_DURATION);
+    maxForward = Math.max(maxForward, player.stalks.left.appliedVector.z);
+    maxAbsVertical = Math.max(maxAbsVertical, Math.abs(player.stalks.left.appliedVector.y));
+  }
+
+  assert(player.stalks.left.targetVector.x > 0);
+  assert(leftTarget.x < 0);
+  assert(maxForward > 0.99);
+  assert(maxAbsVertical < 0.0001);
+});
+
+test('large left-right thrash sweeps around the outside of the dome', () => {
+  const simulation = new MatchSimulation({
+    tuning: {
+      stalkControlMode: 'yaw_pitch'
+    }
+  });
+  const player = simulation.getPlayerState(1);
+
+  stepMany(simulation, 10, { leftHeld: true, lookX: 80 }, {});
+  const leftTarget = player.stalks.left.targetVector.clone();
+
+  let maxForward = -Infinity;
+  for (let index = 0; index < 6; index += 1) {
+    simulation.setPlayerInput(1, { leftHeld: true, lookX: index === 0 ? -260 : 0 });
+    simulation.step(MATCH_TICK_DURATION);
+    maxForward = Math.max(maxForward, player.stalks.left.appliedVector.z);
+  }
+
+  assert(player.stalks.left.targetVector.x > 0);
+  assert(leftTarget.x < 0);
+  assert(maxForward > 0.95);
+});
+
+test('turgidity blends held stalks from flaccid rope toward stiff reach', () => {
+  const loose = new MatchSimulation({
+    tuning: {
+      stalkTurgidity: 0
+    }
+  });
+  const stiff = new MatchSimulation({
+    tuning: {
+      stalkTurgidity: 1
+    }
+  });
+
+  stepMany(loose, 3, { leftHeld: true, reachDelta: 4 }, {});
+  stepMany(stiff, 3, { leftHeld: true, reachDelta: 4 }, {});
+
+  const looseReach = loose.getPlayerState(1).stalks.left.currentReach;
+  const stiffReach = stiff.getPlayerState(1).stalks.left.currentReach;
+
+  assert(stiffReach > looseReach + 0.1);
+  assert(stiffReach > 1.2);
 });
 
 test('released stalks remain inertial while target vectors stay frozen', () => {

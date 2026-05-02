@@ -14,6 +14,7 @@ export const STALK_GRAVITY = 34;
 export const STALK_DAMPING = 0.96;
 export const STALK_ACTIVE_PULL = 10;
 export const STALK_IDLE_PULL = 4;
+export const STALK_HEMISPHERE_FORWARD_TILT = 1.42;
 
 const UP = new THREE.Vector3(0, 1, 0);
 const FORWARD = new THREE.Vector3(0, 0, 1);
@@ -27,7 +28,7 @@ function createWorldRoot(position, rotationY, rootOffset = STALK_BASE_OFFSET) {
 
 export function getLocalStalkDirection(yaw, pitch) {
   const localQuaternion = new THREE.Quaternion().setFromEuler(
-    new THREE.Euler(pitch, 0, -yaw, 'XYZ')
+    new THREE.Euler(pitch + STALK_HEMISPHERE_FORWARD_TILT, 0, -yaw, 'XYZ')
   );
 
   return LOCAL_UP.clone()
@@ -63,6 +64,38 @@ export function getStalkGoalWorldPosition(
   const rootWorld = createWorldRoot(position, rotationY, rootOffset);
   const goalDirection = getStalkGoalDirection(rotationY, yaw, pitch);
   return rootWorld.addScaledVector(goalDirection, totalLength);
+}
+
+export function getStalkGoalWorldPositionFromDirection(
+  position,
+  rotationY,
+  localDirection,
+  totalLength = STALK_TOTAL_LENGTH,
+  rootOffset = STALK_BASE_OFFSET
+) {
+  const rootWorld = createWorldRoot(position, rotationY, rootOffset);
+  const bodyQuaternion = new THREE.Quaternion().setFromAxisAngle(UP, rotationY);
+  const goalDirection = localDirection.clone()
+    .normalize()
+    .applyQuaternion(bodyQuaternion)
+    .normalize();
+  return rootWorld.addScaledVector(goalDirection, totalLength);
+}
+
+function applyTurgidityToNodes(nodes, previousNodes, rootWorld, goalWorld, turgidity) {
+  const alpha = Math.min(1, Math.max(0, turgidity));
+  if (alpha <= 0 || nodes.length <= 1) {
+    return;
+  }
+
+  for (let index = 0; index < nodes.length; index += 1) {
+    const target = rootWorld.clone().lerp(goalWorld, index / (nodes.length - 1));
+    nodes[index].lerp(target, alpha);
+    previousNodes[index]?.lerp(nodes[index], alpha);
+  }
+
+  nodes[0].copy(rootWorld);
+  previousNodes[0]?.copy(rootWorld);
 }
 
 export function createInitialStalkNodes(
@@ -124,7 +157,8 @@ export function simulateStalkRope({
   gravity = STALK_GRAVITY,
   damping = STALK_DAMPING,
   goalPull = STALK_ACTIVE_PULL,
-  constraintIterations = STALK_CONSTRAINT_ITERATIONS
+  constraintIterations = STALK_CONSTRAINT_ITERATIONS,
+  turgidity = 0
 }) {
   if (nodes.length === 0 || previousNodes.length === 0) {
     return;
@@ -173,6 +207,7 @@ export function simulateStalkRope({
   }
 
   nodes[0].copy(rootWorld);
+  applyTurgidityToNodes(nodes, previousNodes, rootWorld, goalWorld, turgidity);
 }
 
 export function buildStalkSegmentSamples(

@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import { createLocalMultiplayerServer } from '../server/createLocalMultiplayerServer.mjs';
+import { DEFAULT_TUNING_CONFIG } from '../src/sim/Tuning.js';
 
 class TestClient {
   constructor(url) {
@@ -82,10 +83,10 @@ test('multiplayer server auto-pairs two clients and starts a match with 40 NPCs 
   assert.equal(matchStartA.snapshot.players[0].stalks.left.nodes.length > 4, true);
   assert.equal(Array.isArray(matchStartA.snapshot.trailCells), true);
   assert.equal(typeof matchStartA.snapshot.trailCellSize, 'number');
-  assert.equal(matchStartA.snapshot.terrain?.preset, 'hyperboloid_bowl');
+  assert.equal(matchStartA.snapshot.terrain?.preset, 'plane');
   assert.equal(matchStartA.snapshot.players.filter((player) => player.profileName === 'bot').length, 40);
-  assert.equal(matchStartA.snapshot.players.find((player) => player.slot === 1)?.maxHealth, 15);
-  assert.equal(matchStartA.snapshot.players.find((player) => player.profileName === 'bot')?.maxHealth, 2);
+  assert.equal(matchStartA.snapshot.players.find((player) => player.slot === 1)?.maxHealth, DEFAULT_TUNING_CONFIG.playerMaxHealth);
+  assert.equal(matchStartA.snapshot.players.find((player) => player.profileName === 'bot')?.maxHealth, DEFAULT_TUNING_CONFIG.botMaxHealth);
 
   clientA.close();
   clientB.close();

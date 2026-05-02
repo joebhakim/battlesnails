@@ -14,6 +14,7 @@ import { AudioController } from '../audio/AudioController.js';
 import { SinglePlayerSession } from './SinglePlayerSession.js';
 import { MultiplayerSession } from './MultiplayerSession.js';
 import { TestSession } from './TestSession.js';
+import { SimulatorSession } from './SimulatorSession.js';
 import { TrailRenderer } from './TrailRenderer.js';
 import { DEFAULT_BOT_MAX_HEALTH, DEFAULT_MAX_HEALTH } from '../sim/MatchSimulation.js';
 import { DEFAULT_TERRAIN_CONFIG } from '../world/Terrain.js';
@@ -78,6 +79,7 @@ export class Game {
     this.ui.setupModeButtons({
       onSinglePlayer: this.startSinglePlayerSession.bind(this),
       onTestMode: this.startTestSession.bind(this),
+      onSimulator: this.startSimulatorSession.bind(this),
       onMultiplayer: this.startMultiplayerSession.bind(this)
     });
     this.ui.showStartMenu();
@@ -108,6 +110,7 @@ export class Game {
     this.currentSession?.leave();
     this.currentSession = null;
     this.ui?.hideTestPanel();
+    this.ui?.hideSimulatorPanel();
   }
 
   animate() {
@@ -148,10 +151,12 @@ export class Game {
     const localState = this.currentSession.getLocalPlayerState();
     const otherStates = this.currentSession.getOtherPlayerStates?.() ?? [];
     const focusState = this.currentSession.getFocusTargetState?.() ?? this.currentSession.getOpponentPlayerState();
-    this.applyViewState(localState, otherStates, focusState, localInput.lockOnHeld, delta);
+    const viewLockOnHeld = localState?.lockOn ?? localInput.lockOnHeld;
+    this.applyViewState(localState, otherStates, focusState, viewLockOnHeld, delta);
     this.updateHud(localState, focusState);
     this.ui.updateStalkIndicators(localState?.stalks ?? null);
     this.updateTestPanel();
+    this.updateSimulatorPanel();
     this.updateOverlay();
 
     if (this.debug) {
@@ -171,6 +176,7 @@ export class Game {
       lockOnHeld: this.keyboardControls.isLockOnHeld(),
       lookX: combatInput.lookX,
       lookY: combatInput.lookY,
+      reachDelta: combatInput.reachDelta,
       leftHeld: combatInput.leftHeld,
       rightHeld: combatInput.rightHeld
     };
@@ -329,6 +335,10 @@ export class Game {
     this.enterSession(new MultiplayerSession());
   }
 
+  startSimulatorSession() {
+    this.enterSession(new SimulatorSession());
+  }
+
   enterSession(session) {
     this.currentSession?.leave();
     this.currentSession = session;
@@ -355,6 +365,7 @@ export class Game {
     this.ui.clearMessage();
     this.ui.showStartMenu();
     this.ui.hideTestPanel();
+    this.ui.hideSimulatorPanel();
     this.ui.setHealthLabels('Player', 'Enemy');
     this.ui.updatePlayerHealth(DEFAULT_MAX_HEALTH, DEFAULT_MAX_HEALTH);
     this.ui.updateEnemyHealth(DEFAULT_BOT_MAX_HEALTH, DEFAULT_BOT_MAX_HEALTH);
@@ -375,11 +386,22 @@ export class Game {
   }
 
   refreshInstructions() {
-    this.ui.setInstructions(
-      this.currentSession?.mode === 'test'
-        ? 'WASD move · Space jump · Hold LMB left stalk · Hold RMB right stalk · Hold both for both · Hold Shift lock-on · Tune sliders on the right · Click arena'
-        : 'WASD move · Space jump · Hold LMB left stalk · Hold RMB right stalk · Hold both for both · Hold Shift lock-on · Click arena'
-    );
+    if (this.currentSession?.mode === 'test') {
+      this.ui.setInstructions('WASD move · Space jump · Hold LMB/RMB stalks · Mouse Y reach · Wheel plane height · Hold both for both · Hold Shift lock-on · Tune sliders on the right · Click arena');
+      return;
+    }
+
+    if (this.currentSession?.mode === 'singleplayer') {
+      this.ui.setInstructions('WASD move · Space jump · Hold LMB/RMB stalks · Mouse Y reach · Wheel plane height · Hold both for both · Hold Shift lock-on · Tune match knobs on the right · Click arena');
+      return;
+    }
+
+    if (this.currentSession?.mode === 'simulator') {
+      this.ui.setInstructions('Simulator is driving both snails · Run batches on the right · Watch the representative match');
+      return;
+    }
+
+    this.ui.setInstructions('WASD move · Space jump · Hold LMB/RMB stalks · Mouse Y reach · Wheel plane height · Hold both for both · Hold Shift lock-on · Click arena');
   }
 
   resetViewActors() {
@@ -426,6 +448,31 @@ export class Game {
     this.renderer.updateSize();
   }
 
+  isTuningSession() {
+    return Boolean(
+      this.currentSession?.getTuningSchema &&
+      this.currentSession?.getTuningConfig &&
+      this.currentSession?.setTuningConfig &&
+      this.currentSession?.getTestPanelState
+    );
+  }
+
+  getTuningPanelHeader() {
+    if (this.currentSession?.mode === 'singleplayer') {
+      return {
+        kicker: 'Single Player',
+        title: 'Match Knobs',
+        copy: 'Stage shape, HP, movement, combat, stalk, and bot settings are saved for solo play.'
+      };
+    }
+
+    return {
+      kicker: 'Test Mode',
+      title: 'Snail Lab',
+      copy: 'Stage changes, apply them explicitly, and keep tuning locally on this browser.'
+    };
+  }
+
   syncSessionUiChrome() {
     const localState = this.currentSession?.getLocalPlayerState?.() ?? null;
     const focusState = this.currentSession?.getFocusTargetState?.() ?? this.currentSession?.getOpponentPlayerState?.() ?? null;
@@ -437,30 +484,113 @@ export class Game {
       focusState?.maxHealth ?? this.currentSession?.getDefaultOpponentMaxHealth?.() ?? DEFAULT_BOT_MAX_HEALTH
     );
 
-    if (this.currentSession?.mode === 'test') {
+    if (this.isTuningSession()) {
       this.ui.showTestPanel({
         schema: this.currentSession.getTuningSchema(),
         values: this.currentSession.getTuningConfig(),
         onApply: this.handleTestTuningApply.bind(this),
         onResetArena: this.handleTestResetArena.bind(this),
-        onResetDefaults: this.handleTestResetDefaults.bind(this)
+        onResetDefaults: this.handleTestResetDefaults.bind(this),
+        header: this.getTuningPanelHeader()
       });
       this.ui.updateTestPanelStatus(this.currentSession.getTestPanelState());
     } else {
       this.ui.hideTestPanel();
     }
+
+    if (this.currentSession?.mode === 'simulator') {
+      this.ui.showSimulatorPanel({
+        state: this.currentSession.getSimulatorPanelState(),
+        schema: this.currentSession.getTuningSchema(),
+        values: this.currentSession.getTuningConfig(),
+        onRunBatch: this.handleSimulatorRunBatch.bind(this),
+        onRestartVisual: this.handleSimulatorRestartVisual.bind(this),
+        onCopyJson: this.handleSimulatorCopyJson.bind(this),
+        onApplyTuning: this.handleSimulatorTuningApply.bind(this),
+        onResetTuningDefaults: this.handleSimulatorTuningResetDefaults.bind(this)
+      });
+    } else {
+      this.ui.hideSimulatorPanel();
+    }
   }
 
   updateTestPanel() {
-    if (this.currentSession?.mode !== 'test') {
+    if (!this.isTuningSession()) {
       return;
     }
 
     this.ui.updateTestPanelStatus(this.currentSession.getTestPanelState());
   }
 
+  updateSimulatorPanel() {
+    if (this.currentSession?.mode !== 'simulator') {
+      return;
+    }
+
+    this.ui.updateSimulatorPanelStatus(this.currentSession.getSimulatorPanelState());
+  }
+
+  handleSimulatorRunBatch(config) {
+    if (this.currentSession?.mode !== 'simulator') {
+      return;
+    }
+
+    this.currentSession.startBatch(config);
+    this.ui.updateSimulatorPanelStatus(this.currentSession.getSimulatorPanelState(), { forceInputs: true });
+  }
+
+  handleSimulatorRestartVisual() {
+    if (this.currentSession?.mode !== 'simulator') {
+      return;
+    }
+
+    this.currentSession.restartVisualMatch();
+    this.currentOverlayKey = null;
+    this.hasRenderedMatchState = false;
+    this.resetViewActors();
+    this.syncSessionUiChrome();
+  }
+
+  async handleSimulatorCopyJson() {
+    if (this.currentSession?.mode !== 'simulator') {
+      return;
+    }
+
+    const reportJson = this.currentSession.getSimulatorReportJson();
+    try {
+      await navigator.clipboard.writeText(reportJson);
+      this.ui.setSimulatorCopyStatus('Copied JSON');
+    } catch {
+      this.ui.setSimulatorCopyStatus('Copy unavailable');
+    }
+  }
+
+  handleSimulatorTuningApply(nextConfig) {
+    if (this.currentSession?.mode !== 'simulator') {
+      return;
+    }
+
+    this.currentSession.setTuningConfig(nextConfig);
+    this.currentOverlayKey = null;
+    this.hasRenderedMatchState = false;
+    this.resetViewActors();
+    this.syncSessionUiChrome();
+  }
+
+  handleSimulatorTuningResetDefaults() {
+    if (this.currentSession?.mode !== 'simulator') {
+      return;
+    }
+
+    this.currentSession.resetToDefaults();
+    this.currentOverlayKey = null;
+    this.hasRenderedMatchState = false;
+    this.resetViewActors();
+    this.syncSessionUiChrome();
+  }
+
   handleTestTuningApply(nextConfig) {
-    if (this.currentSession?.mode !== 'test') {
+    if (!this.isTuningSession()) {
       return;
     }
 
@@ -475,7 +605,7 @@ export class Game {
   }
 
   handleTestResetArena() {
-    if (this.currentSession?.mode !== 'test') {
+    if (!this.isTuningSession() || !this.currentSession.resetArena) {
       return;
     }
 
@@ -487,7 +617,7 @@ export class Game {
   }
 
   handleTestResetDefaults() {
-    if (this.currentSession?.mode !== 'test') {
+    if (!this.isTuningSession() || !this.currentSession.resetToDefaults) {
       return;
     }
 

@@ -21,6 +21,7 @@ function createBufferedInput() {
     lockOnHeld: false,
     lookX: 0,
     lookY: 0,
+    reachDelta: 0,
     leftHeld: false,
     rightHeld: false
   };
@@ -33,7 +34,7 @@ export function createLocalMultiplayerServer(options = {}) {
   const npcCount = clampNpcCount(options.npcCount ?? process.env.NPC_COUNT ?? DEFAULT_MULTIPLAYER_NPC_COUNT);
   const { server, onConnection } = createMinimalWebSocketServer((request, response) => {
     response.writeHead(200, { 'content-type': 'application/json' });
-    response.end(JSON.stringify({ ok: true, mode: 'localhost-multiplayer' }));
+    response.end(JSON.stringify({ ok: true, mode: 'lan-multiplayer' }));
   });
 
   const room = {
@@ -229,7 +230,7 @@ export function createLocalMultiplayerServer(options = {}) {
             connection.sendJson({
               type: 'error',
               code: 'room_full',
-              message: 'The localhost room is already full.'
+              message: 'The LAN room is already full.'
             });
             connection.close(1000, 'Room full');
             return;
@@ -261,6 +262,7 @@ export function createLocalMultiplayerServer(options = {}) {
           buffered.rightHeld = input.rightHeld;
           buffered.lookX += input.lookX;
           buffered.lookY += input.lookY;
+          buffered.reachDelta += input.reachDelta;
           buffered.jumpPressed = buffered.jumpPressed || input.jumpPressed;
           room.inputs.set(assignedSlot, buffered);
           break;

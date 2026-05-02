@@ -6,6 +6,7 @@ export class MouseControls {
     this.pointerLocked = false;
     this.lookDeltaX = 0;
     this.lookDeltaY = 0;
+    this.reachDelta = 0;
     this.lastClientX = null;
     this.lastClientY = null;
 
@@ -73,6 +74,7 @@ export class MouseControls {
       this.secondaryHeld = false;
       this.lookDeltaX = 0;
       this.lookDeltaY = 0;
+      this.reachDelta = 0;
       this.lastClientX = null;
       this.lastClientY = null;
     });
@@ -80,6 +82,15 @@ export class MouseControls {
     this.container.addEventListener('contextmenu', (event) => {
       event.preventDefault();
     });
+
+    window.addEventListener('wheel', (event) => {
+      if (!this.primaryHeld && !this.secondaryHeld) {
+        return;
+      }
+
+      event.preventDefault();
+      this.reachDelta += -event.deltaY / 100;
+    }, { passive: false });
   }
 
   consumeCombatInput() {
@@ -89,11 +100,13 @@ export class MouseControls {
       rightHeld: this.secondaryHeld,
       lookX: this.lookDeltaX,
       lookY: this.lookDeltaY,
+      reachDelta: this.reachDelta,
       pointerLocked: this.pointerLocked
     };
 
     this.lookDeltaX = 0;
     this.lookDeltaY = 0;
+    this.reachDelta = 0;
     return input;
   }
 

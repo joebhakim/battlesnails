@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 
 import {
+  STALK_HEMISPHERE_FORWARD_TILT,
   STALK_ROOT_OFFSETS,
   buildStalkSegmentSamples,
   cloneNodeArray,
@@ -8,7 +9,7 @@ import {
   evaluateStalkImpact,
   getBodyLocalDirection,
   getLocalStalkDirection,
-  getStalkGoalWorldPosition,
+  getStalkGoalWorldPositionFromDirection,
   getStalkRootWorldPosition,
   getTipWorldPosition,
   serializeNodes,
@@ -62,9 +63,23 @@ const DEFAULT_INPUT = Object.freeze({
   lockOnHeld: false,
   lookX: 0,
   lookY: 0,
+  reachDelta: 0,
   leftHeld: false,
   rightHeld: false
 });
+
+const STALK_SCREEN_X = new THREE.Vector3(1, 0, 0);
+const STALK_SCREEN_Y = new THREE.Vector3(0, 1, 0);
+const STALK_HEMISPHERE_POLE = new THREE.Vector3(
+  0,
+  Math.cos(STALK_HEMISPHERE_FORWARD_TILT),
+  Math.sin(STALK_HEMISPHERE_FORWARD_TILT)
+);
+const SPRING_DOME_RESPONSE = 18;
+const HEMISPHERE_EPSILON = 0.001;
+const STALK_OUTSIDE_ARC_SPEED_SCALE = 0.12;
+const TOP_DOWN_MIN_FORWARD = 0.02;
+const TOP_DOWN_EPSILON = 0.000001;
 
 function angleDifference(current, target) {
   return Math.atan2(Math.sin(target - current), Math.cos(target - current));
@@ -74,12 +89,308 @@ function lerpAngle(current, target, alpha) {
   return current + angleDifference(current, target) * alpha;
 }
 
+function getFacingDirection(rotationY) {
+  return new THREE.Vector3(Math.sin(rotationY), 0, Math.cos(rotationY));
+}
+
 function clamp(value, min, max) {
   return Math.min(max, Math.max(min, value));
 }
 
 function cloneVector(vector) {
   return { x: vector.x, y: vector.y, z: vector.z };
+}
+
+function clampReticleToDisk(x, y, radius = 0.995) {
+  const length = Math.hypot(x, y);
+  if (length <= radius) {
+    return { x, y };
+  }
+
+  return {
+    x: (x / length) * radius,
+    y: (y / length) * radius
+  };
+}
+
+function clampLocalStalkDirection(vector) {
+  const normalized = vector.clone();
+  if (normalized.lengthSq() < 0.000001) {
+    normalized.copy(STALK_HEMISPHERE_POLE);
+  } else {
+    normalized.normalize();
+  }
+
+  const poleDistance = normalized.dot(STALK_HEMISPHERE_POLE);
+  if (poleDistance < HEMISPHERE_EPSILON) {
+    normalized.addScaledVector(STALK_HEMISPHERE_POLE, HEMISPHERE_EPSILON - poleDistance);
+    normalized.normalize();
+  }
+
+  return normalized;
+}
+
+function createDirectionFromReticle(reticleX, reticleY) {
+  const reticle = clampReticleToDisk(reticleX, reticleY);
+  const z = Math.sqrt(Math.max(0, 1 - (reticle.x * reticle.x) - (reticle.y * reticle.y)));
+  const direction = clampLocalStalkDirection(new THREE.Vector3(reticle.x, reticle.y, z));
+  return {
+    direction,
+    reticleX: direction.x,
+    reticleY: direction.y
+  };
+}
+
+function getYawPitchFromLocalDirection(direction, profile) {
+  const localDirection = clampLocalStalkDirection(direction);
+  return {
+    yaw: clamp(
+      Math.asin(clamp(localDirection.x, -1, 1)),
+      -profile.stalkYawLimit,
+      profile.stalkYawLimit
+    ),
+    pitch: clamp(
+      Math.atan2(localDirection.z, localDirection.y) - STALK_HEMISPHERE_FORWARD_TILT,
+      profile.stalkPitchMin,
+      profile.stalkPitchMax
+    )
+  };
+}
+
+function setStalkDesiredDirection(stalk, direction, profile = null) {
+  stalk.desiredVector.copy(clampLocalStalkDirection(direction));
+  stalk.targetVector.copy(stalk.desiredVector);
+  stalk.reticleX = stalk.desiredVector.x;
+  stalk.reticleY = stalk.desiredVector.y;
+
+  if (profile) {
+    const angles = getYawPitchFromLocalDirection(stalk.desiredVector, profile);
+    stalk.desiredYaw = angles.yaw;
+    stalk.desiredPitch = angles.pitch;
+  }
+}
+
+function setStalkDesiredReach(stalk, nextReach, profile) {
+  stalk.desiredReach = clamp(
+    nextReach,
+    profile.stalkReachMin,
+    profile.stalkReachMax
+  );
+  stalk.targetReach = stalk.desiredReach;
+}
+
+function applyReachInput(stalk, input, profile) {
+  if (input.reachDelta === 0) {
+    return;
+  }
+
+  setStalkDesiredReach(
+    stalk,
+    stalk.desiredReach + input.reachDelta * profile.stalkReachSensitivity,
+    profile
+  );
+}
+
+function syncYawPitchFromDesiredDirection(stalk, profile) {
+  const angles = getYawPitchFromLocalDirection(stalk.desiredVector, profile);
+  stalk.desiredYaw = angles.yaw;
+  stalk.desiredPitch = angles.pitch;
+  stalk.appliedYaw = stalk.desiredYaw;
+  stalk.appliedPitch = stalk.desiredPitch;
+}
+
+function syncYawPitchFromAppliedDirection(stalk, profile) {
+  const angles = getYawPitchFromLocalDirection(stalk.appliedVector, profile);
+  stalk.appliedYaw = angles.yaw;
+  stalk.appliedPitch = angles.pitch;
+}
+
+function getTopDownPlanePoint(stalk) {
+  return {
+    x: Number.isFinite(stalk.planeX) ? stalk.planeX : stalk.desiredVector.x * stalk.desiredReach,
+    y: Number.isFinite(stalk.planeY) ? stalk.planeY : stalk.desiredVector.y * stalk.desiredReach,
+    z: Number.isFinite(stalk.planeZ)
+      ? stalk.planeZ
+      : Math.max(TOP_DOWN_MIN_FORWARD, stalk.desiredVector.z * stalk.desiredReach)
+  };
+}
+
+function setTopDownPlaneTarget(stalk, planeX, planeY, planeZ, profile) {
+  let nextX = Number.isFinite(planeX) ? planeX : 0;
+  let nextY = Number.isFinite(planeY) ? planeY : 0;
+  let nextZ = Number.isFinite(planeZ) ? planeZ : 1;
+
+  nextZ = Math.max(TOP_DOWN_MIN_FORWARD, nextZ);
+
+  const maxReach = Math.max(profile.stalkReachMin, profile.stalkReachMax);
+  const maxVertical = Math.sqrt(Math.max(0, (maxReach * maxReach) - (TOP_DOWN_MIN_FORWARD * TOP_DOWN_MIN_FORWARD)));
+  nextY = clamp(nextY, -maxVertical, maxVertical);
+
+  let planarRadius = Math.hypot(nextX, nextZ);
+  if (planarRadius < TOP_DOWN_EPSILON) {
+    nextX = 0;
+    nextZ = TOP_DOWN_MIN_FORWARD;
+    planarRadius = nextZ;
+  }
+
+  const maxPlanarRadius = Math.sqrt(Math.max(0, (maxReach * maxReach) - (nextY * nextY)));
+  if (planarRadius > maxPlanarRadius) {
+    const scale = maxPlanarRadius / planarRadius;
+    nextX *= scale;
+    nextZ *= scale;
+    planarRadius = maxPlanarRadius;
+  }
+
+  if (nextZ < TOP_DOWN_MIN_FORWARD) {
+    nextZ = TOP_DOWN_MIN_FORWARD;
+    const maxSideReach = Math.sqrt(Math.max(0, (maxPlanarRadius * maxPlanarRadius) - (nextZ * nextZ)));
+    nextX = clamp(nextX, -maxSideReach, maxSideReach);
+    planarRadius = Math.hypot(nextX, nextZ);
+  }
+
+  const minReach = Math.max(TOP_DOWN_MIN_FORWARD, profile.stalkReachMin);
+  const minPlanarRadius = Math.sqrt(Math.max(0, (minReach * minReach) - (nextY * nextY)));
+  if (planarRadius < minPlanarRadius) {
+    if (planarRadius < TOP_DOWN_EPSILON) {
+      nextX = 0;
+      nextZ = minPlanarRadius;
+    } else {
+      const scale = minPlanarRadius / planarRadius;
+      nextX *= scale;
+      nextZ *= scale;
+    }
+    planarRadius = Math.hypot(nextX, nextZ);
+  }
+
+  const radius = Math.max(TOP_DOWN_EPSILON, Math.hypot(nextX, nextY, nextZ));
+  stalk.planeX = nextX;
+  stalk.planeY = nextY;
+  stalk.planeZ = nextZ;
+  setStalkDesiredReach(stalk, radius, profile);
+  setStalkDesiredDirection(
+    stalk,
+    new THREE.Vector3(nextX / radius, nextY / radius, nextZ / radius),
+    profile
+  );
+}
+
+function applyTopDownPlaneControl(stalk, input, profile) {
+  const current = getTopDownPlanePoint(stalk);
+
+  setTopDownPlaneTarget(
+    stalk,
+    current.x + (-input.lookX * profile.stalkYawSensitivity),
+    current.y + (input.reachDelta * profile.stalkReachSensitivity),
+    current.z + (-input.lookY * profile.stalkPitchSensitivity),
+    profile
+  );
+}
+
+function rotateVectorToward(current, target, maxAngle) {
+  const from = clampLocalStalkDirection(current);
+  const to = clampLocalStalkDirection(target);
+  const dot = clamp(from.dot(to), -1, 1);
+  const angle = Math.acos(dot);
+  if (angle <= maxAngle || angle < 0.000001) {
+    return to;
+  }
+
+  const axis = from.clone().cross(to);
+  if (axis.lengthSq() < 0.000001) {
+    return clampLocalStalkDirection(from.lerp(to, maxAngle / angle));
+  }
+
+  return clampLocalStalkDirection(from.applyAxisAngle(axis.normalize(), maxAngle));
+}
+
+function advanceAppliedStalkTarget(stalk, profile, delta) {
+  const responseSpeed = profile.stalkTargetApproachSpeed / Math.max(0.0001, profile.stalkMass);
+  const responseAlpha = Math.min(1, responseSpeed * delta);
+  const maxArcAngle = Math.max(0.001, responseSpeed * delta * STALK_OUTSIDE_ARC_SPEED_SCALE);
+
+  stalk.appliedReach += (stalk.desiredReach - stalk.appliedReach) * responseAlpha;
+  stalk.appliedReach = clamp(stalk.appliedReach, profile.stalkReachMin, profile.stalkReachMax);
+
+  if (profile.stalkControlMode === 'yaw_pitch') {
+    stalk.appliedYaw = lerpAngle(stalk.appliedYaw, stalk.desiredYaw, responseAlpha);
+    stalk.appliedPitch += (stalk.desiredPitch - stalk.appliedPitch) * responseAlpha;
+  }
+
+  stalk.appliedVector.copy(rotateVectorToward(stalk.appliedVector, stalk.desiredVector, maxArcAngle));
+  syncYawPitchFromAppliedDirection(stalk, profile);
+}
+
+function applyAbsoluteDomeControl(stalk, input, profile) {
+  const reticle = createDirectionFromReticle(
+    stalk.reticleX + (-input.lookX * profile.stalkYawSensitivity),
+    stalk.reticleY + (input.lookY * profile.stalkPitchSensitivity)
+  );
+
+  stalk.reticleX = reticle.reticleX;
+  stalk.reticleY = reticle.reticleY;
+  setStalkDesiredDirection(stalk, reticle.direction, profile);
+}
+
+function applySpringDomeControl(stalk, input, profile, delta) {
+  const reticle = createDirectionFromReticle(
+    stalk.reticleX + (-input.lookX * profile.stalkYawSensitivity),
+    stalk.reticleY + (input.lookY * profile.stalkPitchSensitivity)
+  );
+  const responseAlpha = Math.min(1, SPRING_DOME_RESPONSE * delta);
+
+  stalk.reticleX = reticle.reticleX;
+  stalk.reticleY = reticle.reticleY;
+  setStalkDesiredDirection(
+    stalk,
+    stalk.desiredVector.clone().lerp(reticle.direction, responseAlpha),
+    profile
+  );
+}
+
+function applyTrackballControl(stalk, input, profile) {
+  const horizontal = -input.lookX * profile.stalkYawSensitivity;
+  const vertical = input.lookY * profile.stalkPitchSensitivity;
+  const angle = Math.hypot(horizontal, vertical);
+  if (angle === 0) {
+    return;
+  }
+
+  const axis = new THREE.Vector3(-vertical, horizontal, 0);
+  if (axis.lengthSq() < 0.000001) {
+    return;
+  }
+
+  setStalkDesiredDirection(
+    stalk,
+    stalk.desiredVector.clone().applyAxisAngle(axis.normalize(), angle),
+    profile
+  );
+}
+
+function applyTangentVelocityControl(stalk, input, profile) {
+  const horizontal = -input.lookX * profile.stalkYawSensitivity;
+  const vertical = input.lookY * profile.stalkPitchSensitivity;
+  if (horizontal === 0 && vertical === 0) {
+    return;
+  }
+
+  const current = stalk.desiredVector.clone().normalize();
+  const tangentX = STALK_SCREEN_X.clone().addScaledVector(current, -STALK_SCREEN_X.dot(current));
+  const tangentY = STALK_SCREEN_Y.clone().addScaledVector(current, -STALK_SCREEN_Y.dot(current));
+  if (tangentX.lengthSq() > 0.000001) {
+    tangentX.normalize();
+  }
+  if (tangentY.lengthSq() > 0.000001) {
+    tangentY.normalize();
+  }
+
+  setStalkDesiredDirection(
+    stalk,
+    current
+      .addScaledVector(tangentX, horizontal)
+      .addScaledVector(tangentY, vertical),
+    profile
+  );
 }
 
 function computeImpactDamage(attacker, stalk, impactPower) {
@@ -130,6 +441,7 @@ function normalizeInput(rawInput = {}) {
     lockOnHeld: Boolean(rawInput.lockOnHeld),
     lookX: Number.isFinite(rawInput.lookX) ? rawInput.lookX : 0,
     lookY: Number.isFinite(rawInput.lookY) ? rawInput.lookY : 0,
+    reachDelta: Number.isFinite(rawInput.reachDelta) ? rawInput.reachDelta : 0,
     leftHeld: Boolean(rawInput.leftHeld),
     rightHeld: Boolean(rawInput.rightHeld)
   };
@@ -165,15 +477,32 @@ function getControlMode(input) {
 
 function createStalkState(profile, position, rotationY, side) {
   const rootOffset = STALK_ROOT_OFFSETS[side] ?? STALK_ROOT_OFFSETS.right;
-  const targetYaw = profile.stalkNeutralYaw;
-  const targetPitch = profile.stalkNeutralPitch;
+  let targetYaw = profile.stalkNeutralYaw;
+  let targetPitch = profile.stalkNeutralPitch;
+  let targetVector = getLocalStalkDirection(targetYaw, targetPitch);
+  let targetReach = 1;
+  let planeX = targetVector.x * targetReach;
+  let planeY = targetVector.y * targetReach;
+  let planeZ = Math.max(TOP_DOWN_MIN_FORWARD, targetVector.z * targetReach);
+
+  if (profile.stalkControlMode === 'top_down_plane') {
+    targetVector = new THREE.Vector3(0, 0, 1);
+    targetReach = 1;
+    planeX = 0;
+    planeY = 0;
+    planeZ = targetReach;
+
+    const angles = getYawPitchFromLocalDirection(targetVector, profile);
+    targetYaw = angles.yaw;
+    targetPitch = angles.pitch;
+  }
+
   const rootWorld = getStalkRootWorldPosition(position, rotationY, rootOffset);
-  const goalWorld = getStalkGoalWorldPosition(
+  const goalWorld = getStalkGoalWorldPositionFromDirection(
     position,
     rotationY,
-    targetYaw,
-    targetPitch,
-    profile.stalkTotalLength,
+    targetVector,
+    profile.stalkTotalLength * targetReach,
     rootOffset
   );
   const nodes = createInitialStalkNodes(rootWorld, goalWorld, profile.stalkSegmentCount);
@@ -193,8 +522,19 @@ function createStalkState(profile, position, rotationY, side) {
     appliedPitch: targetPitch,
     targetYaw: targetYaw,
     targetPitch: targetPitch,
-    targetVector: getLocalStalkDirection(targetYaw, targetPitch),
-    currentVector: getLocalStalkDirection(targetYaw, targetPitch),
+    desiredVector: targetVector.clone(),
+    appliedVector: targetVector.clone(),
+    targetVector: targetVector.clone(),
+    currentVector: targetVector.clone(),
+    reticleX: targetVector.x,
+    reticleY: targetVector.y,
+    planeX,
+    planeY,
+    planeZ,
+    desiredReach: targetReach,
+    appliedReach: targetReach,
+    targetReach,
+    currentReach: targetReach,
     impactPower: 0,
     held: false,
     segmentRadius: profile.stalkSegmentRadius
@@ -224,6 +564,9 @@ function updateCompositeTipState(player, delta) {
 }
 
 function serializeStalk(stalk) {
+  const targetPoint = stalk.targetVector.clone().multiplyScalar(stalk.targetReach);
+  const currentPoint = stalk.currentVector.clone().multiplyScalar(stalk.currentReach);
+
   return {
     nodes: serializeNodes(stalk.nodes),
     segmentRadius: stalk.segmentRadius,
@@ -231,6 +574,10 @@ function serializeStalk(stalk) {
     impactPower: stalk.impactPower,
     targetVector: cloneVector(stalk.targetVector),
     currentVector: cloneVector(stalk.currentVector),
+    targetReach: stalk.targetReach,
+    currentReach: stalk.currentReach,
+    targetPoint: cloneVector(targetPoint),
+    currentPoint: cloneVector(currentPoint),
     targetYaw: stalk.desiredYaw,
     targetPitch: stalk.desiredPitch
   };
@@ -292,7 +639,31 @@ function applyProfileToPlayer(player, profile) {
     stalk.appliedPitch = clamp(stalk.appliedPitch, profile.stalkPitchMin, profile.stalkPitchMax);
     stalk.targetYaw = stalk.desiredYaw;
     stalk.targetPitch = stalk.desiredPitch;
-    stalk.targetVector.copy(getLocalStalkDirection(stalk.desiredYaw, stalk.desiredPitch));
+    stalk.desiredVector.copy(clampLocalStalkDirection(stalk.desiredVector));
+    stalk.appliedVector.copy(clampLocalStalkDirection(stalk.appliedVector));
+    stalk.desiredReach = clamp(stalk.desiredReach ?? 1, profile.stalkReachMin, profile.stalkReachMax);
+    stalk.appliedReach = clamp(stalk.appliedReach ?? stalk.desiredReach, profile.stalkReachMin, profile.stalkReachMax);
+    stalk.targetReach = stalk.desiredReach;
+    if (profile.stalkControlMode === 'top_down_plane') {
+      const planePoint = getTopDownPlanePoint(stalk);
+      setTopDownPlaneTarget(
+        stalk,
+        planePoint.x,
+        planePoint.y,
+        planePoint.z,
+        profile
+      );
+      stalk.appliedVector.copy(stalk.desiredVector);
+      stalk.appliedReach = stalk.desiredReach;
+      syncYawPitchFromAppliedDirection(stalk, profile);
+    } else if (profile.stalkControlMode === 'yaw_pitch') {
+      syncYawPitchFromDesiredDirection(stalk, profile);
+      stalk.desiredVector.copy(getLocalStalkDirection(stalk.desiredYaw, stalk.desiredPitch));
+      stalk.appliedVector.copy(getLocalStalkDirection(stalk.appliedYaw, stalk.appliedPitch));
+    }
+    stalk.targetVector.copy(stalk.desiredVector);
+    stalk.reticleX = stalk.desiredVector.x;
+    stalk.reticleY = stalk.desiredVector.y;
   }
 }
 
@@ -630,7 +1001,11 @@ export class MatchSimulation {
     if (normalizedInput.lockOnHeld && target) {
       facingDirection = target.position.clone().sub(player.position);
     } else if (movement.lengthSq() > 0) {
-      facingDirection = movement;
+      const movementDirection = movement.clone().normalize();
+      const forwardAlignment = getFacingDirection(player.rotationY).dot(movementDirection);
+      if (forwardAlignment > 0.2) {
+        facingDirection = movement;
+      }
     }
 
     if (facingDirection && facingDirection.lengthSq() > 0) {
@@ -643,10 +1018,10 @@ export class MatchSimulation {
       }
     }
 
-    this.applyCombatInput(player, normalizedInput);
+    this.applyCombatInput(player, normalizedInput, delta);
   }
 
-  applyCombatInput(player, input) {
+  applyCombatInput(player, input, delta) {
     player.controlMode = getControlMode(input);
     player.controlIntensity = (input.leftHeld || input.rightHeld)
       ? Math.min(1, Math.hypot(input.lookX, input.lookY) / STALK_LOOK_INTENSITY_SCALE)
@@ -659,43 +1034,70 @@ export class MatchSimulation {
       if (!held) {
         stalk.targetYaw = stalk.desiredYaw;
         stalk.targetPitch = stalk.desiredPitch;
-        stalk.targetVector.copy(getLocalStalkDirection(stalk.desiredYaw, stalk.desiredPitch));
+        stalk.targetVector.copy(stalk.desiredVector);
+        stalk.targetReach = stalk.desiredReach;
         continue;
       }
 
-      stalk.desiredYaw = clamp(
-        stalk.desiredYaw + (-input.lookX * player.profile.stalkYawSensitivity),
-        -player.profile.stalkYawLimit,
-        player.profile.stalkYawLimit
-      );
-      stalk.desiredPitch = clamp(
-        stalk.desiredPitch + (-input.lookY * player.profile.stalkPitchSensitivity),
-        player.profile.stalkPitchMin,
-        player.profile.stalkPitchMax
-      );
+      switch (player.profile.stalkControlMode) {
+        case 'top_down_plane':
+          applyTopDownPlaneControl(stalk, input, player.profile);
+          break;
+        case 'absolute_dome':
+          applyReachInput(stalk, input, player.profile);
+          applyAbsoluteDomeControl(stalk, input, player.profile);
+          break;
+        case 'trackball':
+          applyReachInput(stalk, input, player.profile);
+          applyTrackballControl(stalk, input, player.profile);
+          break;
+        case 'tangent_velocity':
+          applyReachInput(stalk, input, player.profile);
+          applyTangentVelocityControl(stalk, input, player.profile);
+          break;
+        case 'spring_dome':
+          applyReachInput(stalk, input, player.profile);
+          applySpringDomeControl(stalk, input, player.profile, delta);
+          break;
+        case 'yaw_pitch':
+        default:
+          applyReachInput(stalk, input, player.profile);
+          stalk.desiredYaw = clamp(
+            stalk.desiredYaw + (-input.lookX * player.profile.stalkYawSensitivity),
+            -player.profile.stalkYawLimit,
+            player.profile.stalkYawLimit
+          );
+          stalk.desiredPitch = clamp(
+            stalk.desiredPitch + (-input.lookY * player.profile.stalkPitchSensitivity),
+            player.profile.stalkPitchMin,
+            player.profile.stalkPitchMax
+          );
+          setStalkDesiredDirection(
+            stalk,
+            getLocalStalkDirection(stalk.desiredYaw, stalk.desiredPitch),
+            player.profile
+          );
+          break;
+      }
+
       stalk.targetYaw = stalk.desiredYaw;
       stalk.targetPitch = stalk.desiredPitch;
-      stalk.targetVector.copy(getLocalStalkDirection(stalk.desiredYaw, stalk.desiredPitch));
+      stalk.targetVector.copy(stalk.desiredVector);
+      stalk.targetReach = stalk.desiredReach;
     }
   }
 
   updateStalkRopes(player, delta) {
     for (const [, stalk] of getStalkEntries(player)) {
       if (stalk.held) {
-        const responseAlpha = Math.min(
-          1,
-          (player.profile.stalkTargetApproachSpeed / Math.max(0.0001, player.profile.stalkMass)) * delta
-        );
-        stalk.appliedYaw = lerpAngle(stalk.appliedYaw, stalk.desiredYaw, responseAlpha);
-        stalk.appliedPitch += (stalk.desiredPitch - stalk.appliedPitch) * responseAlpha;
+        advanceAppliedStalkTarget(stalk, player.profile, delta);
       }
 
-      const goalWorld = getStalkGoalWorldPosition(
+      const goalWorld = getStalkGoalWorldPositionFromDirection(
         player.position,
         player.rotationY,
-        stalk.appliedYaw,
-        stalk.appliedPitch,
-        player.profile.stalkTotalLength,
+        stalk.appliedVector,
+        player.profile.stalkTotalLength * stalk.appliedReach,
         stalk.rootOffset
       );
       const rootWorld = getStalkRootWorldPosition(player.position, player.rotationY, stalk.rootOffset);
@@ -710,7 +1112,8 @@ export class MatchSimulation {
         gravity: player.profile.stalkGravity,
         damping: player.profile.stalkDamping,
         goalPull: stalk.held ? player.profile.stalkDrivePull : player.profile.stalkIdlePull,
-        constraintIterations: player.profile.stalkConstraintIterations
+        constraintIterations: player.profile.stalkConstraintIterations,
+        turgidity: stalk.held ? player.profile.stalkTurgidity : 0
       });
 
       stalk.tipPosition.copy(getTipWorldPosition(stalk.nodes));
@@ -721,6 +1124,10 @@ export class MatchSimulation {
       }
 
       const rootToTip = stalk.tipPosition.clone().sub(rootWorld);
+      stalk.currentReach = Math.min(
+        player.profile.stalkReachMax,
+        rootToTip.length() / Math.max(0.0001, player.profile.stalkTotalLength)
+      );
       if (rootToTip.lengthSq() === 0) {
         stalk.currentVector.copy(stalk.targetVector);
       } else {
