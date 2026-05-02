@@ -1,10 +1,8 @@
-import { BotController } from '../sim/BotController.js';
 import { MatchSimulation, MATCH_TICK_DURATION, normalizePlayerInput } from '../sim/MatchSimulation.js';
 import {
   DEFAULT_TUNING_CONFIG,
   TUNING_SCHEMA,
   TUNING_STORAGE_KEY,
-  createBotControllerConfig,
   getDefaultTuningConfig,
   hasStructuralTuningChanges,
   normalizeTuningConfig
@@ -13,6 +11,10 @@ import {
 function getSafeStorage(storageOverride) {
   if (storageOverride) {
     return storageOverride;
+  }
+
+  if (typeof window === 'undefined') {
+    return null;
   }
 
   try {
@@ -62,8 +64,6 @@ export class TestSession {
     this.accumulator = 0;
     this.storage = getSafeStorage(options.storage);
     this.tuningConfig = loadStoredTuningConfig(this.storage);
-    this.botControllers = new Map();
-    this.botControllerConfig = createBotControllerConfig(this.tuningConfig);
     this.snapshot = null;
     this.lastRebuilt = false;
 
@@ -86,16 +86,6 @@ export class TestSession {
       tuning: this.tuningConfig
     });
 
-    this.botControllers.clear();
-    this.botControllerConfig = createBotControllerConfig(this.tuningConfig);
-    for (const participant of participants) {
-      if (participant.profile !== 'bot') {
-        continue;
-      }
-
-      this.botControllers.set(participant.slot, new BotController(this.botControllerConfig));
-    }
-
     this.snapshot = this.simulation.getSnapshot();
     this.accumulator = 0;
     this.lastRebuilt = true;
@@ -108,7 +98,8 @@ export class TestSession {
     const dividedInput = normalizePlayerInput({
       ...localInput,
       lookX: localInput.lookX / steps,
-      lookY: localInput.lookY / steps
+      lookY: localInput.lookY / steps,
+      reachDelta: localInput.reachDelta / steps
     });
 
     for (let index = 0; index < steps && this.accumulator >= MATCH_TICK_DURATION; index += 1) {
@@ -116,13 +107,6 @@ export class TestSession {
         ...dividedInput,
         jumpPressed: index === 0 && localInput.jumpPressed
       });
-
-      for (const [botSlot, controller] of this.botControllers.entries()) {
-        this.simulation.setPlayerInput(
-          botSlot,
-          controller.getInput(this.simulation, botSlot, this.localSlot, MATCH_TICK_DURATION)
-        );
-      }
 
       this.snapshot = this.simulation.step(MATCH_TICK_DURATION);
       this.accumulator -= MATCH_TICK_DURATION;
@@ -163,10 +147,6 @@ export class TestSession {
     }
 
     this.simulation.setTuningConfig(this.tuningConfig);
-    this.botControllerConfig = createBotControllerConfig(this.tuningConfig);
-    for (const controller of this.botControllers.values()) {
-      controller.setConfig(this.botControllerConfig);
-    }
     this.snapshot = this.simulation.getSnapshot();
     this.lastRebuilt = false;
     return { rebuilt: false };

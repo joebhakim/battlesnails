@@ -1,37 +1,54 @@
 import * as THREE from 'three';
 
 import { SnailActor } from './SnailActor.js';
+import {
+  DEFAULT_TUNING_CONFIG,
+  createBotControllerConfig,
+  createSimulationProfiles
+} from '../sim/Tuning.js';
+
+const DEFAULT_BOT_PROFILE = createSimulationProfiles(DEFAULT_TUNING_CONFIG).bot;
+const DEFAULT_BOT_CONTROLLER_CONFIG = createBotControllerConfig(DEFAULT_TUNING_CONFIG);
 
 export class NPCSnail extends SnailActor {
   constructor(overrides = {}) {
     super({
       position: new THREE.Vector3(0, 1, -6),
-      speed: 4.2,
-      turnSpeed: 8,
-      arenaRadius: 18,
+      speed: DEFAULT_BOT_PROFILE.freeMoveSpeed,
+      turnSpeed: DEFAULT_BOT_PROFILE.turnSpeed,
+      arenaRadius: DEFAULT_BOT_PROFILE.arenaRadius,
+      bodyRadius: DEFAULT_BOT_PROFILE.bodyRadius,
+      maxHealth: DEFAULT_BOT_PROFILE.maxHealth,
       bodyColor: 0xff6347,
       shellColor: 0xa0522d,
       shellDamagedColor: 0xae6a3a,
       shellCriticalColor: 0xba4f2a,
-      stalkNeutralPitch: 0.12,
-      stalkYawLimit: 1.05,
-      stalkPitchMin: -0.55,
-      stalkPitchMax: 0.7,
-      stalkResponse: 11,
-      stalkRecover: 7,
-      impactThreshold: 5.1,
-      impactMomentumFactor: 0.28,
+      stalkNeutralYaw: DEFAULT_BOT_PROFILE.stalkNeutralYaw,
+      stalkNeutralPitch: DEFAULT_BOT_PROFILE.stalkNeutralPitch,
+      stalkYawLimit: DEFAULT_BOT_PROFILE.stalkYawLimit,
+      stalkPitchMin: DEFAULT_BOT_PROFILE.stalkPitchMin,
+      stalkPitchMax: DEFAULT_BOT_PROFILE.stalkPitchMax,
+      stalkSegmentCount: DEFAULT_BOT_PROFILE.stalkSegmentCount,
+      stalkLength: DEFAULT_BOT_PROFILE.stalkTotalLength,
+      stalkSegmentRadius: DEFAULT_BOT_PROFILE.stalkSegmentRadius,
+      stalkGravity: DEFAULT_BOT_PROFILE.stalkGravity,
+      stalkDamping: DEFAULT_BOT_PROFILE.stalkDamping,
+      stalkConstraintIterations: DEFAULT_BOT_PROFILE.stalkConstraintIterations,
+      stalkDrivePull: DEFAULT_BOT_PROFILE.stalkDrivePull,
+      stalkIdlePull: DEFAULT_BOT_PROFILE.stalkIdlePull,
+      impactThreshold: DEFAULT_BOT_PROFILE.impactThreshold,
+      impactMomentumFactor: DEFAULT_BOT_PROFILE.impactMomentumFactor,
       deathBurstEnabled: true,
       ...overrides
     });
 
-    this.attackRange = 6.1;
-    this.preferredDistance = 5.2;
-    this.attackCooldown = 0.9;
+    this.attackRange = DEFAULT_BOT_CONTROLLER_CONFIG.attackRange;
+    this.preferredDistance = DEFAULT_BOT_CONTROLLER_CONFIG.preferredDistance;
+    this.attackCooldown = DEFAULT_BOT_CONTROLLER_CONFIG.attackCooldown;
     this.attackCooldownRemaining = 0.5;
-    this.windupDuration = 0.4;
-    this.strikeDuration = 0.28;
-    this.recoverDuration = 0.4;
+    this.windupDuration = DEFAULT_BOT_CONTROLLER_CONFIG.windupDuration;
+    this.strikeDuration = DEFAULT_BOT_CONTROLLER_CONFIG.strikeDuration;
+    this.recoverDuration = DEFAULT_BOT_CONTROLLER_CONFIG.recoverDuration;
     this.state = 'approach';
     this.stateTimer = 0;
     this.attackSide = 1;

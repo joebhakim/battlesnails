@@ -4,6 +4,7 @@ export const TERRAIN_VISUAL_SIZE = 60;
 export const TERRAIN_VISUAL_SEGMENTS = 120;
 
 export const TERRAIN_PRESET_OPTIONS = Object.freeze([
+  { value: 'plane', label: 'Plane' },
   { value: 'hyperboloid_bowl', label: 'Hyperboloid Bowl' },
   { value: 'sphere_dome', label: 'Sphere Dome' },
   { value: 'sphere_bowl', label: 'Sphere Bowl' },
@@ -16,8 +17,8 @@ export const TERRAIN_PRESET_OPTIONS = Object.freeze([
 const VALID_TERRAIN_PRESETS = new Set(TERRAIN_PRESET_OPTIONS.map((entry) => entry.value));
 
 export const DEFAULT_TERRAIN_CONFIG = Object.freeze({
-  preset: 'hyperboloid_bowl',
-  centerHeight: 0.2,
+  preset: 'plane',
+  centerHeight: 0,
   horizontalScale: 10,
   verticalScale: 12,
   rippleAmplitude: 2,
@@ -86,6 +87,8 @@ export function getTerrainHeight(x, z, terrainConfig = DEFAULT_TERRAIN_CONFIG) {
   const clampedSphereRadius = getClampedSphereRadius(normalizedRadius);
 
   switch (terrainConfig.preset) {
+    case 'plane':
+      return centerHeight;
     case 'sphere_dome':
       return centerHeight + (
         verticalScale * Math.sqrt(Math.max(0, 1 - (clampedSphereRadius * clampedSphereRadius)))

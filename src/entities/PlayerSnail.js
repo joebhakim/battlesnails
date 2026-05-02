@@ -1,39 +1,48 @@
 import * as THREE from 'three';
 
 import { SnailActor } from './SnailActor.js';
-import { DEFAULT_JUMP_VELOCITY } from '../sim/MatchSimulation.js';
+import { DEFAULT_TUNING_CONFIG } from '../sim/Tuning.js';
 
 export class PlayerSnail extends SnailActor {
   constructor(overrides = {}) {
     super({
       position: new THREE.Vector3(0, 1, 6),
-      speed: 7.5,
-      turnSpeed: 12,
+      speed: DEFAULT_TUNING_CONFIG.freeMoveSpeed,
+      turnSpeed: DEFAULT_TUNING_CONFIG.turnSpeed,
       arenaRadius: 22,
+      bodyRadius: DEFAULT_TUNING_CONFIG.bodyRadius,
+      maxHealth: DEFAULT_TUNING_CONFIG.playerMaxHealth,
       bodyColor: 0x1e90ff,
       shellColor: 0x8b4513,
       shellDamagedColor: 0x9d5c22,
       shellCriticalColor: 0xa63a1f,
-      stalkNeutralPitch: 0.08,
-      stalkYawLimit: 1.3,
-      stalkPitchMin: -1.2,
-      stalkPitchMax: 1.15,
-      stalkResponse: 15,
-      stalkRecover: 9,
-      impactThreshold: 5.4,
-      impactMomentumFactor: 0.35,
+      stalkNeutralYaw: DEFAULT_TUNING_CONFIG.stalkNeutralYaw,
+      stalkNeutralPitch: DEFAULT_TUNING_CONFIG.stalkNeutralPitch,
+      stalkYawLimit: DEFAULT_TUNING_CONFIG.stalkYawLimit,
+      stalkPitchMin: DEFAULT_TUNING_CONFIG.stalkPitchMin,
+      stalkPitchMax: DEFAULT_TUNING_CONFIG.stalkPitchMax,
+      stalkSegmentCount: DEFAULT_TUNING_CONFIG.stalkSegmentCount,
+      stalkLength: DEFAULT_TUNING_CONFIG.stalkTotalLength,
+      stalkSegmentRadius: DEFAULT_TUNING_CONFIG.stalkSegmentRadius,
+      stalkGravity: DEFAULT_TUNING_CONFIG.stalkGravity,
+      stalkDamping: DEFAULT_TUNING_CONFIG.stalkDamping,
+      stalkConstraintIterations: DEFAULT_TUNING_CONFIG.stalkConstraintIterations,
+      stalkDrivePull: DEFAULT_TUNING_CONFIG.stalkDrivePull,
+      stalkIdlePull: DEFAULT_TUNING_CONFIG.stalkIdlePull,
+      impactThreshold: DEFAULT_TUNING_CONFIG.impactThreshold,
+      impactMomentumFactor: DEFAULT_TUNING_CONFIG.impactMomentumFactor,
       ...overrides
     });
 
-    this.lockedMoveSpeed = 7.5;
-    this.freeMoveSpeed = 10;
+    this.lockedMoveSpeed = DEFAULT_TUNING_CONFIG.lockedMoveSpeed;
+    this.freeMoveSpeed = DEFAULT_TUNING_CONFIG.freeMoveSpeed;
     this.speed = this.freeMoveSpeed;
 
-    this.stalkYawSensitivity = 0.011;
-    this.stalkPitchSensitivity = 0.014;
+    this.stalkYawSensitivity = DEFAULT_TUNING_CONFIG.stalkYawSensitivity;
+    this.stalkPitchSensitivity = DEFAULT_TUNING_CONFIG.stalkPitchSensitivity;
 
-    this.jumpVelocity = DEFAULT_JUMP_VELOCITY;
-    this.gravity = 24;
+    this.jumpVelocity = DEFAULT_TUNING_CONFIG.jumpVelocity;
+    this.gravity = DEFAULT_TUNING_CONFIG.bodyGravity;
     this.verticalVelocity = 0;
     this.isGrounded = true;
   }

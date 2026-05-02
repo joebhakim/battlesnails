@@ -28,13 +28,15 @@ test('normalizeTuningConfig clamps and rounds slider values', () => {
     botCount: 99,
     stalkSegmentCount: 5.4,
     stalkDamping: 2,
-    bothAttackChance: -4
+    bothAttackChance: -4,
+    stalkControlMode: 'trackball'
   });
 
   assert.equal(tuning.botCount, 40);
   assert.equal(tuning.stalkSegmentCount, 5);
   assert.equal(tuning.stalkDamping, 0.999);
   assert.equal(tuning.bothAttackChance, 0);
+  assert.equal(tuning.stalkControlMode, 'trackball');
 });
 
 test('test mode structural bot count changes rebuild the local arena immediately', () => {
@@ -61,6 +63,20 @@ test('test mode terrain changes are structural and rebuild the arena snapshot', 
   assert.equal(result.rebuilt, true);
   assert.equal(session.getSnapshot().terrain.preset, 'sphere_dome');
   assert.equal(session.getSnapshot().terrain.centerHeight, 1.5);
+});
+
+test('test mode keeps spawned enemies static for lab work', () => {
+  const session = new TestSession({ storage: new MemoryStorage() });
+  const before = session.getSnapshot().players.find((player) => player.slot === 2);
+
+  for (let index = 0; index < 120; index += 1) {
+    session.update(MATCH_TICK_DURATION, {});
+  }
+
+  const after = session.getSnapshot().players.find((player) => player.slot === 2);
+  assert.equal(after.rotationY, before.rotationY);
+  assert.deepEqual(after.position, before.position);
+  assert.equal(after.controlMode, 'idle');
 });
 
 test('test mode remembers tuning in storage and resetToDefaults clears it', () => {

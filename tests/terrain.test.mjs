@@ -25,6 +25,7 @@ function createTerrainConfig(overrides) {
 
 test('all shipped terrain presets produce finite heights across the arena', () => {
   const presets = [
+    'plane',
     'hyperboloid_bowl',
     'sphere_dome',
     'sphere_bowl',
@@ -40,6 +41,14 @@ test('all shipped terrain presets produce finite heights across the arena', () =
       assert.equal(Number.isFinite(getTerrainHeight(x, z, terrain)), true, `${preset} @ ${x},${z}`);
     }
   }
+});
+
+test('default terrain is a flat plane', () => {
+  const terrain = normalizeTerrainConfig();
+
+  assert.equal(terrain.preset, 'plane');
+  assert.equal(getTerrainHeight(0, 0, terrain), 0);
+  assert.equal(getTerrainHeight(12, -7, terrain), 0);
 });
 
 test('sphere dome is high in the center and sphere bowl is low in the center', () => {

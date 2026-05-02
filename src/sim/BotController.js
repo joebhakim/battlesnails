@@ -4,6 +4,7 @@ import { createIdleInput } from './MatchSimulation.js';
 
 export class BotController {
   constructor(options = {}) {
+    this.random = typeof options.rng === 'function' ? options.rng : Math.random;
     this.setConfig(options);
 
     this.attackCooldownRemaining = 0.5;
@@ -15,6 +16,10 @@ export class BotController {
   }
 
   setConfig(options = {}) {
+    if (typeof options.rng === 'function') {
+      this.random = options.rng;
+    }
+
     this.preferredDistance = options.preferredDistance ?? 5.2;
     this.attackRange = options.attackRange ?? 6.1;
     this.attackCooldown = options.attackCooldown ?? 0.9;
@@ -93,9 +98,9 @@ export class BotController {
     }
 
     if (distanceToTarget <= this.attackRange && this.attackCooldownRemaining === 0) {
-      this.attackSide = Math.random() > 0.5 ? 1 : -1;
+      this.attackSide = this.random() > 0.5 ? 1 : -1;
       this.strafeDirection = -this.attackSide;
-      this.attackPattern = Math.random() < this.bothAttackChance
+      this.attackPattern = this.random() < this.bothAttackChance
         ? 'both'
         : this.attackSide > 0
           ? 'right'

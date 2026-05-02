@@ -5,6 +5,14 @@ import {
 } from '../world/Terrain.js';
 
 const TERRAIN_SECTION = 'Terrain';
+const STALK_CONTROL_OPTIONS = Object.freeze([
+  { value: 'top_down_plane', label: 'Top-Down Plane' },
+  { value: 'yaw_pitch', label: 'Yaw/Pitch Chart' },
+  { value: 'absolute_dome', label: 'Absolute Dome Reticle' },
+  { value: 'trackball', label: 'Virtual Trackball' },
+  { value: 'tangent_velocity', label: 'Tangent Velocity' },
+  { value: 'spring_dome', label: 'Spring Dome Reticle' }
+]);
 
 const RAW_TUNING_SCHEMA = Object.freeze([
   {
@@ -88,22 +96,22 @@ const RAW_TUNING_SCHEMA = Object.freeze([
   {
     id: 'playerMaxHealth',
     label: 'Player Health',
-    section: 'Movement',
+    section: 'Health',
     min: 1,
-    max: 200,
+    max: 2000,
     step: 1,
-    defaultValue: 15,
+    defaultValue: 600,
     structural: true,
     kind: 'int'
   },
   {
     id: 'botMaxHealth',
     label: 'Bot Health',
-    section: 'Movement',
+    section: 'Health',
     min: 1,
-    max: 100,
+    max: 2000,
     step: 1,
-    defaultValue: 2,
+    defaultValue: 600,
     structural: true,
     kind: 'int'
   },
@@ -234,6 +242,50 @@ const RAW_TUNING_SCHEMA = Object.freeze([
     max: 3,
     step: 0.01,
     defaultValue: 0.45
+  },
+  {
+    id: 'stalkControlMode',
+    label: 'Control Mode',
+    section: 'Stalk Controls',
+    defaultValue: 'top_down_plane',
+    kind: 'choice',
+    options: STALK_CONTROL_OPTIONS
+  },
+  {
+    id: 'stalkTurgidity',
+    label: 'Turgidity',
+    section: 'Stalk Controls',
+    min: 0,
+    max: 1,
+    step: 0.01,
+    defaultValue: 0
+  },
+  {
+    id: 'stalkReachSensitivity',
+    label: 'Wheel Sensitivity',
+    section: 'Stalk Controls',
+    min: 0,
+    max: 0.5,
+    step: 0.01,
+    defaultValue: 0.08
+  },
+  {
+    id: 'stalkReachMin',
+    label: 'Min Reach',
+    section: 'Stalk Controls',
+    min: 0.1,
+    max: 1,
+    step: 0.01,
+    defaultValue: 0.45
+  },
+  {
+    id: 'stalkReachMax',
+    label: 'Max Reach',
+    section: 'Stalk Controls',
+    min: 1,
+    max: 2,
+    step: 0.01,
+    defaultValue: 1.35
   },
   {
     id: 'stalkMass',
@@ -504,7 +556,10 @@ const RAW_TUNING_SCHEMA = Object.freeze([
 ]);
 
 export const TUNING_SCHEMA = RAW_TUNING_SCHEMA.map((entry) => Object.freeze({ ...entry }));
-export const TUNING_STORAGE_KEY = 'battlesnails:test-mode-tuning-v1';
+export const DUEL_TUNING_SCHEMA = Object.freeze(
+  TUNING_SCHEMA.filter((entry) => entry.id !== 'botCount')
+);
+export const TUNING_STORAGE_KEY = 'battlesnails:test-mode-tuning-v5';
 export const STRUCTURAL_TUNING_KEYS = new Set(
   TUNING_SCHEMA.filter((entry) => entry.structural).map((entry) => entry.id)
 );
@@ -569,7 +624,20 @@ export function normalizeTuningConfig(rawConfig = {}) {
     normalized.stalkPitchMax = midpoint;
   }
 
+  if (normalized.stalkReachMin > normalized.stalkReachMax) {
+    const midpoint = (normalized.stalkReachMin + normalized.stalkReachMax) / 2;
+    normalized.stalkReachMin = midpoint;
+    normalized.stalkReachMax = midpoint;
+  }
+
   return normalized;
+}
+
+export function normalizeDuelTuningConfig(rawConfig = {}) {
+  return {
+    ...normalizeTuningConfig(rawConfig),
+    botCount: DEFAULT_TUNING_CONFIG.botCount
+  };
 }
 
 export function hasStructuralTuningChanges(previousConfig, nextConfig) {
@@ -630,6 +698,11 @@ export function createSimulationProfiles(config = DEFAULT_TUNING_CONFIG) {
     stalkDrivePull: tuning.stalkDrivePull,
     stalkIdlePull: tuning.stalkIdlePull,
     stalkTargetApproachSpeed: tuning.stalkTargetApproachSpeed,
+    stalkControlMode: tuning.stalkControlMode,
+    stalkTurgidity: tuning.stalkTurgidity,
+    stalkReachSensitivity: tuning.stalkReachSensitivity,
+    stalkReachMin: tuning.stalkReachMin,
+    stalkReachMax: tuning.stalkReachMax,
     stalkMass: tuning.stalkMass,
     impactThreshold: tuning.impactThreshold,
     impactMomentumFactor: tuning.impactMomentumFactor,
