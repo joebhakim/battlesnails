@@ -101,6 +101,7 @@ export class TestSession {
       ...localInput,
       lookX: localInput.lookX / steps,
       lookY: localInput.lookY / steps,
+      turnX: localInput.turnX / steps,
       reachDelta: localInput.reachDelta / steps
     });
 

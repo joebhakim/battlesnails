@@ -162,6 +162,7 @@ export class SinglePlayerSession {
         ...localInput,
         lookX: localInput.lookX / steps,
         lookY: localInput.lookY / steps,
+        turnX: localInput.turnX / steps,
         reachDelta: localInput.reachDelta / steps,
         leftHeld: localInput.leftHeld,
         rightHeld: localInput.rightHeld

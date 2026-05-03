@@ -75,6 +75,7 @@ npm run mp:server
 - `Space`: jump.
 - Hold `Shift`: enable lock-on framing and target-facing behavior while held.
 - Click the arena: capture the mouse with pointer lock.
+- With pointer lock and no stalk button held, move the mouse horizontally to turn the snail in free mode.
 - `Esc`: release pointer lock.
 - Hold `Left mouse` and move the mouse: innervate the left stalk.
 - Hold `Right mouse` and move the mouse: innervate the right stalk.
@@ -260,7 +261,7 @@ Every so often, re-run a quick online-readiness profile: measure authoritative t
 <details>
 <summary>Input, HUD, and debug tools</summary>
 
-- `src/controls/MouseControls.js`: pointer lock, held-button stalk ownership, and relative mouse delta capture.
+- `src/controls/MouseControls.js`: pointer lock, idle free-turn capture, held-button stalk ownership, and relative mouse delta capture.
 - `src/controls/KeyboardControls.js`: movement axes, lock-on hold state, and jump requests.
 - `src/utils/UI.js`: menu, overlays, HUD bars, stalk plane widgets, and music controls.
 - `src/sim/Tuning.js`: shared tuning schema, default values, normalization, and bot/simulation profile derivation.
@@ -344,7 +345,8 @@ The current debug mode is text-only. It does not add scene helpers, wireframes, 
 
 - Movement remains camera-relative.
 - Lock-on is hold-to-enable, not a toggle.
-- Mouse input is reserved for stalk control rather than orbit camera control.
+- Pointer-locked idle mouse X turns the snail in free mode; held mouse buttons reserve mouse motion for stalk control.
+- Mouse input does not orbit the camera.
 
 ### Systems that were removed or replaced
 

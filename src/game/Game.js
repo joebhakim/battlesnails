@@ -220,6 +220,7 @@ export class Game {
       lockOnHeld: this.keyboardControls.isLockOnHeld(),
       lookX: combatInput.lookX,
       lookY: combatInput.lookY,
+      turnX: combatInput.turnX ?? 0,
       reachDelta: combatInput.reachDelta,
       leftHeld: combatInput.leftHeld,
       rightHeld: combatInput.rightHeld
@@ -468,12 +469,12 @@ export class Game {
 
   refreshInstructions() {
     if (this.currentSession?.mode === 'test') {
-      this.ui.setInstructions('WASD move · Space jump · Hold LMB/RMB stalks · Mouse Y reach · Wheel plane height · Hold both for both · Hold Shift lock-on · Tune sliders on the right · Click arena');
+      this.ui.setInstructions('WASD move · Mouse turn · Space jump · Hold LMB/RMB stalks · Mouse Y reach · Wheel plane height · Hold Shift lock-on · Tune sliders on the right · Click arena');
       return;
     }
 
     if (this.currentSession?.mode === 'singleplayer') {
-      this.ui.setInstructions('WASD move · Space jump · Hold LMB/RMB stalks · Mouse Y reach · Wheel plane height · Hold both for both · Hold Shift lock-on · Click arena');
+      this.ui.setInstructions('WASD move · Mouse turn · Space jump · Hold LMB/RMB stalks · Mouse Y reach · Wheel plane height · Hold Shift lock-on · Click arena');
       return;
     }
 
@@ -482,7 +483,7 @@ export class Game {
       return;
     }
 
-    this.ui.setInstructions('WASD move · Space jump · Hold LMB/RMB stalks · Mouse Y reach · Wheel plane height · Hold both for both · Hold Shift lock-on · Click arena');
+    this.ui.setInstructions('WASD move · Mouse turn · Space jump · Hold LMB/RMB stalks · Mouse Y reach · Wheel plane height · Hold Shift lock-on · Click arena');
   }
 
   resetViewActors() {

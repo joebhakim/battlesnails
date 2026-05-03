@@ -67,6 +67,7 @@ const DEFAULT_INPUT = Object.freeze({
   lockOnHeld: false,
   lookX: 0,
   lookY: 0,
+  turnX: 0,
   reachDelta: 0,
   leftHeld: false,
   rightHeld: false
@@ -84,6 +85,7 @@ const HEMISPHERE_EPSILON = 0.001;
 const STALK_OUTSIDE_ARC_SPEED_SCALE = 0.12;
 const TOP_DOWN_MIN_FORWARD = 0.02;
 const TOP_DOWN_EPSILON = 0.000001;
+const FREE_TURN_RADIANS_PER_PIXEL = 0.004;
 const BASH_DAMAGE_SCALE = 0.2;
 const MIN_DAMAGE_EVENT_AMOUNT = 0.025;
 const CONTACT_RENEWAL_IMPULSE_MARGIN = 10;
@@ -618,6 +620,7 @@ function normalizeInput(rawInput = {}) {
     lockOnHeld: Boolean(rawInput.lockOnHeld),
     lookX: Number.isFinite(rawInput.lookX) ? rawInput.lookX : 0,
     lookY: Number.isFinite(rawInput.lookY) ? rawInput.lookY : 0,
+    turnX: Number.isFinite(rawInput.turnX) ? rawInput.turnX : 0,
     reachDelta: Number.isFinite(rawInput.reachDelta) ? rawInput.reachDelta : 0,
     leftHeld: Boolean(rawInput.leftHeld),
     rightHeld: Boolean(rawInput.rightHeld)
@@ -1345,10 +1348,15 @@ export class MatchSimulation {
 
     player.lockOnHeld = normalizedInput.lockOnHeld;
 
+    const manualFreeTurn = !normalizedInput.lockOnHeld && Math.abs(normalizedInput.turnX) > 0.000001;
+    if (manualFreeTurn) {
+      player.rotationY += normalizedInput.turnX * FREE_TURN_RADIANS_PER_PIXEL;
+    }
+
     let facingDirection = null;
     if (normalizedInput.lockOnHeld && target) {
       facingDirection = target.position.clone().sub(player.position);
-    } else if (movement.lengthSq() > 0) {
+    } else if (!manualFreeTurn && movement.lengthSq() > 0) {
       const movementDirection = movement.clone().normalize();
       const forwardAlignment = getFacingDirection(player.rotationY).dot(movementDirection);
       if (forwardAlignment > 0.2) {

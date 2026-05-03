@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import * as THREE from 'three';
 
 import { KeyboardControls } from '../src/controls/KeyboardControls.js';
+import { MouseControls } from '../src/controls/MouseControls.js';
 import { PlayerSnail } from '../src/entities/PlayerSnail.js';
 import { NPCSnail } from '../src/entities/NPCSnail.js';
 import { CameraController } from '../src/game/CameraController.js';
@@ -42,6 +43,19 @@ function createKeyboardEvent(key) {
       this.defaultPrevented = true;
     }
   };
+}
+
+function createMouseControls(overrides = {}) {
+  return Object.assign(Object.create(MouseControls.prototype), {
+    primaryHeld: false,
+    secondaryHeld: false,
+    pointerLocked: true,
+    lookDeltaX: 0,
+    lookDeltaY: 0,
+    turnDeltaX: 0,
+    reachDelta: 0,
+    ...overrides
+  });
 }
 
 function vectorToPojo(vector) {
@@ -138,6 +152,32 @@ test('game local input forwards mouse wheel reach delta', () => {
 
   assert.equal(input.reachDelta, 2.5);
   assert.equal(input.leftHeld, true);
+});
+
+test('pointer-locked idle mouse movement turns without driving stalks', () => {
+  const controls = createMouseControls();
+
+  controls.recordMouseDelta(18, -9);
+  const input = controls.consumeCombatInput();
+
+  assert.equal(input.engaged, false);
+  assert.equal(input.turnX, 18);
+  assert.equal(input.lookX, 0);
+  assert.equal(input.lookY, 0);
+  assert.equal(controls.consumeCombatInput().turnX, 0);
+});
+
+test('held mouse movement drives stalks instead of free turning', () => {
+  const controls = createMouseControls({ primaryHeld: true });
+
+  controls.recordMouseDelta(18, -9);
+  const input = controls.consumeCombatInput();
+
+  assert.equal(input.engaged, true);
+  assert.equal(input.leftHeld, true);
+  assert.equal(input.turnX, 0);
+  assert.equal(input.lookX, 18);
+  assert.equal(input.lookY, -9);
 });
 
 test('right held input updates only the right stalk target', () => {
@@ -345,6 +385,29 @@ test('free backward input backpedals without rotating into a camera spin', () =>
   assert(endPlayer.position.z > startPosition.z + 1);
   assert(Math.abs(endPlayer.position.x - startPosition.x) < 0.25);
   assert(Math.abs(angleDelta(endPlayer.rotationY, startRotation)) < 0.1);
+});
+
+test('free mouse turn rotates the shared simulation player in place', () => {
+  const simulation = new MatchSimulation();
+  const startRotation = simulation.getPlayerState(1).rotationY;
+
+  simulation.setPlayerInput(1, { turnX: 25, lockOnHeld: false });
+  simulation.step(MATCH_TICK_DURATION);
+
+  const endRotation = simulation.getPlayerState(1).rotationY;
+  assert(angleDelta(endRotation, startRotation) > 0.09);
+  assert(angleDelta(endRotation, startRotation) < 0.11);
+});
+
+test('lock-on target facing ignores free mouse turn input', () => {
+  const simulation = new MatchSimulation();
+  const startRotation = simulation.getPlayerState(1).rotationY;
+
+  simulation.setPlayerInput(1, { turnX: 25, lockOnHeld: true });
+  simulation.step(MATCH_TICK_DURATION);
+
+  const endRotation = simulation.getPlayerState(1).rotationY;
+  assert(Math.abs(angleDelta(endRotation, startRotation)) < 0.01);
 });
 
 test('player move can decouple movement direction from facing direction', () => {
