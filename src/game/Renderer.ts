@@ -41,7 +41,7 @@ export class Renderer {
     this.container = container;
     this.profileId = 'default';
     this.renderer = this.createRendererWithFallback();
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, getPixelRatioCap()));
+    this.updatePixelRatio();
     this.renderer.setSize(window.innerWidth, window.innerHeight);
     this.renderer.shadowMap.enabled = false;
 
@@ -72,7 +72,12 @@ export class Renderer {
     this.renderer.render(scene, camera);
   }
 
+  updatePixelRatio() {
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, getPixelRatioCap()));
+  }
+
   updateSize() {
+    this.updatePixelRatio();
     this.renderer.setSize(window.innerWidth, window.innerHeight);
   }
 }

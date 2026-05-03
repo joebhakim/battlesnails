@@ -1,9 +1,18 @@
 const MOVE_PAD_RADIUS = 54;
+const MOVE_DEAD_ZONE = 0.08;
 const LOOK_SENSITIVITY = 1.15;
 const REACH_STEP_PER_FRAME = 0.055;
 
 function clamp(value, min, max) {
   return Math.min(max, Math.max(min, value));
+}
+
+function pulseHaptic(duration = 8) {
+  if (typeof navigator === 'undefined' || typeof navigator.vibrate !== 'function') {
+    return;
+  }
+
+  navigator.vibrate(duration);
 }
 
 function bindButtonHold(button, onChange) {
@@ -22,6 +31,7 @@ function bindButtonHold(button, onChange) {
     event.stopPropagation();
     button.setPointerCapture?.(event.pointerId);
     setPressed(true);
+    pulseHaptic();
   });
 
   for (const eventName of ['pointerup', 'pointercancel', 'lostpointercapture']) {
@@ -129,6 +139,7 @@ export class MobileControls {
       event.stopPropagation();
       this.pendingJump = true;
       this.jumpButton.classList.add('active');
+      pulseHaptic(10);
     });
     this.jumpButton?.addEventListener('pointerup', () => {
       this.jumpButton.classList.remove('active');
@@ -142,6 +153,7 @@ export class MobileControls {
       event.stopPropagation();
       this.pendingInteract = true;
       this.interactButton.classList.add('active');
+      pulseHaptic(8);
     });
     this.interactButton?.addEventListener('pointerup', () => {
       this.interactButton.classList.remove('active');
@@ -156,6 +168,7 @@ export class MobileControls {
       this.lockOnActive = !this.lockOnActive;
       this.lockOnButton.classList.toggle('active', this.lockOnActive);
       this.lockOnButton.setAttribute('aria-pressed', `${this.lockOnActive}`);
+      pulseHaptic(12);
     });
 
     window.addEventListener('blur', () => this.resetHeldState());
@@ -215,6 +228,14 @@ export class MobileControls {
     const scale = length > MOVE_PAD_RADIUS ? MOVE_PAD_RADIUS / length : 1;
     const knobX = dx * scale;
     const knobY = dy * scale;
+    const normalizedLength = Math.min(1, length / MOVE_PAD_RADIUS);
+
+    if (normalizedLength < MOVE_DEAD_ZONE) {
+      this.movementAxes.right = 0;
+      this.movementAxes.forward = 0;
+      this.updateMoveKnob(knobX * 0.35, knobY * 0.35);
+      return;
+    }
 
     this.movementAxes.right = clamp(knobX / MOVE_PAD_RADIUS, -1, 1);
     this.movementAxes.forward = clamp(-knobY / MOVE_PAD_RADIUS, -1, 1);
