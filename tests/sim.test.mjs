@@ -5,14 +5,55 @@ import * as THREE from 'three';
 import { BotController } from '../src/sim/BotController.js';
 import { MatchSimulation, MATCH_TICK_DURATION } from '../src/sim/MatchSimulation.js';
 import { DEFAULT_TUNING_CONFIG } from '../src/sim/Tuning.js';
-import { buildStalkSegmentSamples, evaluateStalkImpact } from '../src/sim/StalkRope.js';
+import {
+  STALK_EYE_BOUNCE_RESTITUTION,
+  applyStalkCollisionConstraints,
+  buildStalkSegmentSamples,
+  createInitialStalkNodes,
+  evaluateStalkImpact,
+  getStalkRootWorldPosition,
+  reflectIncidentVector,
+  simulateStalkRope
+} from '../src/sim/StalkRope.js';
 import { getTerrainHeight } from '../src/world/Terrain.js';
+import { getTerrainBodyGroundHeight } from '../src/world/TerrainClearance.js';
 
 function stepMany(simulation, count, inputA, inputB) {
   for (let index = 0; index < count; index += 1) {
     simulation.setPlayerInput(1, inputA);
     simulation.setPlayerInput(2, inputB);
     simulation.step(MATCH_TICK_DURATION);
+  }
+}
+
+function setPlayerOnTerrain(player, x, z) {
+  player.position.set(x, getTerrainBodyGroundHeight({
+    x,
+    z,
+    rotationY: player.rotationY,
+    aboveGroundHeight: player.profile.groundHeight
+  }), z);
+  player.previousPosition.copy(player.position);
+  player.grounded = true;
+  player.verticalVelocity = 0;
+}
+
+function getExpectedPlayerGroundHeight(player, terrainConfig) {
+  return getTerrainBodyGroundHeight({
+    x: player.position.x,
+    z: player.position.z,
+    rotationY: player.rotationY,
+    terrainConfig,
+    aboveGroundHeight: player.profile.groundHeight
+  });
+}
+
+function settleSimulation(simulation, maxSteps = 120) {
+  for (let index = 0; index < maxSteps; index += 1) {
+    simulation.step(MATCH_TICK_DURATION);
+    if (Array.from(simulation.players.values()).every((player) => player.grounded)) {
+      return;
+    }
   }
 }
 
@@ -53,6 +94,7 @@ test('wet trail boosts movement speed by roughly 500 percent and persists in sna
 
 test('jump raises the player above ground in the shared simulation', () => {
   const simulation = new MatchSimulation();
+  settleSimulation(simulation);
   const startHeight = simulation.getPlayerState(1).position.y;
   let peakHeight = startHeight;
 
@@ -65,12 +107,37 @@ test('jump raises the player above ground in the shared simulation', () => {
   assert(peakHeight > startHeight + 2.8);
 });
 
+test('players spawn above terrain and fall to grounded clearance', () => {
+  const simulation = new MatchSimulation();
+  const player = simulation.getPlayerState(1);
+  const groundHeight = getExpectedPlayerGroundHeight(player, simulation.getSnapshot().terrain);
+
+  assert.equal(player.grounded, false);
+  assert.equal(player.position.y, groundHeight + player.profile.spawnDropHeight);
+
+  settleSimulation(simulation);
+
+  assert.equal(player.grounded, true);
+  assert.equal(player.position.y, getExpectedPlayerGroundHeight(player, simulation.getSnapshot().terrain));
+});
+
+test('grounded players keep body clearance above terrain', () => {
+  const simulation = new MatchSimulation();
+  settleSimulation(simulation);
+  const player = simulation.getPlayerState(1);
+  const terrainHeight = getTerrainHeight(player.position.x, player.position.z, simulation.getSnapshot().terrain);
+
+  assert(player.position.y >= terrainHeight + player.profile.groundHeight);
+  assert.equal(player.position.y, getExpectedPlayerGroundHeight(player, simulation.getSnapshot().terrain));
+});
+
 test('grounded players follow the bowl surface when moving across the arena', () => {
   const simulation = new MatchSimulation({
     tuning: {
       terrainPreset: 'hyperboloid_bowl'
     }
   });
+  settleSimulation(simulation);
   const player = simulation.getPlayerState(1);
   const initialHeight = player.position.y;
 
@@ -78,7 +145,10 @@ test('grounded players follow the bowl surface when moving across the arena', ()
   simulation.step(MATCH_TICK_DURATION);
 
   assert(player.position.y > initialHeight);
-  assert.equal(player.position.y, getTerrainHeight(player.position.x, player.position.z, simulation.getSnapshot().terrain));
+  assert.equal(
+    player.position.y,
+    getExpectedPlayerGroundHeight(player, simulation.getSnapshot().terrain)
+  );
 });
 
 test('body collisions separate overlapping snails', () => {
@@ -86,8 +156,8 @@ test('body collisions separate overlapping snails', () => {
   const playerA = simulation.getPlayerState(1);
   const playerB = simulation.getPlayerState(2);
 
-  playerA.position.set(0, getTerrainHeight(0, 0), 0);
-  playerB.position.set(0.5, getTerrainHeight(0.5, 0), 0);
+  setPlayerOnTerrain(playerA, 0, 0);
+  setPlayerOnTerrain(playerB, 0.5, 0);
   simulation.step(MATCH_TICK_DURATION);
 
   assert(playerA.position.distanceTo(playerB.position) > 0.5);
@@ -117,6 +187,307 @@ test('idle dual ropes sag under gravity in the shared simulation', () => {
   assert(simulation.getPlayerState(1).stalks.right.nodes[3].y < initialRightY - 0.15);
 });
 
+test('incident vectors reflect across a collision plane normal', () => {
+  const reflected = reflectIncidentVector(
+    new THREE.Vector3(1, -2, 0),
+    new THREE.Vector3(0, 1, 0)
+  );
+  assert.deepEqual(reflected.toArray(), [1, 2, 0]);
+
+  const damped = reflectIncidentVector(
+    new THREE.Vector3(2, -3, 0),
+    new THREE.Vector3(0, 1, 0),
+    0.5,
+    0.25
+  );
+  assert.deepEqual(damped.toArray(), [1.5, 1.5, 0]);
+});
+
+test('eye terrain collision bounces the terminal node upward', () => {
+  const rootWorld = new THREE.Vector3(0, 1, 0);
+  const nodes = [
+    rootWorld.clone(),
+    new THREE.Vector3(0, -0.2, 0)
+  ];
+  const previousNodes = [
+    rootWorld.clone(),
+    new THREE.Vector3(0, 0.3, 0)
+  ];
+
+  applyStalkCollisionConstraints({
+    nodes,
+    previousNodes,
+    rootWorld,
+    terrainHeightAt: () => 0,
+    segmentRadius: 0.05,
+    eyeRadius: 0.2,
+    includeSegmentMidpoints: false
+  });
+
+  assert.equal(nodes[1].y, 0.2);
+  assert(nodes[1].y - previousNodes[1].y > 0);
+});
+
+test('eye body collision bounces away from the body surface normal', () => {
+  const rootWorld = new THREE.Vector3(2, 0, 0);
+  const bodyPosition = new THREE.Vector3(0, 0, 0);
+  const nodes = [
+    rootWorld.clone(),
+    new THREE.Vector3(0.6, 0, 0)
+  ];
+  const previousNodes = [
+    rootWorld.clone(),
+    new THREE.Vector3(1, 0, 0)
+  ];
+
+  applyStalkCollisionConstraints({
+    nodes,
+    previousNodes,
+    rootWorld,
+    bodyObstacles: [{ position: bodyPosition, radius: 1 }],
+    segmentRadius: 0.05,
+    eyeRadius: 0.2,
+    includeSegmentMidpoints: false
+  });
+
+  assert(Math.abs(nodes[1].x - 1.2) < 0.0001);
+  assert(nodes[1].x - previousNodes[1].x > 0);
+});
+
+test('eye box collision bounces from a flat cube face', () => {
+  const rootWorld = new THREE.Vector3(3, 0, 0);
+  const nodes = [
+    rootWorld.clone(),
+    new THREE.Vector3(1.1, 0, 0)
+  ];
+  const previousNodes = [
+    rootWorld.clone(),
+    new THREE.Vector3(1.6, 0, 0)
+  ];
+
+  applyStalkCollisionConstraints({
+    nodes,
+    previousNodes,
+    rootWorld,
+    bodyObstacles: [{
+      position: new THREE.Vector3(0, 0, 0),
+      radius: 2,
+      shape: {
+        type: 'box',
+        halfExtents: { x: 1, y: 1, z: 1 }
+      }
+    }],
+    segmentRadius: 0.05,
+    eyeRadius: 0.2,
+    includeSegmentMidpoints: false
+  });
+
+  assert.equal(nodes[1].x, 1.2);
+  assert(nodes[1].x - previousNodes[1].x > 0);
+});
+
+test('eye cylinder collision bounces from the curved side normal', () => {
+  const rootWorld = new THREE.Vector3(3, 0, 0);
+  const nodes = [
+    rootWorld.clone(),
+    new THREE.Vector3(1.05, 0, 0)
+  ];
+  const previousNodes = [
+    rootWorld.clone(),
+    new THREE.Vector3(1.5, 0, 0)
+  ];
+
+  applyStalkCollisionConstraints({
+    nodes,
+    previousNodes,
+    rootWorld,
+    bodyObstacles: [{
+      position: new THREE.Vector3(0, 0, 0),
+      radius: 1.5,
+      shape: {
+        type: 'cylinder',
+        radius: 1,
+        halfHeight: 1.4
+      }
+    }],
+    segmentRadius: 0.05,
+    eyeRadius: 0.2,
+    includeSegmentMidpoints: false
+  });
+
+  assert.equal(nodes[1].x, 1.2);
+  assert(nodes[1].x - previousNodes[1].x > 0);
+});
+
+test('stalk rope collision keeps nodes and eyes above terrain', () => {
+  const rootWorld = new THREE.Vector3(0, 1, 0);
+  const nodes = [
+    rootWorld.clone(),
+    new THREE.Vector3(0, -0.8, 0),
+    new THREE.Vector3(0, -0.8, 1)
+  ];
+  const previousNodes = nodes.map((node) => node.clone());
+
+  simulateStalkRope({
+    nodes,
+    previousNodes,
+    rootWorld,
+    goalWorld: nodes[2].clone(),
+    delta: MATCH_TICK_DURATION,
+    gravity: 0,
+    damping: 1,
+    goalPull: 0,
+    constraintIterations: 0,
+    collision: {
+      terrainHeightAt: () => 0,
+      segmentRadius: 0.2,
+      eyeRadius: 0.4,
+      includeSegmentMidpoints: false
+    }
+  });
+
+  assert(nodes[1].y >= 0.2 - 0.0001);
+  assert(nodes[2].y >= 0.4 - 0.0001);
+  assert.equal(previousNodes[2].y, nodes[2].y);
+});
+
+test('stalk rope collision pushes nodes outside body obstacles', () => {
+  const rootWorld = new THREE.Vector3(0, 2, 0);
+  const bodyPosition = new THREE.Vector3(0, 0, 0);
+  const nodes = [
+    rootWorld.clone(),
+    bodyPosition.clone(),
+    new THREE.Vector3(0, 2, 2)
+  ];
+  const previousNodes = nodes.map((node) => node.clone());
+
+  simulateStalkRope({
+    nodes,
+    previousNodes,
+    rootWorld,
+    goalWorld: nodes[2].clone(),
+    delta: MATCH_TICK_DURATION,
+    gravity: 0,
+    damping: 1,
+    goalPull: 0,
+    constraintIterations: 0,
+    collision: {
+      bodyObstacles: [{ position: bodyPosition, radius: 1 }],
+      segmentRadius: 0.2,
+      eyeRadius: 0.2,
+      includeSegmentMidpoints: false
+    }
+  });
+
+  assert(nodes[1].distanceTo(bodyPosition) >= 1.2 - 0.0001);
+  assert(previousNodes[1].distanceTo(bodyPosition) >= 1.2 - 0.0001);
+});
+
+test('stalk rope collision corrects visible segment midpoint body clipping', () => {
+  const rootWorld = new THREE.Vector3(-2, 2, 0);
+  const bodyPosition = new THREE.Vector3(0, 0, 0);
+  const nodes = [
+    rootWorld.clone(),
+    new THREE.Vector3(-1, 0, 0),
+    new THREE.Vector3(1, 0, 0)
+  ];
+  const previousNodes = nodes.map((node) => node.clone());
+
+  simulateStalkRope({
+    nodes,
+    previousNodes,
+    rootWorld,
+    goalWorld: nodes[2].clone(),
+    delta: MATCH_TICK_DURATION,
+    gravity: 0,
+    damping: 1,
+    goalPull: 0,
+    constraintIterations: 0,
+    collision: {
+      bodyObstacles: [{ position: bodyPosition, radius: 0.5 }],
+      segmentRadius: 0.1,
+      eyeRadius: 0.1
+    }
+  });
+
+  const midpoint = nodes[1].clone().add(nodes[2]).multiplyScalar(0.5);
+  assert(midpoint.distanceTo(bodyPosition) >= 0.6 - 0.0001);
+});
+
+test('self body collision leaves the root grace segment stable', () => {
+  const rootWorld = new THREE.Vector3(0, 0.55, 0);
+  const bodyPosition = new THREE.Vector3(0, 0, 0);
+  const nodes = [
+    rootWorld.clone(),
+    new THREE.Vector3(0, 0.4, 0.2),
+    new THREE.Vector3(0, 0.4, 0.3)
+  ];
+  const previousNodes = nodes.map((node) => node.clone());
+  const graceNode = nodes[1].clone();
+
+  simulateStalkRope({
+    nodes,
+    previousNodes,
+    rootWorld,
+    goalWorld: nodes[2].clone(),
+    delta: MATCH_TICK_DURATION,
+    gravity: 0,
+    damping: 1,
+    goalPull: 0,
+    constraintIterations: 0,
+    collision: {
+      bodyObstacles: [{ position: bodyPosition, radius: 1, self: true }],
+      segmentRadius: 0.1,
+      eyeRadius: 0.1,
+      selfRootGraceSegments: 1
+    }
+  });
+
+  assert(nodes[1].distanceTo(graceNode) < 0.0001);
+  assert(nodes[2].distanceTo(bodyPosition) >= 1.1 - 0.0001);
+});
+
+test('authoritative stalk nodes stay above terrain in the shared simulation', () => {
+  const simulation = new MatchSimulation({
+    tuning: {
+      terrainPreset: 'hyperboloid_bowl'
+    }
+  });
+
+  stepMany(simulation, 60, {}, {});
+
+  const snapshot = simulation.getSnapshot();
+  const player = simulation.getPlayerState(1);
+  for (const [, stalk] of Object.entries(player.stalks)) {
+    for (let index = 0; index < stalk.nodes.length; index += 1) {
+      const node = stalk.nodes[index];
+      const radius = index === stalk.nodes.length - 1
+        ? stalk.segmentRadius * 1.35
+        : stalk.segmentRadius;
+      assert(
+        node.y >= getTerrainHeight(node.x, node.z, snapshot.terrain) + radius - 0.001,
+        `node ${index} should be above terrain`
+      );
+    }
+  }
+});
+
+test('authoritative stalk nodes stay outside opposing snail bodies', () => {
+  const simulation = new MatchSimulation();
+  const attacker = simulation.getPlayerState(1);
+  const defender = simulation.getPlayerState(2);
+
+  setPlayerOnTerrain(attacker, 0, 0);
+  setPlayerOnTerrain(defender, 0, 3.8);
+  attacker.stalks.left.nodes[2].copy(defender.position);
+  attacker.stalks.left.previousNodes[2].copy(defender.position);
+
+  simulation.step(MATCH_TICK_DURATION);
+
+  const node = attacker.stalks.left.nodes[2];
+  assert(node.distanceTo(defender.position) >= defender.bodyRadius + attacker.stalks.left.segmentRadius - 0.001);
+});
+
 test('segment impact evaluation can use a non-terminal rope segment', () => {
   const nodes = [
     new THREE.Vector3(0, 0, 0),
@@ -141,6 +512,32 @@ test('segment impact evaluation can use a non-terminal rope segment', () => {
 
   assert.equal(impact.collision, true);
   assert.equal(impact.contactSample?.index, 1);
+});
+
+test('segment impact evaluation uses fixture shape normals', () => {
+  const nodes = [
+    new THREE.Vector3(1.3, 0.7, 0),
+    new THREE.Vector3(1.3, 0.7, 0.5)
+  ];
+  const previousNodes = [
+    new THREE.Vector3(2.3, 0.7, 0),
+    new THREE.Vector3(2.3, 0.7, 0.5)
+  ];
+  const samples = buildStalkSegmentSamples(nodes, previousNodes, MATCH_TICK_DURATION, 0.2);
+  const impact = evaluateStalkImpact(
+    samples,
+    new THREE.Vector3(0, 0, 0),
+    2.1,
+    new THREE.Vector3(),
+    0,
+    {
+      type: 'box',
+      halfExtents: { x: 1.25, y: 1.25, z: 1.25 }
+    }
+  );
+
+  assert.equal(impact.collision, true);
+  assert.deepEqual(impact.contactSample.surfaceNormal.toArray(), [1, 0, 0]);
 });
 
 test('held left input changes only the left stalk target in the shared simulation', () => {
@@ -323,44 +720,281 @@ test('released stalks remain inertial while target vectors stay frozen', () => {
   assert(player.stalks.left.tipPosition.distanceTo(releasedTip) > 0.05);
 });
 
-test('both stalks can damage the opposing player in the same exchange', () => {
+test('both eye tips can damage the opposing player in the same exchange', () => {
   const simulation = new MatchSimulation();
   const attacker = simulation.getPlayerState(1);
   const defender = simulation.getPlayerState(2);
+  const configureEyeHit = (stalk, y) => {
+    stalk.nodes = [
+      new THREE.Vector3(3, y, 0),
+      new THREE.Vector3(1.2, y, 0),
+      new THREE.Vector3(1.6, y, 0)
+    ];
+    stalk.previousNodes = [
+      new THREE.Vector3(3, y, 0),
+      new THREE.Vector3(2.2, y, 0),
+      new THREE.Vector3(2.6, y, 0)
+    ];
+    stalk.incidentNodes = stalk.nodes.map((node) => node.clone());
+    stalk.incidentPreviousNodes = stalk.previousNodes.map((node) => node.clone());
+  };
 
-  attacker.position.set(0, getTerrainHeight(0, 0.2), 0.2);
-  defender.position.set(0, getTerrainHeight(0, -1.6), -1.6);
-  attacker.rotationY = Math.PI;
-  defender.rotationY = 0;
-  defender.health = 3;
+  defender.position.set(0, 0, 0);
+  defender.health = 10;
+  configureEyeHit(attacker.stalks.left, -0.2);
+  configureEyeHit(attacker.stalks.right, 0.2);
 
-  stepMany(
-    simulation,
-    25,
-    { moveZ: -1, lockOnHeld: true, leftHeld: true, rightHeld: true, lookY: -18 },
-    { lockOnHeld: true }
-  );
+  simulation.resolveImpact(attacker, defender, MATCH_TICK_DURATION);
+  const events = simulation.getSnapshot().events;
 
-  assert(defender.health <= 1);
+  assert.equal(events.length, 2);
+  assert(events.some((event) => event.side === 'left'));
+  assert(events.some((event) => event.side === 'right'));
+  assert(defender.health < 10);
+});
+
+function resolveDirectStalkHit(segmentRadius = null) {
+  const simulation = new MatchSimulation();
+  const attacker = simulation.getPlayerState(1);
+  const defender = simulation.getPlayerState(2);
+  const stalk = attacker.stalks.left;
+
+  defender.position.set(0, 0, 0);
+  defender.health = 600;
+  stalk.held = true;
+  if (segmentRadius !== null) {
+    stalk.segmentRadius = segmentRadius;
+  }
+
+  stalk.nodes = [
+    new THREE.Vector3(3, 0, 0),
+    new THREE.Vector3(1.2, 0, 0),
+    new THREE.Vector3(1.6, 0, 0)
+  ];
+  stalk.previousNodes = [
+    new THREE.Vector3(3, 0, 0),
+    new THREE.Vector3(2.2, 0, 0),
+    new THREE.Vector3(2.6, 0, 0)
+  ];
+  stalk.incidentNodes = stalk.nodes.map((node) => node.clone());
+  stalk.incidentPreviousNodes = stalk.previousNodes.map((node) => node.clone());
+
+  simulation.resolveImpact(attacker, defender, MATCH_TICK_DURATION);
+  return { simulation, defender };
+}
+
+test('damage snapshots include floating indicator events at the impact site', () => {
+  const { simulation, defender } = resolveDirectStalkHit();
+  const snapshot = simulation.getSnapshot();
+  const event = snapshot.events[0];
+
+  assert(defender.health < defender.maxHealth);
+  assert.equal(snapshot.events.length, 1);
+  assert.equal(event.type, 'damage');
+  assert.equal(event.measurement, 'bash');
+  assert.equal(event.attackerSlot, 1);
+  assert.equal(event.targetSlot, 2);
+  assert.equal(event.side, 'left');
+  assert(event.amount > 0);
+  const expectedImpulse = 60 * (1 + STALK_EYE_BOUNCE_RESTITUTION);
+  assert(Math.abs(event.impactSpeed - 60) < 0.0001);
+  assert(Math.abs(event.bashImpulse - expectedImpulse) < 0.0001);
+  assert(Math.abs(event.bashDamage - event.amount) < 0.0001);
+  assert(event.bashDamage < expectedImpulse / DEFAULT_TUNING_CONFIG.impactThreshold);
+  assert.equal('scrapeImpulse' in event, false);
+  assert.equal('scrapeDamage' in event, false);
+  assert(Math.abs(event.position.x - defender.bodyRadius) < 0.0001);
+  assert.equal(event.position.y, 0);
+  assert.equal(event.position.z, 0);
+});
+
+test('tangent contact against a sphere does not deal damage', () => {
+  const simulation = new MatchSimulation();
+  const attacker = simulation.getPlayerState(1);
+  const defender = simulation.getPlayerState(2);
+  const stalk = attacker.stalks.left;
+
+  defender.position.set(0, 0, 0);
+  defender.health = 600;
+  const healthBefore = defender.health;
+  stalk.nodes = [
+    new THREE.Vector3(1.6, -0.5, 0),
+    new THREE.Vector3(1.6, 0.5, 0),
+    new THREE.Vector3(1.6, 0, 0)
+  ];
+  stalk.previousNodes = [
+    new THREE.Vector3(1.6, -0.5, -1),
+    new THREE.Vector3(1.6, 0.5, -1),
+    new THREE.Vector3(1.6, 0, -1)
+  ];
+  stalk.incidentNodes = stalk.nodes.map((node) => node.clone());
+  stalk.incidentPreviousNodes = stalk.previousNodes.map((node) => node.clone());
+
+  simulation.resolveImpact(attacker, defender, MATCH_TICK_DURATION);
+
+  assert.equal(simulation.getSnapshot().events.length, 0);
+  assert.equal(defender.health, healthBefore);
+
+  simulation.events = [];
+  stalk.nodes = [
+    new THREE.Vector3(3, 0, 0),
+    new THREE.Vector3(1.2, 0, 0),
+    new THREE.Vector3(1.6, 0, 0)
+  ];
+  stalk.previousNodes = [
+    new THREE.Vector3(3, 0, 0),
+    new THREE.Vector3(2.2, 0, 0),
+    new THREE.Vector3(2.6, 0, 0)
+  ];
+  stalk.incidentNodes = stalk.nodes.map((node) => node.clone());
+  stalk.incidentPreviousNodes = stalk.previousNodes.map((node) => node.clone());
+  simulation.resolveImpact(attacker, defender, MATCH_TICK_DURATION);
+
+  assert.equal(simulation.getSnapshot().events.length, 1);
+});
+
+test('shaft contact does not produce damage while eye is clear', () => {
+  const simulation = new MatchSimulation();
+  const attacker = simulation.getPlayerState(1);
+  const defender = simulation.getPlayerState(2);
+  const stalk = attacker.stalks.left;
+
+  defender.position.set(0, 0, 0);
+  defender.health = 600;
+  stalk.nodes = [
+    new THREE.Vector3(1.6, -0.5, 0),
+    new THREE.Vector3(1.6, 0.5, 0),
+    new THREE.Vector3(3, 0.5, 0)
+  ];
+  stalk.previousNodes = [
+    new THREE.Vector3(1.6, -0.5, -1),
+    new THREE.Vector3(1.6, 0.5, -1),
+    new THREE.Vector3(3, 0.5, 0)
+  ];
+  stalk.incidentNodes = stalk.nodes.map((node) => node.clone());
+  stalk.incidentPreviousNodes = stalk.previousNodes.map((node) => node.clone());
+
+  simulation.resolveImpact(attacker, defender, MATCH_TICK_DURATION);
+
+  assert.equal(simulation.getSnapshot().events.length, 0);
+  assert.equal(defender.health, 600);
+});
+
+test('right eye sweep bashes once against a blocking cube face and ignores tangent sliding', () => {
+  const cubeHalfExtents = Object.freeze({ x: 0.75, y: 0.75, z: 0.75 });
+  const simulation = new MatchSimulation({
+    mode: 'test',
+    players: [
+      { slot: 1, profile: 'human', connected: true },
+      {
+        slot: 9001,
+        profile: 'fixture',
+        fixtureKind: 'cube',
+        displayName: 'Blocking Cube',
+        immortal: true,
+        maxHealth: 999999,
+        position: { x: 2.8, z: 1.9 },
+        bodyRadius: 1.3,
+        collisionShape: {
+          type: 'box',
+          halfExtents: cubeHalfExtents
+        }
+      }
+    ],
+    tuning: {
+      terrainPreset: 'plane',
+      spawnDropHeight: 0
+    }
+  });
+  const attacker = simulation.getPlayerState(1);
+  const cube = simulation.getPlayerState(9001);
+  const stalk = attacker.stalks.right;
+  const startDirection = new THREE.Vector3(1, 0, 0);
+  const targetDirection = new THREE.Vector3(0, 0, 1);
+  const cubeObstacles = [{
+    slot: cube.slot,
+    position: cube.position,
+    radius: cube.bodyRadius,
+    shape: cube.collisionShape
+  }];
+  const events = [];
+
+  attacker.position.set(0, 0, 0);
+  attacker.previousPosition.copy(attacker.position);
+  attacker.rotationY = 0;
+  attacker.bodyVelocity.set(0, 0, 0);
+
+  const rootWorld = getStalkRootWorldPosition(attacker.position, attacker.rotationY, stalk.rootOffset);
+  const startGoal = rootWorld.clone().addScaledVector(startDirection, attacker.profile.stalkTotalLength);
+
+  stalk.nodes = createInitialStalkNodes(rootWorld, startGoal, attacker.profile.stalkSegmentCount);
+  stalk.previousNodes = stalk.nodes.map((node) => node.clone());
+  stalk.incidentNodes = stalk.nodes.map((node) => node.clone());
+  stalk.incidentPreviousNodes = stalk.previousNodes.map((node) => node.clone());
+  stalk.held = true;
+  stalk.desiredVector.copy(targetDirection);
+  stalk.targetVector.copy(targetDirection);
+  stalk.appliedVector.copy(startDirection);
+  stalk.currentVector.copy(startDirection);
+  stalk.desiredReach = 1;
+  stalk.appliedReach = 1;
+  stalk.targetReach = 1;
+  stalk.currentReach = 1;
+
+  for (let tick = 0; tick < 24; tick += 1) {
+    simulation.events = [];
+    simulation.updateStalkRopes(attacker, MATCH_TICK_DURATION, cubeObstacles);
+    simulation.resolveImpact(attacker, cube, MATCH_TICK_DURATION);
+    events.push(...simulation.getSnapshot().events.map((event) => ({ ...event, localTick: tick })));
+    simulation.tick += 1;
+  }
+
+  const bashEvents = events.filter((event) => event.bashDamage > 0);
+  const bash = bashEvents[0];
+  const faceX = cube.position.x + cubeHalfExtents.x;
+
+  assert.equal(events.some((event) => event.side !== 'right'), false);
+  assert.equal(events.length, 1);
+  assert.equal(bashEvents.length, 1);
+  assert(bash.bashDamage > 0.5);
+  assert.equal('scrapeDamage' in bash, false);
+  assert(Math.abs(bash.position.x - faceX) < 0.0001);
+  assert(bash.position.y >= cube.position.y - cubeHalfExtents.y);
+  assert(bash.position.y <= cube.position.y + cubeHalfExtents.y);
+  assert(bash.position.z >= cube.position.z - cubeHalfExtents.z);
+  assert(bash.position.z <= cube.position.z + cubeHalfExtents.z);
+});
+
+test('larger stalk radius increases damage through the impulse mass scale', () => {
+  const base = resolveDirectStalkHit(0.18).simulation.getSnapshot().events[0].amount;
+  const large = resolveDirectStalkHit(0.36).simulation.getSnapshot().events[0].amount;
+
+  assert(large > base * 3);
 });
 
 test('winner is declared when a player reaches zero health', () => {
   const simulation = new MatchSimulation();
   const attacker = simulation.getPlayerState(1);
   const defender = simulation.getPlayerState(2);
+  const stalk = attacker.stalks.left;
 
-  attacker.position.set(0, getTerrainHeight(0, 0.2), 0.2);
-  defender.position.set(0, getTerrainHeight(0, -1.6), -1.6);
-  attacker.rotationY = Math.PI;
-  defender.rotationY = 0;
+  defender.position.set(0, 0, 0);
   defender.health = 1;
+  stalk.nodes = [
+    new THREE.Vector3(3, 0, 0),
+    new THREE.Vector3(1.2, 0, 0),
+    new THREE.Vector3(1.6, 0, 0)
+  ];
+  stalk.previousNodes = [
+    new THREE.Vector3(3, 0, 0),
+    new THREE.Vector3(2.2, 0, 0),
+    new THREE.Vector3(2.6, 0, 0)
+  ];
+  stalk.incidentNodes = stalk.nodes.map((node) => node.clone());
+  stalk.incidentPreviousNodes = stalk.previousNodes.map((node) => node.clone());
 
-  stepMany(
-    simulation,
-    25,
-    { moveZ: -1, lockOnHeld: true, leftHeld: true, rightHeld: true, lookY: -18 },
-    { lockOnHeld: true }
-  );
+  simulation.resolveImpact(attacker, defender, MATCH_TICK_DURATION);
+  simulation.evaluateEndState();
 
   assert.equal(simulation.getSnapshot().phase, 'ended');
   assert.equal(simulation.getSnapshot().winnerSlot, 1);
@@ -394,8 +1028,8 @@ test('bot controller produces dual-stalk hold states when in range', () => {
   const player = simulation.getPlayerState(1);
   const enemy = simulation.getPlayerState(2);
 
-  player.position.set(0, getTerrainHeight(0, 0), 0);
-  enemy.position.set(0, getTerrainHeight(0, -3.2), -3.2);
+  setPlayerOnTerrain(player, 0, 0);
+  setPlayerOnTerrain(enemy, 0, -3.2);
 
   let input = null;
   for (let index = 0; index < 40; index += 1) {

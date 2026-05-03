@@ -16,6 +16,8 @@ export class NPCSnail extends SnailActor {
       position: new THREE.Vector3(0, 1, -6),
       speed: DEFAULT_BOT_PROFILE.freeMoveSpeed,
       turnSpeed: DEFAULT_BOT_PROFILE.turnSpeed,
+      groundHeight: DEFAULT_BOT_PROFILE.groundHeight,
+      spawnDropHeight: DEFAULT_BOT_PROFILE.spawnDropHeight,
       arenaRadius: DEFAULT_BOT_PROFILE.arenaRadius,
       bodyRadius: DEFAULT_BOT_PROFILE.bodyRadius,
       maxHealth: DEFAULT_BOT_PROFILE.maxHealth,

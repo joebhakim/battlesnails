@@ -6,6 +6,7 @@ export class MouseControls {
     this.pointerLocked = false;
     this.lookDeltaX = 0;
     this.lookDeltaY = 0;
+    this.turnDeltaX = 0;
     this.reachDelta = 0;
     this.lastClientX = null;
     this.lastClientY = null;
@@ -33,10 +34,7 @@ export class MouseControls {
       this.lastClientX = event.clientX;
       this.lastClientY = event.clientY;
 
-      if (this.primaryHeld || this.secondaryHeld) {
-        this.lookDeltaX += deltaX;
-        this.lookDeltaY += deltaY;
-      }
+      this.recordMouseDelta(deltaX, deltaY);
     });
 
     this.container.addEventListener('mousedown', (event) => {
@@ -74,6 +72,7 @@ export class MouseControls {
       this.secondaryHeld = false;
       this.lookDeltaX = 0;
       this.lookDeltaY = 0;
+      this.turnDeltaX = 0;
       this.reachDelta = 0;
       this.lastClientX = null;
       this.lastClientY = null;
@@ -93,19 +92,34 @@ export class MouseControls {
     }, { passive: false });
   }
 
+  recordMouseDelta(deltaX, deltaY) {
+    if (this.primaryHeld || this.secondaryHeld) {
+      this.lookDeltaX += deltaX;
+      this.lookDeltaY += deltaY;
+      return;
+    }
+
+    if (this.pointerLocked) {
+      this.turnDeltaX += deltaX;
+    }
+  }
+
   consumeCombatInput() {
+    const stalkEngaged = this.primaryHeld || this.secondaryHeld;
     const input = {
-      engaged: this.primaryHeld || this.secondaryHeld,
+      engaged: stalkEngaged,
       leftHeld: this.primaryHeld,
       rightHeld: this.secondaryHeld,
       lookX: this.lookDeltaX,
       lookY: this.lookDeltaY,
+      turnX: stalkEngaged ? 0 : this.turnDeltaX,
       reachDelta: this.reachDelta,
       pointerLocked: this.pointerLocked
     };
 
     this.lookDeltaX = 0;
     this.lookDeltaY = 0;
+    this.turnDeltaX = 0;
     this.reachDelta = 0;
     return input;
   }

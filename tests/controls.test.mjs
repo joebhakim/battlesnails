@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import * as THREE from 'three';
 
 import { KeyboardControls } from '../src/controls/KeyboardControls.js';
+import { MouseControls } from '../src/controls/MouseControls.js';
 import { PlayerSnail } from '../src/entities/PlayerSnail.js';
 import { NPCSnail } from '../src/entities/NPCSnail.js';
 import { CameraController } from '../src/game/CameraController.js';
@@ -14,7 +15,8 @@ import {
   createSimulationProfiles
 } from '../src/sim/Tuning.js';
 import { getLocalStalkDirection } from '../src/sim/StalkRope.js';
-import { getTerrainHeight, normalizeTerrainConfig } from '../src/world/Terrain.js';
+import { normalizeTerrainConfig } from '../src/world/Terrain.js';
+import { getTerrainBodyGroundHeight } from '../src/world/TerrainClearance.js';
 
 function createCombatInput({
   leftHeld = false,
@@ -41,6 +43,19 @@ function createKeyboardEvent(key) {
       this.defaultPrevented = true;
     }
   };
+}
+
+function createMouseControls(overrides = {}) {
+  return Object.assign(Object.create(MouseControls.prototype), {
+    primaryHeld: false,
+    secondaryHeld: false,
+    pointerLocked: true,
+    lookDeltaX: 0,
+    lookDeltaY: 0,
+    turnDeltaX: 0,
+    reachDelta: 0,
+    ...overrides
+  });
 }
 
 function vectorToPojo(vector) {
@@ -70,7 +85,6 @@ function createMatchState(actor, overrides = {}) {
     impactPower: actor.getImpactPower(),
     controlMode: actor.getCombatMode(),
     controlIntensity: actor.getControlIntensity(),
-    invincible: false,
     position: {
       x: actor.mesh.position.x,
       y: actor.mesh.position.y,
@@ -138,6 +152,32 @@ test('game local input forwards mouse wheel reach delta', () => {
 
   assert.equal(input.reachDelta, 2.5);
   assert.equal(input.leftHeld, true);
+});
+
+test('pointer-locked idle mouse movement turns without driving stalks', () => {
+  const controls = createMouseControls();
+
+  controls.recordMouseDelta(18, -9);
+  const input = controls.consumeCombatInput();
+
+  assert.equal(input.engaged, false);
+  assert.equal(input.turnX, 18);
+  assert.equal(input.lookX, 0);
+  assert.equal(input.lookY, 0);
+  assert.equal(controls.consumeCombatInput().turnX, 0);
+});
+
+test('held mouse movement drives stalks instead of free turning', () => {
+  const controls = createMouseControls({ primaryHeld: true });
+
+  controls.recordMouseDelta(18, -9);
+  const input = controls.consumeCombatInput();
+
+  assert.equal(input.engaged, true);
+  assert.equal(input.leftHeld, true);
+  assert.equal(input.turnX, 0);
+  assert.equal(input.lookX, 18);
+  assert.equal(input.lookY, -9);
 });
 
 test('right held input updates only the right stalk target', () => {
@@ -347,6 +387,29 @@ test('free backward input backpedals without rotating into a camera spin', () =>
   assert(Math.abs(angleDelta(endPlayer.rotationY, startRotation)) < 0.1);
 });
 
+test('free mouse turn rotates the shared simulation player in place', () => {
+  const simulation = new MatchSimulation();
+  const startRotation = simulation.getPlayerState(1).rotationY;
+
+  simulation.setPlayerInput(1, { turnX: 25, lockOnHeld: false });
+  simulation.step(MATCH_TICK_DURATION);
+
+  const endRotation = simulation.getPlayerState(1).rotationY;
+  assert(angleDelta(endRotation, startRotation) > 0.09);
+  assert(angleDelta(endRotation, startRotation) < 0.11);
+});
+
+test('lock-on target facing ignores free mouse turn input', () => {
+  const simulation = new MatchSimulation();
+  const startRotation = simulation.getPlayerState(1).rotationY;
+
+  simulation.setPlayerInput(1, { turnX: 25, lockOnHeld: true });
+  simulation.step(MATCH_TICK_DURATION);
+
+  const endRotation = simulation.getPlayerState(1).rotationY;
+  assert(Math.abs(angleDelta(endRotation, startRotation)) < 0.01);
+});
+
 test('player move can decouple movement direction from facing direction', () => {
   const player = new PlayerSnail();
   const moveDirection = new THREE.Vector3(1, 0, 0);
@@ -385,19 +448,23 @@ test('presentation actor defaults track shared tuning defaults', () => {
   assert.equal(player.gravity, DEFAULT_TUNING_CONFIG.bodyGravity);
   assert.equal(player.getImpactThreshold(), DEFAULT_TUNING_CONFIG.impactThreshold);
   assert.equal(player.stalkLength, DEFAULT_TUNING_CONFIG.stalkTotalLength);
+  assert.equal(player.groundHeight, DEFAULT_TUNING_CONFIG.aboveGroundHeight);
+  assert.equal(player.spawnDropHeight, DEFAULT_TUNING_CONFIG.spawnDropHeight);
 
   assert.equal(npc.speed, botProfile.freeMoveSpeed);
   assert.equal(npc.turnSpeed, botProfile.turnSpeed);
   assert.equal(npc.arenaRadius, botProfile.arenaRadius);
   assert.equal(npc.getImpactThreshold(), botProfile.impactThreshold);
   assert.equal(npc.stalkLength, botProfile.stalkTotalLength);
+  assert.equal(npc.groundHeight, botProfile.groundHeight);
+  assert.equal(npc.spawnDropHeight, botProfile.spawnDropHeight);
   assert.equal(npc.attackRange, botControllerConfig.attackRange);
   assert.equal(npc.preferredDistance, botControllerConfig.preferredDistance);
   assert.equal(npc.attackCooldown, botControllerConfig.attackCooldown);
 });
 
 test('jump lifts the player above ground before settling back down', () => {
-  const player = new PlayerSnail();
+  const player = new PlayerSnail({ spawnDropHeight: 0 });
   const startHeight = player.mesh.position.y;
 
   assert.equal(player.jump(), true);
@@ -413,14 +480,23 @@ test('jump lifts the player above ground before settling back down', () => {
 
 test('grounded player actor follows the bowl height when moving uphill', () => {
   const terrain = normalizeTerrainConfig({ preset: 'hyperboloid_bowl' });
-  const player = new PlayerSnail({ terrainConfig: terrain });
+  const player = new PlayerSnail({ terrainConfig: terrain, spawnDropHeight: 0 });
   const initialHeight = player.mesh.position.y;
 
   player.move(new THREE.Vector3(1, 0, 0), 0.5, new THREE.Vector3(1, 0, 0));
   player.update(1 / 60, createCombatInput());
 
   assert(player.mesh.position.y > initialHeight);
-  assert.equal(player.mesh.position.y, getTerrainHeight(player.mesh.position.x, player.mesh.position.z, terrain));
+  assert.equal(
+    player.mesh.position.y,
+    getTerrainBodyGroundHeight({
+      x: player.mesh.position.x,
+      z: player.mesh.position.z,
+      rotationY: player.mesh.rotation.y,
+      terrainConfig: terrain,
+      aboveGroundHeight: player.groundHeight
+    })
+  );
 });
 
 test('npc death burst scatters pieces, lasts about five seconds, then hides the corpse', () => {

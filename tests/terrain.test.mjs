@@ -4,9 +4,16 @@ import assert from 'node:assert/strict';
 import { MatchSimulation } from '../src/sim/MatchSimulation.js';
 import {
   DEFAULT_TERRAIN_CONFIG,
+  TERRAIN_PRESET_OPTIONS,
   getTerrainHeight,
   normalizeTerrainConfig
 } from '../src/world/Terrain.js';
+import {
+  BODY_CAPSULE_VISUAL_RADIUS,
+  DEFAULT_ABOVE_GROUND_HEIGHT,
+  estimateTerrainBodyClearance,
+  getTerrainBodyGroundHeight
+} from '../src/world/TerrainClearance.js';
 
 const SAMPLE_POINTS = [
   [0, 0],
@@ -85,8 +92,54 @@ test('shared simulation follows the selected terrain and snapshots include terra
 
   const player = simulation.getPlayerState(1);
   const snapshot = simulation.getSnapshot();
-  const expectedHeight = getTerrainHeight(player.position.x, player.position.z, snapshot.terrain);
+  const expectedHeight = getTerrainBodyGroundHeight({
+    x: player.position.x,
+    z: player.position.z,
+    rotationY: player.rotationY,
+    terrainConfig: snapshot.terrain,
+    aboveGroundHeight: player.profile.groundHeight
+  });
 
   assert.equal(snapshot.terrain.preset, 'sphere_dome');
-  assert.equal(player.position.y, expectedHeight);
+  assert.equal(player.position.y, expectedHeight + player.profile.spawnDropHeight);
+});
+
+test('terrain body clearance adds slope and curvature margin on conic starts', () => {
+  const start = { x: 0, z: 6 };
+  const clearances = Object.fromEntries(
+    TERRAIN_PRESET_OPTIONS.map((option) => [
+      option.value,
+      estimateTerrainBodyClearance({
+        ...start,
+        rotationY: 0,
+        terrainConfig: createTerrainConfig({ preset: option.value })
+      })
+    ])
+  );
+
+  assert.equal(clearances.plane, BODY_CAPSULE_VISUAL_RADIUS + DEFAULT_ABOVE_GROUND_HEIGHT);
+  assert(clearances.hyperboloid_bowl > clearances.plane);
+  assert(clearances.cone > clearances.hyperboloid_bowl);
+  assert(clearances.paraboloid_bowl > clearances.cone);
+  assert(clearances.saddle > clearances.cone);
+});
+
+test('terrain body clearance is numerically derived from terrain shape', () => {
+  const start = { x: 0, z: 6, rotationY: 0 };
+  const shallow = estimateTerrainBodyClearance({
+    ...start,
+    terrainConfig: createTerrainConfig({
+      preset: 'paraboloid_bowl',
+      verticalScale: 4
+    })
+  });
+  const steep = estimateTerrainBodyClearance({
+    ...start,
+    terrainConfig: createTerrainConfig({
+      preset: 'paraboloid_bowl',
+      verticalScale: 20
+    })
+  });
+
+  assert(steep > shallow);
 });

@@ -1,8 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import * as THREE from 'three';
 
 import { TestSession } from '../src/game/TestSession.js';
 import { MatchSimulation, MATCH_TICK_DURATION } from '../src/sim/MatchSimulation.js';
+import { TEST_PLAYGROUND_FIXTURES } from '../src/sim/TestFixtures.js';
 import { DEFAULT_TUNING_CONFIG, TUNING_STORAGE_KEY, normalizeTuningConfig } from '../src/sim/Tuning.js';
 
 class MemoryStorage {
@@ -23,6 +25,52 @@ class MemoryStorage {
   }
 }
 
+function forceDirectStalkHit(attacker, target) {
+  const stalk = attacker.stalks.left;
+  stalk.nodes = [
+    new THREE.Vector3(target.position.x + 3, target.position.y, target.position.z),
+    new THREE.Vector3(target.position.x + 1.2, target.position.y, target.position.z),
+    new THREE.Vector3(target.position.x + 1.6, target.position.y, target.position.z)
+  ];
+  stalk.previousNodes = [
+    new THREE.Vector3(target.position.x + 3, target.position.y, target.position.z),
+    new THREE.Vector3(target.position.x + 2.2, target.position.y, target.position.z),
+    new THREE.Vector3(target.position.x + 2.6, target.position.y, target.position.z)
+  ];
+  stalk.incidentNodes = stalk.nodes.map((node) => node.clone());
+  stalk.incidentPreviousNodes = stalk.previousNodes.map((node) => node.clone());
+}
+
+function forceClearStalk(attacker, target) {
+  const stalk = attacker.stalks.left;
+  stalk.nodes = [
+    new THREE.Vector3(target.position.x + 6, target.position.y, target.position.z),
+    new THREE.Vector3(target.position.x + 5.5, target.position.y, target.position.z),
+    new THREE.Vector3(target.position.x + 5, target.position.y, target.position.z)
+  ];
+  stalk.previousNodes = stalk.nodes.map((node) => node.clone());
+  stalk.incidentNodes = stalk.nodes.map((node) => node.clone());
+  stalk.incidentPreviousNodes = stalk.previousNodes.map((node) => node.clone());
+}
+
+function resolveRepeatedDirectHits(simulation, attacker, target, count = 8) {
+  const eventCounts = [];
+  for (let index = 0; index < count; index += 1) {
+    simulation.events = [];
+    forceDirectStalkHit(attacker, target);
+    simulation.resolveImpact(attacker, target, MATCH_TICK_DURATION);
+    eventCounts.push(simulation.getSnapshot().events.length);
+  }
+  return eventCounts;
+}
+
+function resolveForcedContact(simulation, attacker, target, forceContact) {
+  simulation.events = [];
+  forceContact(attacker, target);
+  simulation.resolveImpact(attacker, target, MATCH_TICK_DURATION);
+  return simulation.getSnapshot().events.length;
+}
+
 test('normalizeTuningConfig clamps and rounds slider values', () => {
   const tuning = normalizeTuningConfig({
     botCount: 99,
@@ -37,18 +85,99 @@ test('normalizeTuningConfig clamps and rounds slider values', () => {
   assert.equal(tuning.stalkDamping, 0.999);
   assert.equal(tuning.bothAttackChance, 0);
   assert.equal(tuning.stalkControlMode, 'trackball');
+
+  const migrated = normalizeTuningConfig({
+    aboveGroundHeight: 8
+  });
+  assert.equal(migrated.aboveGroundHeight, DEFAULT_TUNING_CONFIG.aboveGroundHeight);
+  assert.equal(migrated.spawnDropHeight, 8);
 });
 
 test('test mode structural bot count changes rebuild the local arena immediately', () => {
   const session = new TestSession({ storage: new MemoryStorage() });
 
-  assert.equal(session.getSnapshot().players.length, 2);
+  assert.equal(session.getSnapshot().players.length, 2 + TEST_PLAYGROUND_FIXTURES.length);
 
   const result = session.setTuningValue('botCount', 5);
 
   assert.equal(result.rebuilt, true);
-  assert.equal(session.getSnapshot().players.length, 6);
+  assert.equal(session.getSnapshot().players.length, 6 + TEST_PLAYGROUND_FIXTURES.length);
   assert.equal(session.getTestPanelState().livingBots, 5);
+});
+
+test('test mode includes static playground fixtures as enemy objects', () => {
+  const session = new TestSession({ storage: new MemoryStorage() });
+  const players = session.getSnapshot().players;
+  const fixtures = players.filter((player) => player.profileName === 'fixture');
+
+  assert.equal(fixtures.length, TEST_PLAYGROUND_FIXTURES.length);
+  assert(fixtures.some((fixture) => (
+    fixture.fixtureKind === 'cube' &&
+    fixture.displayName === 'Karl the Cube' &&
+    fixture.immortal &&
+    fixture.collisionShape.type === 'box'
+  )));
+  assert(fixtures.some((fixture) => (
+    fixture.fixtureKind === 'cylinder' &&
+    fixture.displayName === "Karl's Brother the Cylinder" &&
+    fixture.immortal &&
+    fixture.collisionShape.type === 'cylinder'
+  )));
+  assert(fixtures.some((fixture) => (
+    fixture.fixtureKind === 'snail' &&
+    fixture.displayName === 'Sifu Snail' &&
+    fixture.immortal &&
+    fixture.collisionShape.type === 'sphere'
+  )));
+  assert.equal(session.getTestPanelState().fixtures, TEST_PLAYGROUND_FIXTURES.length);
+});
+
+test('held contact does not produce repeated bash damage without separation', () => {
+  const simulation = new MatchSimulation({
+    mode: 'test',
+    players: [
+      { slot: 1, profile: 'human', connected: true },
+      { slot: 2, profile: 'bot', connected: true },
+      TEST_PLAYGROUND_FIXTURES.find((fixture) => fixture.fixtureKind === 'snail')
+    ]
+  });
+  const attacker = simulation.getPlayerState(1);
+  const target = simulation.getPlayerState(2);
+  const sifu = simulation.getPlayerState(9003);
+
+  target.health = 600;
+  assert.deepEqual(
+    resolveRepeatedDirectHits(simulation, attacker, target),
+    [1, 0, 0, 0, 0, 0, 0, 0]
+  );
+  assert.deepEqual(
+    resolveRepeatedDirectHits(simulation, attacker, sifu),
+    [1, 0, 0, 0, 0, 0, 0, 0]
+  );
+});
+
+test('brief contact flicker does not re-arm bash damage', () => {
+  const simulation = new MatchSimulation({
+    mode: 'test',
+    players: [
+      { slot: 1, profile: 'human', connected: true },
+      { slot: 2, profile: 'bot', connected: true }
+    ]
+  });
+  const attacker = simulation.getPlayerState(1);
+  const target = simulation.getPlayerState(2);
+  target.health = 600;
+
+  assert.equal(resolveForcedContact(simulation, attacker, target, forceDirectStalkHit), 1);
+  for (let index = 0; index < 3; index += 1) {
+    assert.equal(resolveForcedContact(simulation, attacker, target, forceClearStalk), 0);
+  }
+  assert.equal(resolveForcedContact(simulation, attacker, target, forceDirectStalkHit), 0);
+
+  for (let index = 0; index < 6; index += 1) {
+    assert.equal(resolveForcedContact(simulation, attacker, target, forceClearStalk), 0);
+  }
+  assert.equal(resolveForcedContact(simulation, attacker, target, forceDirectStalkHit), 1);
 });
 
 test('test mode terrain changes are structural and rebuild the arena snapshot', () => {
@@ -75,7 +204,10 @@ test('test mode keeps spawned enemies static for lab work', () => {
 
   const after = session.getSnapshot().players.find((player) => player.slot === 2);
   assert.equal(after.rotationY, before.rotationY);
-  assert.deepEqual(after.position, before.position);
+  assert.equal(after.position.x, before.position.x);
+  assert.equal(after.position.z, before.position.z);
+  assert(after.position.y < before.position.y);
+  assert.equal(after.grounded, true);
   assert.equal(after.controlMode, 'idle');
 });
 

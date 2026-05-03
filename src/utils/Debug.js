@@ -8,8 +8,10 @@ export class Debug {
     this.previousOpponentHealth = null;
     this.previousPointerLock = false;
     this.previousImpactReady = false;
+    this.seenDamageEvents = new Set();
+    this.seenDamageEventQueue = [];
     this.events = [];
-    this.maxEvents = 6;
+    this.maxEvents = 12;
 
     this.debugToggle = document.getElementById('debug-toggle');
     this.debugInfo = document.getElementById('debug-info');
@@ -25,7 +27,6 @@ export class Debug {
     this.eyeStalkPosition = document.getElementById('eye-stalk-position');
     this.opponentBodyPosition = document.getElementById('opponent-body-position');
     this.opponentBodyRadius = document.getElementById('opponent-body-radius');
-    this.opponentInvincibility = document.getElementById('opponent-invincibility');
     this.opponentHealth = document.getElementById('opponent-health');
     this.eventLog = document.getElementById('event-log');
     this.debugUpdateBtn = document.getElementById('debug-update');
@@ -89,7 +90,6 @@ export class Debug {
       this.eyeStalkPosition.textContent = 'x: 0.00, y: 0.00, z: 0.00';
       this.opponentBodyPosition.textContent = 'x: 0.00, y: 0.00, z: 0.00';
       this.opponentBodyRadius.textContent = '0.00';
-      this.opponentInvincibility.textContent = 'No';
       this.opponentHealth.textContent = opponentState
         ? `${opponentState.health}/${opponentState.maxHealth}`
         : '0/0';
@@ -118,8 +118,6 @@ export class Debug {
       this.opponentState.textContent = `${debugState.sessionState} / ${opponentState.controlMode}`;
       this.opponentBodyPosition.textContent = `x: ${opponentBody.x.toFixed(2)}, y: ${opponentBody.y.toFixed(2)}, z: ${opponentBody.z.toFixed(2)}`;
       this.opponentBodyRadius.textContent = opponentView.getBodyRadius().toFixed(2);
-      this.opponentInvincibility.textContent = opponentState.invincible ? 'Yes' : 'No';
-      this.opponentInvincibility.className = opponentState.invincible ? 'invincible-true' : '';
       this.opponentHealth.textContent = `${opponentState.health}/${opponentState.maxHealth}`;
     } else {
       this.playerToNpcDistance.textContent = '0.00';
@@ -129,8 +127,6 @@ export class Debug {
       this.opponentState.textContent = debugState.sessionState;
       this.opponentBodyPosition.textContent = 'x: 0.00, y: 0.00, z: 0.00';
       this.opponentBodyRadius.textContent = '0.00';
-      this.opponentInvincibility.textContent = 'No';
-      this.opponentInvincibility.className = '';
       this.opponentHealth.textContent = '0/0';
     }
 
@@ -165,12 +161,42 @@ export class Debug {
     }
     this.previousOpponentHealth = debugState.opponentPlayer?.health ?? null;
 
+    for (const [index, event] of (debugState.events ?? []).entries()) {
+      if (event?.type !== 'damage') {
+        continue;
+      }
+
+      const eventId = event.id ?? `${event.tick}:${event.attackerSlot}:${event.targetSlot}:${event.side}:${index}`;
+      if (this.seenDamageEvents.has(eventId)) {
+        continue;
+      }
+
+      this.rememberDamageEvent(eventId);
+      this.addEvent(
+        `Damage ${this.formatDamage(event.amount)} ${event.side}: bash ${this.formatDamage(event.bashDamage)}`
+      );
+    }
+
     const impactReady = Boolean(debugState.localPlayer && debugState.playerView &&
       debugState.localPlayer.impactPower >= debugState.playerView.getImpactThreshold());
     if (impactReady && !this.previousImpactReady) {
       this.addEvent('Player impact threshold reached');
     }
     this.previousImpactReady = impactReady;
+  }
+
+  rememberDamageEvent(eventId) {
+    this.seenDamageEvents.add(eventId);
+    this.seenDamageEventQueue.push(eventId);
+
+    while (this.seenDamageEventQueue.length > 160) {
+      this.seenDamageEvents.delete(this.seenDamageEventQueue.shift());
+    }
+  }
+
+  formatDamage(value) {
+    const damage = Number.isFinite(value) ? Math.max(0, value) : 0;
+    return damage >= 1 ? damage.toFixed(1) : damage.toFixed(2);
   }
 
   addEvent(message) {

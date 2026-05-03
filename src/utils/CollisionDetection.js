@@ -1,6 +1,43 @@
 import * as THREE from 'three';
 
-import { evaluateStalkImpact } from '../sim/StalkRope.js';
+import {
+  STALK_EYE_BOUNCE_RESTITUTION,
+  STALK_EYE_RADIUS_SCALE,
+  STALK_SEGMENT_RADIUS,
+  evaluateStalkImpact
+} from '../sim/StalkRope.js';
+
+const IMPACT_EPSILON = 0.000001;
+
+function getSampleSurfaceNormal(targetBodyPosition, sample) {
+  const normal = sample?.surfaceNormal?.clone()
+    ?? sample?.center?.clone().sub(targetBodyPosition)
+    ?? new THREE.Vector3(1, 0, 0);
+
+  if (normal.lengthSq() <= IMPACT_EPSILON) {
+    return new THREE.Vector3(1, 0, 0);
+  }
+
+  return normal.normalize();
+}
+
+function computeReflectedImpactPower(attacker, targetSnail, targetBodyPosition, sample) {
+  if (!sample) {
+    return 0;
+  }
+
+  const surfaceNormal = getSampleSurfaceNormal(targetBodyPosition, sample);
+  const targetVelocity = targetSnail.getBodyVelocity?.() ?? new THREE.Vector3();
+  const attackerVelocity = attacker.getBodyVelocity?.() ?? new THREE.Vector3();
+  const movementAssist = Math.max(0, -attackerVelocity.dot(surfaceNormal));
+  const incidentVelocity = sample.velocity.clone()
+    .sub(targetVelocity)
+    .addScaledVector(surfaceNormal, -movementAssist * attacker.getImpactMomentumFactor());
+  const normalSpeed = Math.max(0, -incidentVelocity.dot(surfaceNormal));
+  const radius = Math.max(0.0001, sample.radius ?? STALK_SEGMENT_RADIUS);
+  const massScale = Math.min(4, Math.max(0.25, (radius / STALK_SEGMENT_RADIUS) ** 2));
+  return normalSpeed * (1 + STALK_EYE_BOUNCE_RESTITUTION) * massScale;
+}
 
 export class CollisionDetection {
   constructor() {
@@ -20,13 +57,14 @@ export class CollisionDetection {
   checkImpactCollision(attacker, targetSnail) {
     const targetBodyPosition = targetSnail.getBodyPosition();
     const targetBodyRadius = targetSnail.getBodyRadius();
+    const targetCollisionShape = targetSnail.getCollisionShape?.() ?? targetSnail.collisionShape ?? null;
     const movementAssistVelocity = attacker.getBodyVelocity();
     const stalkSources = attacker.getStalkCollisionSources?.() ?? [
       {
         side: 'left',
         tipPosition: attacker.getEyeStalkPosition(),
         tipVelocity: attacker.getEyeStalkVelocity(),
-        segmentSamples: attacker.getStalkSegmentSamples()
+        segmentRadius: STALK_SEGMENT_RADIUS
       }
     ];
 
@@ -40,12 +78,24 @@ export class CollisionDetection {
     };
 
     for (const source of stalkSources) {
+      const eyeSample = {
+        index: Number.MAX_SAFE_INTEGER,
+        isEye: true,
+        start: source.tipPosition.clone(),
+        end: source.tipPosition.clone(),
+        center: source.tipPosition.clone(),
+        velocity: source.tipVelocity.clone(),
+        radius: (source.segmentRadius ?? STALK_SEGMENT_RADIUS) * STALK_EYE_RADIUS_SCALE,
+        direction: new THREE.Vector3(0, 0, 1),
+        length: 0
+      };
       const impactResult = evaluateStalkImpact(
-        source.segmentSamples,
+        [eyeSample],
         targetBodyPosition,
         targetBodyRadius,
         movementAssistVelocity,
-        attacker.getImpactMomentumFactor()
+        attacker.getImpactMomentumFactor(),
+        targetCollisionShape
       );
       const impactPower = impactResult.collision
         ? impactResult.contactImpactPower
@@ -66,7 +116,7 @@ export class CollisionDetection {
     const activeSample = selectedResult.contactSample ?? selectedResult.strongestSample;
     const distance = activeSample?.surfaceDistance ?? selectedSource.tipPosition.distanceTo(targetBodyPosition);
     const impactPower = selectedResult.collision
-      ? selectedResult.contactImpactPower
+      ? computeReflectedImpactPower(attacker, targetSnail, targetBodyPosition, selectedResult.contactSample)
       : selectedResult.impactPower;
     const closingSpeed = activeSample?.closingSpeed ?? 0;
     const movementAssist = activeSample?.movementAssist ?? 0;

@@ -19,7 +19,8 @@ import {
   getStalkRootWorldPosition,
   simulateStalkRope
 } from '../sim/StalkRope.js';
-import { DEFAULT_TERRAIN_CONFIG, getTerrainHeight, normalizeTerrainConfig } from '../world/Terrain.js';
+import { DEFAULT_TERRAIN_CONFIG, normalizeTerrainConfig } from '../world/Terrain.js';
+import { getTerrainBodyGroundHeight } from '../world/TerrainClearance.js';
 
 const LOCAL_UP = new THREE.Vector3(0, 1, 0);
 const LOCAL_FORWARD = new THREE.Vector3(0, 0, 1);
@@ -59,13 +60,12 @@ export class SnailActor {
     this.speed = config.speed;
     this.turnSpeed = config.turnSpeed;
     this.groundHeight = config.groundHeight ?? 1;
+    this.spawnDropHeight = Math.max(0, config.spawnDropHeight ?? 0);
     this.arenaRadius = config.arenaRadius;
     this.terrainConfig = normalizeTerrainConfig(config.terrainConfig ?? DEFAULT_TERRAIN_CONFIG);
 
     this.health = config.health ?? config.maxHealth ?? 3;
     this.maxHealth = config.maxHealth ?? this.health;
-    this.invincibilityDuration = config.invincibilityDuration ?? 0.45;
-    this.invincibilityTime = 0;
     this.damageFlashDuration = config.damageFlashDuration ?? 0.2;
     this.damageFlashTime = 0;
     this.isDamaged = false;
@@ -99,7 +99,7 @@ export class SnailActor {
 
     this.mesh = new THREE.Group();
     this.mesh.position.copy(config.position);
-    this.mesh.position.y = this.getGroundHeightAt(this.mesh.position.x, this.mesh.position.z);
+    this.mesh.position.y = this.getGroundHeightAt(this.mesh.position.x, this.mesh.position.z) + this.spawnDropHeight;
 
     this.body = this.createBody(config.bodyColor);
     this.shell = this.createShell(config.shellColor);
@@ -144,7 +144,6 @@ export class SnailActor {
 
     this.originalBodyColor = material.color.clone();
     this.damageColor = new THREE.Color(0xff4d4d);
-    this.invincibilityColor = new THREE.Color(0xffd166);
 
     const body = new THREE.Mesh(new THREE.CapsuleGeometry(1, 2, 4, 8), material);
     body.rotation.x = Math.PI / 2;
@@ -302,7 +301,13 @@ export class SnailActor {
   }
 
   getGroundHeightAt(x, z) {
-    return getTerrainHeight(x, z, this.terrainConfig);
+    return getTerrainBodyGroundHeight({
+      x,
+      z,
+      rotationY: this.mesh.rotation.y,
+      terrainConfig: this.terrainConfig,
+      aboveGroundHeight: this.groundHeight
+    });
   }
 
   getGroundHeight() {
@@ -521,25 +526,16 @@ export class SnailActor {
   }
 
   updateDamageState(delta) {
-    if (this.invincibilityTime > 0) {
-      this.invincibilityTime = Math.max(0, this.invincibilityTime - delta);
-      const pulse = (Math.sin((this.invincibilityDuration - this.invincibilityTime) * 16) + 1) / 2;
-      this.body.material.color.copy(this.originalBodyColor).lerp(this.invincibilityColor, pulse * 0.8);
-    }
-
     if (this.isDamaged) {
       this.damageFlashTime += delta;
       if (this.damageFlashTime >= this.damageFlashDuration) {
         this.isDamaged = false;
         this.damageFlashTime = 0;
-
-        if (!this.isInvincible()) {
-          this.body.material.color.copy(this.originalBodyColor);
-        }
+        this.body.material.color.copy(this.originalBodyColor);
       }
     }
 
-    if (!this.isDamaged && !this.isInvincible()) {
+    if (!this.isDamaged) {
       this.body.material.color.copy(this.originalBodyColor);
     }
   }
@@ -667,7 +663,6 @@ export class SnailActor {
     this.impactPower = state.impactPower;
     this.controlMode = state.controlMode;
     this.controlIntensity = state.controlIntensity ?? 0;
-    this.invincibilityTime = state.invincible ? this.invincibilityDuration * 0.5 : 0;
 
     this.mesh.position.set(state.position.x, state.position.y, state.position.z);
     this.mesh.rotation.y = state.rotationY;
@@ -766,20 +761,15 @@ export class SnailActor {
   }
 
   takeDamage(amount = 1) {
-    if (this.isInvincible() || this.health <= 0) {
+    if (this.health <= 0) {
       return false;
     }
 
     this.health = Math.max(0, this.health - amount);
-    this.invincibilityTime = this.invincibilityDuration;
     this.isDamaged = true;
     this.damageFlashTime = 0;
     this.body.material.color.copy(this.damageColor);
     return true;
-  }
-
-  isInvincible() {
-    return this.invincibilityTime > 0;
   }
 
   getStalk(side = 'left') {
@@ -821,6 +811,7 @@ export class SnailActor {
       side,
       tipPosition: this.getEyeStalkPosition(side),
       tipVelocity: this.getEyeStalkVelocity(side),
+      segmentRadius: this.getStalkSegmentRadius(side),
       segmentSamples: this.getStalkSegmentSamples(side)
     }));
   }

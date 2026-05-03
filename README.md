@@ -3,7 +3,7 @@
 BattleSnails is a deliberately jarring third-person arena game built with Three.js and Vite. You control a blue snail, drive two floppy eye stalks with held mouse input, fight across configurable terrain, and leave permanent wet trails that turn the map into a speed trap.
 
 The project currently supports four modes:
-- `Single Player`: one human vs one bot with persisted match knobs
+- `Single Player`: one human vs a simple enemy preset, with persisted stage and encounter options
 - `Test Mode`: a local tuning lab with staged sliders, configurable bot count, and an explicit apply step
 - `Simulator`: a visual balance harness that batch-runs a simulated humanlike player against the bot
 - `LAN Multiplayer`: two human players plus a crowd of NPC snails driven by the server
@@ -55,9 +55,9 @@ npm run mp:server
 
 ## Modes And Rules
 
-- `Single Player`: one human player vs one bot, with staged tuning controls for stage shape, HP, movement, combat, stalk, and bot behavior.
+- `Single Player`: one human player vs a simple encounter preset chosen from the start menu.
 - `Test Mode`: one human player plus `0..40` local bots, staged tuning controls, local browser persistence for the last-used lab settings, and switchable terrain presets.
-- `Simulator`: an automated browser-visible balance runner. It runs an average-but-skilled simulated humanlike player against the existing bot, reports aggregate metrics, replays a representative match, and uses the same duel knobs for stage shape, HP, movement, combat, stalk, and bot behavior.
+- `Simulator`: an automated browser-visible balance runner. It runs an average-but-skilled simulated humanlike player across selected stage/enemy-mode searches, reports aggregate and per-scenario metrics, replays a representative match, and uses the same duel knobs for HP, movement, combat, stalk, and bot behavior.
 - `LAN Multiplayer`: two human players plus `40` NPC snails by default.
 - Human players have `600 HP` by default.
 - Bots and NPCs have `600 HP` by default.
@@ -75,11 +75,12 @@ npm run mp:server
 - `Space`: jump.
 - Hold `Shift`: enable lock-on framing and target-facing behavior while held.
 - Click the arena: capture the mouse with pointer lock.
+- With pointer lock and no stalk button held, move the mouse horizontally to turn the snail in free mode.
 - `Esc`: release pointer lock.
 - Hold `Left mouse` and move the mouse: innervate the left stalk.
 - Hold `Right mouse` and move the mouse: innervate the right stalk.
 - Hold both mouse buttons: drive both stalks with the same mouse motion.
-- While holding a stalk, scroll the mouse wheel to pull its target closer or push it farther forward.
+- While holding a stalk in the default top-down mode, scroll the mouse wheel to raise or lower the stalk control plane. Other stalk modes use the wheel for reach.
 - Release a stalk: it stops actively steering and continues as an inertial rope under gravity, damping, and constraints.
 - `Music`: toggle the procedural soundtrack.
 - `Debug`: show or hide the text-only debug panel.
@@ -89,7 +90,8 @@ On-screen HUD:
 - Top right: current enemy or opponent health.
 - Bottom left: left stalk top-down plane widget showing target point vs current point.
 - Bottom right: right stalk top-down plane widget showing target point vs current point.
-- Single Player, Test Mode, and Simulator: right-side tuning panel for terrain, HP, movement, trail, combat, stalk, and bot-AI tuning.
+- Single Player: stage and enemy setup options appear before the match starts.
+- Test Mode and Simulator: right-side tuning panel for terrain, HP, movement, trail, combat, stalk, bot-AI tuning, and simulator search scope.
 
 ## Gameplay Flow
 
@@ -102,8 +104,8 @@ On-screen HUD:
 
 Single-player win condition:
 - The match ends when only one combatant is left alive.
-- Use the right-side panel to stage stage-shape, HP, movement, combat, stalk, and bot changes, then apply them explicitly.
-- The current single-player knob set is saved locally in the browser and remains separate from Test Mode settings.
+- Pick a stage and enemy setup from the start menu before the match begins.
+- The current single-player options are saved locally in the browser and remain separate from Test Mode settings.
 
 Test mode flow:
 - The match does not end automatically.
@@ -112,10 +114,11 @@ Test mode flow:
 
 Simulator flow:
 - The right-side panel runs a seeded batch of `100` matches by default.
-- Stage shape, HP, movement, combat, stalk, and bot settings can be staged and applied before a batch.
+- Stage search, enemy-mode search, HP, movement, combat, stalk, and bot settings can be staged and applied before a batch.
+- Search scope can run only the current stage/mode or expand across all stage presets and all single-player enemy modes.
 - The simulated human uses geometric field of view, short noisy target memory, imperfect movement, and jerky slash-like stalk inputs.
 - After the batch completes, the arena shows a representative visual match.
-- The panel reports win rate, duration, damage, hit events, trail usage, remaining HP, and can copy the report as JSON.
+- The panel reports overall and per-scenario win rate, duration, damage, hit events, trail usage, remaining HP, and can copy the report as JSON.
 
 LAN multiplayer win condition:
 - The match ends when only one human player remains alive, even if NPCs are still alive.
@@ -146,14 +149,15 @@ LAN multiplayer win condition:
 - Non-top-down modes still use scroll-wheel reach control. Held stalks also have outside-of-dome target sweep smoothing and a tunable turgidity value that blends from flaccid rope motion toward a stiff line to the target.
 - A held stalk is pulled toward the requested joystick direction.
 - An unheld stalk becomes inertial and keeps moving until gravity, damping, collisions, and constraints change it.
-- Any segment on a stalk can contribute to a hit; the strongest segment contact on that stalk is what matters for damage.
+- Only eye contacts currently deal damage; shaft contact is collision-only.
 
 ### Damage Model
 
 - Hits are evaluated from actual stalk movement, not from a canned attack animation or strike window.
-- The simulation combines stalk segment velocity with body movement to measure impact quality.
-- Each stalk can deal damage if its strongest contact exceeds the threshold; stronger hits can remove more HP.
-- Short invulnerability windows prevent repeated damage from one lingering collision.
+- The simulation combines eye velocity with body movement to measure normal impact quality.
+- Damage is bash-only: tangent sliding can bounce or slide, but it does not remove HP.
+- Each stalk can deal damage if its strongest eye contact exceeds the threshold; stronger hits can remove more HP.
+- Contact hysteresis prevents a held collision from re-arming bash damage until it separates or substantially renews its impulse.
 
 ### Wet Trails
 
@@ -227,13 +231,15 @@ Run the controls probe:
 npm run probe:controls
 ```
 
+Every so often, re-run a quick online-readiness profile: measure authoritative tick cost, snapshot JSON size, stringify time, and estimated outbound bandwidth for both a 2-player room and the 2-player + 40-NPC LAN crowd. Record notable results in `WORKING_MEMORY.md`.
+
 ## Architecture
 
 <details>
 <summary>Main runtime and rendering</summary>
 
 - `src/game/Game.js`: top-level runtime that owns the scene, renderer, actors, input, UI, debug, and the active session.
-- `src/game/SinglePlayerSession.js`: local duel mode with persisted match knobs and one fixed bot opponent.
+- `src/game/SinglePlayerSession.js`: local solo mode with persisted stage and encounter presets.
 - `src/game/TestSession.js`: local endless tuning lab with persisted slider state and dynamic bot count.
 - `src/game/Scene.js`: lights, arena mesh, and other scene setup.
 - `src/game/Renderer.js`: Three.js renderer setup with fallback profiles for weaker WebGL environments.
@@ -255,7 +261,7 @@ npm run probe:controls
 <details>
 <summary>Input, HUD, and debug tools</summary>
 
-- `src/controls/MouseControls.js`: pointer lock, held-button stalk ownership, and relative mouse delta capture.
+- `src/controls/MouseControls.js`: pointer lock, idle free-turn capture, held-button stalk ownership, and relative mouse delta capture.
 - `src/controls/KeyboardControls.js`: movement axes, lock-on hold state, and jump requests.
 - `src/utils/UI.js`: menu, overlays, HUD bars, stalk plane widgets, and music controls.
 - `src/sim/Tuning.js`: shared tuning schema, default values, normalization, and bot/simulation profile derivation.
@@ -280,7 +286,7 @@ npm run probe:controls
 <details>
 <summary>Sessions and networking</summary>
 
-- `src/game/SinglePlayerSession.js`: runs the shared simulation locally against one bot.
+- `src/game/SinglePlayerSession.js`: runs the shared simulation locally against a simple enemy preset.
 - `src/game/SimulatorSession.js`: runs visual humanlike-vs-bot balance batches and exposes simulator reports.
 - `src/game/MultiplayerSession.js`: connects to the LAN server, sends local input, and renders authoritative snapshots.
 - `src/network/LocalMultiplayerClient.js`: minimal browser WebSocket client for the fixed LAN room.
@@ -308,7 +314,6 @@ npm run probe:controls
 - current impact power vs threshold
 - mouse capture state
 - current opponent state
-- current opponent invincibility
 - current opponent health
 - current local stalk-tip position
 - current opponent body position and radius
@@ -340,7 +345,8 @@ The current debug mode is text-only. It does not add scene helpers, wireframes, 
 
 - Movement remains camera-relative.
 - Lock-on is hold-to-enable, not a toggle.
-- Mouse input is reserved for stalk control rather than orbit camera control.
+- Pointer-locked idle mouse X turns the snail in free mode; held mouse buttons reserve mouse motion for stalk control.
+- Mouse input does not orbit the camera.
 
 ### Systems that were removed or replaced
 
