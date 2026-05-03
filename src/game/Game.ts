@@ -7,6 +7,7 @@ import { PlayerSnail } from '../entities/PlayerSnail.js';
 import { NPCSnail } from '../entities/NPCSnail.js';
 import { TestFixtureActor } from '../entities/TestFixtureActor.js';
 import { WorldPropActor } from '../entities/WorldPropActor.js';
+import { WorldPropBatchActor, shouldRenderWorldPropIndividually } from '../entities/WorldPropBatchActor.js';
 import { MouseControls } from '../controls/MouseControls.js';
 import { KeyboardControls } from '../controls/KeyboardControls.js';
 import { CollisionDetection } from '../utils/CollisionDetection.js';
@@ -62,6 +63,7 @@ function createSifuStatueActor(state) {
 export class Game {
   declare otherActorViews: any;
   declare worldPropViews: any;
+  declare worldPropBatch: any;
   declare audio: any;
   declare camera: any;
   declare cameraController: any;
@@ -100,6 +102,7 @@ export class Game {
     this.playerSnail = null;
     this.otherActorViews = new Map();
     this.worldPropViews = new Map();
+    this.worldPropBatch = null;
     this.mouseControls = null;
     this.keyboardControls = null;
     this.collisionDetection = null;
@@ -354,11 +357,19 @@ export class Game {
       for (const actor of this.worldPropViews.values()) {
         actor.update(delta, localPlayerPosition);
       }
+      this.worldPropBatch?.update(localPlayerPosition);
       return;
     }
 
     this.lastWorldPropsReference = worldProps;
     const desiredIds = new Set(worldProps.map((prop) => prop.id));
+    const batchEntries = [];
+
+    if (this.worldPropBatch) {
+      this.scene.scene.remove(this.worldPropBatch.mesh);
+      this.worldPropBatch.dispose();
+      this.worldPropBatch = null;
+    }
 
     for (const [id, actor] of this.worldPropViews.entries()) {
       if (desiredIds.has(id)) {
@@ -379,7 +390,18 @@ export class Game {
         actor.applyPropState(prop);
       }
 
+      const renderIndividually = shouldRenderWorldPropIndividually(prop);
+      actor.setBodyVisible(renderIndividually);
+      if (!renderIndividually) {
+        batchEntries.push({ prop, actor });
+      }
       actor.update(delta, localPlayerPosition);
+    }
+
+    if (batchEntries.length > 0) {
+      this.worldPropBatch = new WorldPropBatchActor(batchEntries);
+      this.scene.scene.add(this.worldPropBatch.mesh);
+      this.worldPropBatch.update(localPlayerPosition);
     }
   }
 
@@ -635,6 +657,11 @@ export class Game {
       this.scene.scene.remove(actor.mesh);
     }
     this.worldPropViews.clear();
+    if (this.worldPropBatch) {
+      this.scene.scene.remove(this.worldPropBatch.mesh);
+      this.worldPropBatch.dispose();
+      this.worldPropBatch = null;
+    }
     this.lastWorldPropsReference = null;
   }
 

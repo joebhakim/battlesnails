@@ -30,11 +30,7 @@ export class Scene {
 
     const directionalLight = new THREE.DirectionalLight(0xffffff, 1.2);
     directionalLight.position.set(8, 18, 10);
-    directionalLight.castShadow = true;
-    directionalLight.shadow.mapSize.width = 1024;
-    directionalLight.shadow.mapSize.height = 1024;
-    directionalLight.shadow.camera.near = 0.5;
-    directionalLight.shadow.camera.far = 2200;
+    directionalLight.castShadow = false;
     this.scene.add(directionalLight);
 
     this.groundMaterial = new THREE.MeshStandardMaterial({
@@ -53,7 +49,7 @@ export class Scene {
       this.groundMaterial
     );
     this.ground.rotation.x = -Math.PI / 2;
-    this.ground.receiveShadow = true;
+    this.ground.receiveShadow = false;
     this.scene.add(this.ground);
   }
 

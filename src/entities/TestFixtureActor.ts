@@ -23,8 +23,8 @@ function createShapeMesh(kind, collisionShape) {
     const radius = collisionShape?.radius ?? 1.2;
     const height = (collisionShape?.halfHeight ?? 1.35) * 2;
     const mesh = new THREE.Mesh(new THREE.CylinderGeometry(radius, radius, height, 24), material);
-    mesh.castShadow = true;
-    mesh.receiveShadow = true;
+    mesh.castShadow = false;
+    mesh.receiveShadow = false;
     return mesh;
   }
 
@@ -33,8 +33,8 @@ function createShapeMesh(kind, collisionShape) {
     new THREE.BoxGeometry(halfExtents.x * 2, halfExtents.y * 2, halfExtents.z * 2),
     material
   );
-  mesh.castShadow = true;
-  mesh.receiveShadow = true;
+  mesh.castShadow = false;
+  mesh.receiveShadow = false;
   return mesh;
 }
 

@@ -35,12 +35,7 @@ export class Renderer {
     this.renderer = this.createRendererWithFallback();
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
     this.renderer.setSize(window.innerWidth, window.innerHeight);
-    this.renderer.shadowMap.enabled = true;
-    this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-
-    if (this.profileId !== 'default') {
-      this.renderer.shadowMap.enabled = false;
-    }
+    this.renderer.shadowMap.enabled = false;
 
     this.container.appendChild(this.renderer.domElement);
   }

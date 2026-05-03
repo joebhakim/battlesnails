@@ -219,8 +219,8 @@ export class SnailActor {
 
     const body = new THREE.Mesh(new THREE.CapsuleGeometry(1, 2, 4, 8), material);
     body.rotation.x = Math.PI / 2;
-    body.castShadow = true;
-    body.receiveShadow = true;
+    body.castShadow = false;
+    body.receiveShadow = false;
     return body;
   }
 
@@ -235,8 +235,8 @@ export class SnailActor {
     );
 
     shell.position.set(0, 0.5, -0.8);
-    shell.castShadow = true;
-    shell.receiveShadow = true;
+    shell.castShadow = false;
+    shell.receiveShadow = false;
     return shell;
   }
 
@@ -274,8 +274,8 @@ export class SnailActor {
     const segments: THREE.Mesh[] = [];
     for (let index = 0; index < this.stalkSegmentCount; index += 1) {
       const segment = new THREE.Mesh(segmentGeometry, stalkMaterial);
-      segment.castShadow = true;
-      segment.receiveShadow = true;
+      segment.castShadow = false;
+      segment.receiveShadow = false;
       segments.push(segment);
       group.add(segment);
     }

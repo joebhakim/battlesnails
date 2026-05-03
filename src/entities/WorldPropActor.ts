@@ -1022,6 +1022,7 @@ export class WorldPropActor {
     this.labelDistance = Math.max(48, Math.min(120, (prop.bodyRadius ?? 1) * 1.1 + 34));
     this.nibbleTimer = 0;
     this.applyPropState(prop);
+    this.setShadowCastingEnabled(false);
   }
 
   applyPropState(prop) {
@@ -1032,6 +1033,21 @@ export class WorldPropActor {
 
   startNibble() {
     this.nibbleTimer = 0.35;
+  }
+
+  setBodyVisible(visible) {
+    this.body.visible = visible;
+  }
+
+  setShadowCastingEnabled(enabled) {
+    this.mesh.traverse((node) => {
+      if (!node.isMesh) {
+        return;
+      }
+
+      node.castShadow = enabled;
+      node.receiveShadow = enabled;
+    });
   }
 
   update(delta, localPlayerPosition = null) {
