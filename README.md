@@ -2,8 +2,9 @@
 
 BattleSnails is a deliberately jarring third-person arena game built with Three.js and Vite. You control a blue snail, drive two floppy eye stalks with held mouse input, fight across configurable terrain, and leave permanent wet trails that turn the map into a speed trap.
 
-The project currently supports four modes:
+The project currently supports five modes:
 - `Single Player`: one human vs a simple enemy preset, with persisted stage and encounter options
+- `Explorer`: a roughly `2000 x 2000` snail-scale mossland expedition map with fixed landmarks, dense micro-props, and one optional boss landmark
 - `Test Mode`: a local tuning lab with staged sliders, configurable bot count, and an explicit apply step
 - `Simulator`: a visual balance harness that batch-runs a simulated humanlike player against the bot
 - `LAN Multiplayer`: two human players plus a crowd of NPC snails driven by the server
@@ -56,6 +57,7 @@ npm run mp:server
 ## Modes And Rules
 
 - `Single Player`: one human player vs a simple encounter preset chosen from the start menu.
+- `Explorer`: one human player in a roughly `2000 x 2000` bounded mossland map with static terrain props, fixed landmark trees, a rocky boss landmark, and comical log nibbling.
 - `Test Mode`: one human player plus `0..40` local bots, staged tuning controls, local browser persistence for the last-used lab settings, and switchable terrain presets.
 - `Simulator`: an automated browser-visible balance runner. It runs an average-but-skilled simulated humanlike player across selected stage/enemy-mode searches, reports aggregate and per-scenario metrics, replays a representative match, and uses the same duel knobs for HP, movement, combat, stalk, and bot behavior.
 - `LAN Multiplayer`: two human players plus `40` NPC snails by default.
@@ -65,6 +67,7 @@ npm run mp:server
 - Damage is momentum-based and scales with impact strength, not button-window-based.
 - Passive body contact does not deal damage.
 - Body overlap only pushes snails apart.
+- Snails automatically climb world props through cheap primitive surface queries rather than mesh collision.
 - There is no level progression.
 - There is no persistence, matchmaking, auth, rollback, or prediction.
 
@@ -74,6 +77,7 @@ npm run mp:server
 - Outside lock-on, backward and pure side movement backpedal or strafe without rotating the body; forward-diagonal movement turns.
 - `Space`: jump.
 - Hold `Shift`: enable lock-on framing and target-facing behavior while held.
+- `E` in Explorer: nibble a nearby rotting log.
 - Click the arena: capture the mouse with pointer lock.
 - With pointer lock and no stalk button held, move the mouse horizontally to turn the snail in free mode.
 - `Esc`: release pointer lock.
@@ -91,6 +95,7 @@ On-screen HUD:
 - Bottom left: left stalk top-down plane widget showing target point vs current point.
 - Bottom right: right stalk top-down plane widget showing target point vs current point.
 - Single Player: stage and enemy setup options appear before the match starts.
+- Explorer: no setup panel yet; the map is a deterministic worldgen v3 mossland expedition.
 - Test Mode and Simulator: right-side tuning panel for terrain, HP, movement, trail, combat, stalk, bot-AI tuning, and simulator search scope.
 
 ## Gameplay Flow
@@ -106,6 +111,16 @@ Single-player win condition:
 - The match ends when only one combatant is left alive.
 - Pick a stage and enemy setup from the start menu before the match begins.
 - The current single-player options are saved locally in the browser and remain separate from Test Mode settings.
+
+Explorer flow:
+- The map is large and bounded rather than an infinite world.
+- Massive trees and the rocky mountain landmark stay fixed so the world can be learned.
+- Worldgen v3 aims for snail-scale concerns: rough climbable dry-leaf carpet polygons, thick moss carpet polygons, dirt-with-sticks patches, exposed root branches, twigs, young plants, wet dew beads and pools, mushrooms, rotting logs, lichen towers, old shell shards, ant roads, salt piles, gravel, high mountain talus, dense deciduous/conifer tree clusters, and giant tree/mountain landmarks.
+- Prop queries use a spatial grid broadphase so the denser forest-floor clutter does not force every collision pass to scan the whole explorer map.
+- Explorer props are climbable analytic surfaces; walking into a mushroom, log, rock, salt pile, dew bead, raised leaf/moss/dirt polygon, slender tree trunk, or vertical landmark tree automatically attaches and crawls without a separate button.
+- The generated world can be exported as sparse Unicode grids for feature symbols and elevation buckets via `createExplorerMapGrids` or `npm run map:explorer -- <seed> <cellSize>`.
+- Press `E` near a rotting log to nibble it; this is cosmetic and gives no resource, health, score, or progression.
+- The Rocky Crown boss is optional; defeating it does not end exploration.
 
 Test mode flow:
 - The match does not end automatically.
@@ -129,8 +144,11 @@ LAN multiplayer win condition:
 
 - The shipped default arena is a flat `plane`.
 - Single Player, Test Mode, and Simulator can swap the map to `plane`, `hyperboloid_bowl`, `sphere_dome`, `sphere_bowl`, `cone`, `paraboloid_bowl`, `saddle`, or `ripple_bowl`.
+- Explorer uses a separate hidden `explorer_mossland` heightfield so duel balance stays isolated from expedition terrain.
 - Terrain remains heightfield-based in every mode: the surface is always `y = f(x, z)`.
 - Snails stay upright while moving over the surface.
+- Snails use a cheap blob drop shadow for vertical readability, especially while jumping, falling, or climbing props.
+- Body vertical velocity has light damping so jumps and drops read more like a platformer than a raw ballistic arc.
 - Traversing slopes is intentionally easy; the terrain affects position more than body tilt.
 
 ### Camera
@@ -183,8 +201,12 @@ The LAN mode is authoritative and intentionally simple.
 - A third client is rejected as room full.
 - The server also spawns `40` NPC snails by default.
 - `NPC_COUNT` can override the NPC count, clamped to `1..40`.
+- The online target is `30 Hz` server-to-client dynamic snapshots while the authoritative simulation keeps running at `60 Hz`.
+- `NETWORK_SNAPSHOT_RATE` can override the server-to-client snapshot rate for experiments, clamped to `10..60` Hz and defaulting to `30` Hz.
 - Clients send inputs only.
 - The server owns movement, jumps, rope simulation, hits, health, trails, and win state.
+- LAN match start sends static terrain/prop/player metadata once; regular snapshots send dynamic state plus trail-cell deltas.
+- LAN snapshots omit authoritative stalk rope nodes; clients draw remote stalks as procedural visuals from compact player state.
 - If one player disconnects, the other is returned to a waiting state and the next join starts a fresh match.
 
 ## Development
@@ -219,6 +241,12 @@ Run tests:
 npm test
 ```
 
+Run TypeScript checks:
+
+```bash
+npm run typecheck
+```
+
 Preview the production build:
 
 ```bash
@@ -231,65 +259,73 @@ Run the controls probe:
 npm run probe:controls
 ```
 
-Every so often, re-run a quick online-readiness profile: measure authoritative tick cost, snapshot JSON size, stringify time, and estimated outbound bandwidth for both a 2-player room and the 2-player + 40-NPC LAN crowd. Record notable results in `WORKING_MEMORY.md`.
+Print the explorer Unicode feature and elevation maps:
+
+```bash
+npm run map:explorer -- 137 50
+```
+
+Every so often, re-run a quick online-readiness profile against the `30 Hz` network target: measure authoritative tick cost, snapshot JSON size, stringify time, and estimated outbound bandwidth for both a 2-player room and the 2-player + 40-NPC LAN crowd. Record notable results in `WORKING_MEMORY.md`.
 
 ## Architecture
 
 <details>
 <summary>Main runtime and rendering</summary>
 
-- `src/game/Game.js`: top-level runtime that owns the scene, renderer, actors, input, UI, debug, and the active session.
-- `src/game/SinglePlayerSession.js`: local solo mode with persisted stage and encounter presets.
-- `src/game/TestSession.js`: local endless tuning lab with persisted slider state and dynamic bot count.
-- `src/game/Scene.js`: lights, arena mesh, and other scene setup.
-- `src/game/Renderer.js`: Three.js renderer setup with fallback profiles for weaker WebGL environments.
-- `src/game/CameraController.js`: follow camera and lock-on framing logic.
-- `src/game/TrailRenderer.js`: renders the permanent wet trail cells from authoritative snapshots.
-- `src/main.js`: boots the game and reports startup errors instead of failing silently.
+- `src/game/Game.ts`: top-level runtime that owns the scene, renderer, actors, input, UI, debug, and the active session.
+- `src/game/SinglePlayerSession.ts`: local solo mode with persisted stage and encounter presets.
+- `src/game/ExplorerSession.ts`: local mossland expedition mode with world props and one optional boss.
+- `src/game/TestSession.ts`: local endless tuning lab with persisted slider state and dynamic bot count.
+- `src/game/Scene.ts`: lights, arena mesh, and other scene setup.
+- `src/game/Renderer.ts`: Three.js renderer setup with fallback profiles for weaker WebGL environments.
+- `src/game/CameraController.ts`: follow camera and lock-on framing logic.
+- `src/game/TrailRenderer.ts`: renders the permanent wet trail cells from authoritative snapshots.
+- `src/main.ts`: boots the game and reports startup errors instead of failing silently.
 
 </details>
 
 <details>
 <summary>Entities and view actors</summary>
 
-- `src/entities/SnailActor.js`: shared rendered snail body, shell, stalk ropes, pupils, damage flash, health visuals, death burst, and snapshot application.
-- `src/entities/PlayerSnail.js`: local player presentation actor and local input-facing helpers.
-- `src/entities/NPCSnail.js`: presentation actor for non-local opponents and NPCs.
+- `src/entities/SnailActor.ts`: shared rendered snail body, shell, stalk ropes, pupils, damage flash, health visuals, death burst, and snapshot application.
+- `src/entities/PlayerSnail.ts`: local player presentation actor and local input-facing helpers.
+- `src/entities/NPCSnail.ts`: presentation actor for non-local opponents and NPCs.
 
 </details>
 
 <details>
 <summary>Input, HUD, and debug tools</summary>
 
-- `src/controls/MouseControls.js`: pointer lock, idle free-turn capture, held-button stalk ownership, and relative mouse delta capture.
-- `src/controls/KeyboardControls.js`: movement axes, lock-on hold state, and jump requests.
-- `src/utils/UI.js`: menu, overlays, HUD bars, stalk plane widgets, and music controls.
-- `src/sim/Tuning.js`: shared tuning schema, default values, normalization, and bot/simulation profile derivation.
-- `src/utils/Debug.js`: text-only debug panel and recent-event log.
-- `src/utils/CollisionDetection.js`: debug-facing impact inspection against rendered actors.
+- `src/controls/MouseControls.ts`: pointer lock, idle free-turn capture, held-button stalk ownership, and relative mouse delta capture.
+- `src/controls/KeyboardControls.ts`: movement axes, lock-on hold state, jump requests, and explorer interact requests.
+- `src/utils/UI.ts`: menu, overlays, HUD bars, stalk plane widgets, and music controls.
+- `src/sim/Tuning.ts`: shared tuning schema, default values, normalization, and bot/simulation profile derivation.
+- `src/utils/Debug.ts`: text-only debug panel and recent-event log.
+- `src/utils/CollisionDetection.ts`: debug-facing impact inspection against rendered actors.
 
 </details>
 
 <details>
 <summary>Shared simulation and world state</summary>
 
-- `src/sim/MatchSimulation.js`: authoritative match rules, player state, movement, jump, rope control, collisions, wet trails, health, and victory.
-- `src/sim/StalkRope.js`: rope-chain helpers, target direction math, and impact evaluation.
-- `src/sim/BotController.js`: NPC decision loop that drives the same authoritative input model as players.
-- `src/sim/HumanLikeController.js`: deterministic simulated human input model for the balance harness.
-- `src/sim/HumanVision.js`: simple geometric FOV and short noisy memory for simulator perception.
-- `src/sim/BalanceRunner.js`: seeded batch runner and aggregate balance metrics.
-- `src/world/Terrain.js`: shared terrain-preset math and mesh generation used by both rendering and simulation.
+- `src/sim/MatchSimulation.ts`: authoritative match rules, player state, movement, jump, rope control, collisions, wet trails, health, and victory.
+- `src/sim/StalkRope.ts`: rope-chain helpers, target direction math, and impact evaluation.
+- `src/sim/BotController.ts`: NPC decision loop that drives the same authoritative input model as players.
+- `src/sim/HumanLikeController.ts`: deterministic simulated human input model for the balance harness.
+- `src/sim/HumanVision.ts`: simple geometric FOV and short noisy memory for simulator perception.
+- `src/sim/BalanceRunner.ts`: seeded batch runner and aggregate balance metrics.
+- `src/world/Terrain.ts`: shared terrain-preset math and mesh generation used by both rendering and simulation.
+- `src/world/ExplorerWorld.ts`: deterministic explorer terrain, landmark, prop generation, and coarse Unicode map-grid export.
 
 </details>
 
 <details>
 <summary>Sessions and networking</summary>
 
-- `src/game/SinglePlayerSession.js`: runs the shared simulation locally against a simple enemy preset.
-- `src/game/SimulatorSession.js`: runs visual humanlike-vs-bot balance batches and exposes simulator reports.
-- `src/game/MultiplayerSession.js`: connects to the LAN server, sends local input, and renders authoritative snapshots.
-- `src/network/LocalMultiplayerClient.js`: minimal browser WebSocket client for the fixed LAN room.
+- `src/game/SinglePlayerSession.ts`: runs the shared simulation locally against a simple enemy preset.
+- `src/game/SimulatorSession.ts`: runs visual humanlike-vs-bot balance batches and exposes simulator reports.
+- `src/game/MultiplayerSession.ts`: connects to the LAN server, sends local input, and renders authoritative snapshots.
+- `src/network/LocalMultiplayerClient.ts`: minimal browser WebSocket client for the fixed LAN room.
 - `server/`: Node-side authoritative multiplayer runtime and minimal WebSocket server implementation.
 
 </details>
@@ -297,7 +333,7 @@ Every so often, re-run a quick online-readiness profile: measure authoritative t
 <details>
 <summary>Audio</summary>
 
-- `src/audio/AudioController.js`: optional procedural soundtrack driven by the music toggle.
+- `src/audio/AudioController.ts`: optional procedural soundtrack driven by the music toggle.
 
 </details>
 
@@ -333,7 +369,7 @@ The current debug mode is text-only. It does not add scene helpers, wireframes, 
 - Single-player and LAN multiplayer use the same movement, jump, stalk physics, trail, damage, and win logic.
 - The browser client is primarily a renderer and input source.
 - LAN clients do not author world state.
-- Terrain is part of authoritative snapshot state, and Single Player, Test Mode, and Simulator expose terrain switching in the UI.
+- Terrain is part of authoritative snapshot state. Single Player, Test Mode, and Simulator expose arena terrain switching in the UI; Explorer uses its own mossland terrain.
 
 ### Bot behavior
 
@@ -361,6 +397,7 @@ The current debug mode is text-only. It does not add scene helpers, wireframes, 
 ### Technical notes
 
 - The renderer tries multiple WebGL profiles before giving up.
+- Runtime code, server code, tests, scripts, and Vite config are TypeScript. Node-side commands run through `tsx`; production builds run `tsc --noEmit` before Vite.
 - The multiplayer server is intentionally tiny and does not depend on a full networking stack.
 - The project keeps the UI and visuals intentionally rough in places when that serves the game's awkward tone better than polish.
 
