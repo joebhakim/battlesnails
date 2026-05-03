@@ -4,6 +4,7 @@ import * as THREE from 'three';
 
 import { KeyboardControls } from '../src/controls/KeyboardControls.js';
 import { MouseControls } from '../src/controls/MouseControls.js';
+import { MobileControls } from '../src/controls/MobileControls.js';
 import { PlayerSnail } from '../src/entities/PlayerSnail.js';
 import { NPCSnail } from '../src/entities/NPCSnail.js';
 import { CameraController } from '../src/game/CameraController.js';
@@ -50,6 +51,24 @@ function createMouseControls(overrides: any = {}) {
     primaryHeld: false,
     secondaryHeld: false,
     pointerLocked: true,
+    lookDeltaX: 0,
+    lookDeltaY: 0,
+    turnDeltaX: 0,
+    reachDelta: 0,
+    ...overrides
+  });
+}
+
+function createMobileControls(overrides: any = {}) {
+  return Object.assign(Object.create(MobileControls.prototype), {
+    enabled: true,
+    movementAxes: { forward: 0, right: 0 },
+    stalkButtonsHeld: { left: false, right: false, both: false },
+    planeUpHeld: false,
+    planeDownHeld: false,
+    lockOnActive: false,
+    pendingJump: false,
+    pendingInteract: false,
     lookDeltaX: 0,
     lookDeltaY: 0,
     turnDeltaX: 0,
@@ -152,6 +171,88 @@ test('game local input forwards mouse wheel reach delta', () => {
 
   assert.equal(input.reachDelta, 2.5);
   assert.equal(input.leftHeld, true);
+});
+
+test('game local input merges mobile movement and combat controls', () => {
+  const game = Object.create(Game.prototype);
+  game.keyboardControls = {
+    getMovementAxes: () => ({ forward: 0, right: 0 }),
+    consumeJumpRequest: () => false,
+    consumeInteractRequest: () => false,
+    isLockOnHeld: () => false
+  };
+  game.cameraController = {
+    getMovementDirection: (axes) => new THREE.Vector3(axes.right, 0, -axes.forward)
+  };
+  game.mouseControls = {
+    consumeCombatInput: () => ({
+      lookX: 0,
+      lookY: 0,
+      turnX: 0,
+      reachDelta: 0,
+      leftHeld: false,
+      rightHeld: false
+    })
+  };
+  game.mobileControls = {
+    getMovementAxes: () => ({ forward: 0.75, right: -0.25 }),
+    consumeJumpRequest: () => true,
+    consumeInteractRequest: () => true,
+    isLockOnHeld: () => true,
+    consumeCombatInput: () => ({
+      lookX: 12,
+      lookY: -4,
+      turnX: 0,
+      reachDelta: 0.5,
+      leftHeld: true,
+      rightHeld: false
+    })
+  };
+
+  const input = game.buildLocalInput();
+
+  assert.equal(input.moveX, -0.25);
+  assert.equal(input.moveZ, -0.75);
+  assert.equal(input.jumpPressed, true);
+  assert.equal(input.interactPressed, true);
+  assert.equal(input.lockOnHeld, true);
+  assert.equal(input.lookX, 12);
+  assert.equal(input.lookY, -4);
+  assert.equal(input.reachDelta, 0.5);
+  assert.equal(input.leftHeld, true);
+});
+
+test('mobile look pad turns when idle and aims while a stalk button is held', () => {
+  const controls = createMobileControls();
+
+  controls.recordLookDelta(20, -8);
+  let input = controls.consumeCombatInput();
+  assert.equal(input.engaged, false);
+  assert.equal(input.turnX, 20);
+  assert.equal(input.lookX, 0);
+
+  controls.stalkButtonsHeld.left = true;
+  controls.recordLookDelta(14, 6);
+  input = controls.consumeCombatInput();
+  assert.equal(input.engaged, true);
+  assert.equal(input.leftHeld, true);
+  assert.equal(input.turnX, 0);
+  assert.equal(input.lookX, 14);
+  assert.equal(input.lookY, 6);
+});
+
+test('mobile plane buttons emit reach delta and reset per frame', () => {
+  const controls = createMobileControls({ planeUpHeld: true });
+
+  const first = controls.consumeCombatInput();
+  const second = controls.consumeCombatInput();
+  assert(first.reachDelta > 0);
+  assert.equal(second.reachDelta, first.reachDelta);
+
+  controls.planeUpHeld = false;
+  controls.planeDownHeld = true;
+  const third = controls.consumeCombatInput();
+  assert(third.reachDelta < 0);
 });
 
 test('pointer-locked idle mouse movement turns without driving stalks', () => {

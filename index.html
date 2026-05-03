@@ -57,6 +57,37 @@
       </div>
     </div>
 
+    <div id="mobile-controls" class="mobile-controls" aria-hidden="true">
+      <div class="mobile-pad mobile-pad--move" id="mobile-move-pad" role="group" aria-label="Move">
+        <div class="mobile-pad__ring"></div>
+        <div class="mobile-pad__knob" id="mobile-move-knob"></div>
+      </div>
+
+      <div class="mobile-actions" role="group" aria-label="Actions">
+        <button class="mobile-button mobile-button--small" id="mobile-interact" type="button" aria-label="Interact">E</button>
+        <button class="mobile-button mobile-button--primary" id="mobile-jump" type="button" aria-label="Jump">J</button>
+        <button class="mobile-button mobile-button--small" id="mobile-lockon" type="button" aria-label="Lock on" aria-pressed="false">LOCK</button>
+      </div>
+
+      <div class="mobile-combat" role="group" aria-label="Combat">
+        <div class="mobile-look-pad" id="mobile-look-pad" aria-label="Aim and turn">
+          <div class="mobile-look-pad__cross mobile-look-pad__cross--horizontal"></div>
+          <div class="mobile-look-pad__cross mobile-look-pad__cross--vertical"></div>
+        </div>
+
+        <div class="mobile-stalk-row">
+          <button class="mobile-button" id="mobile-left-stalk" type="button" aria-label="Hold left stalk" aria-pressed="false">L</button>
+          <button class="mobile-button mobile-button--both" id="mobile-both-stalks" type="button" aria-label="Hold both stalks" aria-pressed="false">B</button>
+          <button class="mobile-button" id="mobile-right-stalk" type="button" aria-label="Hold right stalk" aria-pressed="false">R</button>
+        </div>
+
+        <div class="mobile-plane-row">
+          <button class="mobile-button mobile-button--plane" id="mobile-plane-down" type="button" aria-label="Lower stalk plane" aria-pressed="false">-</button>
+          <button class="mobile-button mobile-button--plane" id="mobile-plane-up" type="button" aria-label="Raise stalk plane" aria-pressed="false">+</button>
+        </div>
+      </div>
+    </div>
+
     <div id="start-menu" class="visible">
       <div class="menu-card">
         <p class="menu-kicker">BattleSnails</p>

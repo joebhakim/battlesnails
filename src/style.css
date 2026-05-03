@@ -449,6 +449,163 @@ select {
   color: var(--muted);
 }
 
+.mobile-controls {
+  position: absolute;
+  inset: 0;
+  display: none;
+  z-index: 14;
+  pointer-events: none;
+  touch-action: none;
+  user-select: none;
+}
+
+.mobile-pad,
+.mobile-combat,
+.mobile-actions {
+  pointer-events: auto;
+  touch-action: none;
+}
+
+.mobile-pad {
+  position: absolute;
+  left: max(18px, env(safe-area-inset-left));
+  bottom: max(18px, env(safe-area-inset-bottom));
+  width: 138px;
+  aspect-ratio: 1 / 1;
+  border-radius: 50%;
+  border: 1px solid rgba(232, 184, 48, 0.25);
+  background: radial-gradient(circle at 50% 50%, rgba(26, 32, 26, 0.5), rgba(9, 9, 7, 0.7));
+  box-shadow: inset 0 0 36px rgba(232, 184, 48, 0.08), 0 10px 30px rgba(0, 0, 0, 0.28);
+}
+
+.mobile-pad__ring {
+  position: absolute;
+  inset: 23px;
+  border: 1px solid rgba(237, 224, 200, 0.18);
+  border-radius: 50%;
+}
+
+.mobile-pad__knob {
+  position: absolute;
+  left: calc(50% - 24px);
+  top: calc(50% - 24px);
+  width: 48px;
+  aspect-ratio: 1 / 1;
+  border-radius: 50%;
+  border: 1px solid rgba(232, 184, 48, 0.48);
+  background: rgba(34, 28, 18, 0.88);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.36);
+  transition: transform 0.04s linear;
+}
+
+.mobile-actions {
+  position: absolute;
+  left: max(168px, calc(env(safe-area-inset-left) + 168px));
+  bottom: max(28px, calc(env(safe-area-inset-bottom) + 10px));
+  display: flex;
+  align-items: end;
+  gap: 8px;
+}
+
+.mobile-combat {
+  position: absolute;
+  right: max(16px, env(safe-area-inset-right));
+  bottom: max(14px, env(safe-area-inset-bottom));
+  display: grid;
+  grid-template-columns: 128px 52px;
+  grid-template-rows: 128px 46px;
+  gap: 8px;
+  align-items: stretch;
+}
+
+.mobile-look-pad {
+  position: relative;
+  grid-column: 1;
+  grid-row: 1;
+  border-radius: 50%;
+  border: 1px solid rgba(143, 211, 255, 0.25);
+  background: radial-gradient(circle at 50% 45%, rgba(18, 26, 42, 0.42), rgba(7, 9, 13, 0.72));
+  box-shadow: inset 0 0 34px rgba(143, 211, 255, 0.08), 0 10px 30px rgba(0, 0, 0, 0.25);
+}
+
+.mobile-look-pad.active {
+  border-color: rgba(143, 211, 255, 0.58);
+}
+
+.mobile-look-pad__cross {
+  position: absolute;
+  background: rgba(143, 211, 255, 0.2);
+}
+
+.mobile-look-pad__cross--horizontal {
+  left: 25%;
+  right: 25%;
+  top: calc(50% - 1px);
+  height: 2px;
+}
+
+.mobile-look-pad__cross--vertical {
+  top: 25%;
+  bottom: 25%;
+  left: calc(50% - 1px);
+  width: 2px;
+}
+
+.mobile-stalk-row {
+  grid-column: 1;
+  grid-row: 2;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 7px;
+}
+
+.mobile-plane-row {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  display: grid;
+  gap: 8px;
+}
+
+.mobile-button {
+  min-width: 0;
+  min-height: 46px;
+  padding: 0 10px;
+  border: 1px solid rgba(218, 165, 32, 0.32);
+  border-radius: 4px;
+  background: rgba(19, 15, 10, 0.82);
+  color: var(--text);
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 0.86rem;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25);
+}
+
+.mobile-button--small {
+  min-width: 50px;
+}
+
+.mobile-button--primary {
+  min-width: 58px;
+  min-height: 58px;
+  border-radius: 50%;
+}
+
+.mobile-button--both {
+  border-color: rgba(143, 211, 255, 0.35);
+}
+
+.mobile-button--plane {
+  min-height: 0;
+  height: 100%;
+}
+
+.mobile-button.active {
+  border-color: rgba(232, 184, 48, 0.8);
+  background: rgba(70, 52, 22, 0.92);
+  color: #ffe8a8;
+}
+
 #boot-error {
   position: absolute;
   inset: 0;
@@ -836,5 +993,113 @@ label {
   #app.simulator-panel-visible #debug-panel,
   #app.simulator-panel-visible #music-toggle {
     right: 14px;
+  }
+}
+
+@media (hover: none), (pointer: coarse), (max-width: 900px) {
+  html,
+  body,
+  #game-container {
+    touch-action: none;
+    overscroll-behavior: none;
+  }
+
+  #app.mobile-controls-visible .mobile-controls {
+    display: block;
+  }
+
+  #app.mobile-controls-visible #stalk-hud {
+    bottom: max(178px, calc(env(safe-area-inset-bottom) + 174px));
+  }
+
+  #app.mobile-controls-visible .stalk-indicator {
+    width: min(116px, 24vw);
+    gap: 5px;
+  }
+
+  #app.mobile-controls-visible .stalk-indicator-label {
+    font-size: 0.64rem;
+  }
+
+  #app.mobile-controls-visible #music-toggle {
+    display: none;
+  }
+
+  #app.mobile-controls-visible #debug-panel {
+    display: none;
+  }
+
+  #app.mobile-controls-visible .controls-card {
+    display: none;
+  }
+}
+
+@media (max-width: 560px) {
+  .menu-card {
+    width: calc(100vw - 28px);
+    max-height: calc(100vh - 28px);
+    overflow-y: auto;
+    padding: 24px 20px;
+  }
+
+  .singleplayer-setup-controls,
+  .menu-actions--setup {
+    grid-template-columns: 1fr;
+  }
+
+  #hud {
+    width: min(260px, calc(100vw - 28px));
+    gap: 8px;
+  }
+
+  .hud-card {
+    padding: 8px 10px;
+  }
+
+  .mobile-pad {
+    width: 124px;
+  }
+
+  .mobile-actions {
+    left: max(144px, calc(env(safe-area-inset-left) + 144px));
+    bottom: max(18px, calc(env(safe-area-inset-bottom) + 8px));
+    flex-direction: column-reverse;
+    gap: 6px;
+  }
+
+  .mobile-combat {
+    grid-template-columns: 114px 46px;
+    grid-template-rows: 114px 42px;
+    gap: 6px;
+  }
+
+  .mobile-button {
+    min-height: 42px;
+    padding: 0 8px;
+    font-size: 0.78rem;
+  }
+
+  .mobile-button--primary {
+    min-width: 50px;
+    min-height: 50px;
+  }
+}
+
+@media (max-width: 420px) {
+  #app.mobile-controls-visible #stalk-hud {
+    display: none;
+  }
+
+  .mobile-pad {
+    width: 112px;
+  }
+
+  .mobile-combat {
+    grid-template-columns: 104px 42px;
+    grid-template-rows: 104px 40px;
+  }
+
+  .mobile-actions {
+    left: calc(50% - 36px);
   }
 }

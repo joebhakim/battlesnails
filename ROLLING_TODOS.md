@@ -19,3 +19,7 @@
 ## Terrain Clearance Follow-Up
 
 - Recheck body clearance whenever terrain curvature formulas change. The current clearance is numerically estimated from `getTerrainHeight`, but the capsule approximation and safety cap are still pragmatic and should be validated visually on new terrain families.
+
+## Mobile Follow-Up
+
+- Add phone rotation sensing after the touch beta is usable. Use an explicit tap-to-enable permission/calibration flow, then feed filtered orientation deltas into the same mobile control packet instead of creating a separate input path.

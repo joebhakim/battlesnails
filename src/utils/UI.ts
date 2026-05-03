@@ -177,6 +177,7 @@ export class UI {
   declare gameMessage: any;
   declare leftStalkIndicator: any;
   declare modeActions: any;
+  declare mobileControls: any;
   declare musicButton: any;
   declare onSimulatorTuningApply: any;
   declare onTestApply: any;
@@ -232,6 +233,7 @@ export class UI {
     this.startMenuTitle = this.startMenu.querySelector('h1');
     this.startMenuCopy = this.startMenu.querySelector('.menu-copy');
     this.modeActions = document.getElementById('mode-actions');
+    this.mobileControls = document.getElementById('mobile-controls');
     this.startSinglePlayerButton = document.getElementById('start-singleplayer');
     this.startExplorerButton = document.getElementById('start-explorer');
     this.startTestModeButton = document.getElementById('start-testmode');
@@ -288,6 +290,11 @@ export class UI {
 
   setInstructions(text) {
     this.instructions.textContent = text;
+  }
+
+  setMobileControlsVisible(visible) {
+    this.app.classList.toggle('mobile-controls-visible', Boolean(visible));
+    this.mobileControls?.setAttribute('aria-hidden', `${!visible}`);
   }
 
   setHealthLabels(playerLabel, opponentLabel) {

@@ -25,6 +25,14 @@ const RENDERER_PROFILES: { id: string; options: THREE.WebGLRendererParameters }[
   }
 ];
 
+function getPixelRatioCap() {
+  const isTouchDevice = (
+    (typeof navigator !== 'undefined' && navigator.maxTouchPoints > 0) ||
+    window.matchMedia?.('(hover: none), (pointer: coarse)')?.matches
+  );
+  return isTouchDevice ? 1.35 : 2;
+}
+
 export class Renderer {
   declare renderer: any;
   declare container: any;
@@ -33,7 +41,7 @@ export class Renderer {
     this.container = container;
     this.profileId = 'default';
     this.renderer = this.createRendererWithFallback();
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, getPixelRatioCap()));
     this.renderer.setSize(window.innerWidth, window.innerHeight);
     this.renderer.shadowMap.enabled = false;
 

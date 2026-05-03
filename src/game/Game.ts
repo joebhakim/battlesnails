@@ -10,6 +10,7 @@ import { WorldPropActor } from '../entities/WorldPropActor.js';
 import { WorldPropBatchActor, shouldRenderWorldPropIndividually } from '../entities/WorldPropBatchActor.js';
 import { MouseControls } from '../controls/MouseControls.js';
 import { KeyboardControls } from '../controls/KeyboardControls.js';
+import { MobileControls } from '../controls/MobileControls.js';
 import { CollisionDetection } from '../utils/CollisionDetection.js';
 import { UI } from '../utils/UI.js';
 import { Debug } from '../utils/Debug.js';
@@ -60,6 +61,46 @@ function createSifuStatueActor(state) {
   });
 }
 
+function clampAxis(value) {
+  return Math.max(-1, Math.min(1, value));
+}
+
+function getZeroCombatInput() {
+  return {
+    engaged: false,
+    leftHeld: false,
+    rightHeld: false,
+    lookX: 0,
+    lookY: 0,
+    turnX: 0,
+    reachDelta: 0,
+    pointerLocked: false
+  };
+}
+
+function mergeCombatInputs(...inputs) {
+  const merged = getZeroCombatInput();
+  for (const input of inputs) {
+    if (!input) {
+      continue;
+    }
+
+    merged.leftHeld = merged.leftHeld || Boolean(input.leftHeld);
+    merged.rightHeld = merged.rightHeld || Boolean(input.rightHeld);
+    merged.lookX += input.lookX ?? 0;
+    merged.lookY += input.lookY ?? 0;
+    merged.turnX += input.turnX ?? 0;
+    merged.reachDelta += input.reachDelta ?? 0;
+    merged.pointerLocked = merged.pointerLocked || Boolean(input.pointerLocked);
+  }
+
+  merged.engaged = merged.leftHeld || merged.rightHeld;
+  if (merged.engaged) {
+    merged.turnX = 0;
+  }
+  return merged;
+}
+
 export class Game {
   declare otherActorViews: any;
   declare worldPropViews: any;
@@ -85,6 +126,7 @@ export class Game {
   declare performanceFps: any;
   declare performanceTps: any;
   declare mouseControls: any;
+  declare mobileControls: any;
   declare playerSnail: any;
   declare renderer: any;
   declare scene: any;
@@ -104,6 +146,7 @@ export class Game {
     this.worldPropViews = new Map();
     this.worldPropBatch = null;
     this.mouseControls = null;
+    this.mobileControls = null;
     this.keyboardControls = null;
     this.collisionDetection = null;
     this.ui = null;
@@ -134,6 +177,7 @@ export class Game {
 
     this.mouseControls = new MouseControls(this.container);
     this.keyboardControls = new KeyboardControls();
+    this.mobileControls = new MobileControls(document.getElementById('mobile-controls'));
     this.collisionDetection = new CollisionDetection();
     this.ui = new UI();
     this.damageIndicators = new DamageIndicators({
@@ -190,6 +234,8 @@ export class Game {
     this.currentSession = null;
     this.ui?.hideTestPanel();
     this.ui?.hideSimulatorPanel();
+    this.mobileControls?.setEnabled(false);
+    this.ui?.setMobileControlsVisible(false);
   }
 
   animate() {
@@ -290,16 +336,33 @@ export class Game {
   }
 
   buildLocalInput() {
-    const movementAxes = this.keyboardControls.getMovementAxes();
+    const keyboardMovementAxes = this.keyboardControls.getMovementAxes();
+    const mobileMovementAxes = this.mobileControls?.getMovementAxes?.() ?? { forward: 0, right: 0 };
+    const movementAxes = {
+      forward: clampAxis((keyboardMovementAxes.forward ?? 0) + (mobileMovementAxes.forward ?? 0)),
+      right: clampAxis((keyboardMovementAxes.right ?? 0) + (mobileMovementAxes.right ?? 0))
+    };
     const movementDirection = this.cameraController.getMovementDirection(movementAxes);
-    const combatInput = this.mouseControls.consumeCombatInput();
+    const combatInput = mergeCombatInputs(
+      this.mouseControls.consumeCombatInput(),
+      this.mobileControls?.consumeCombatInput?.() ?? null
+    );
 
     return {
       moveX: movementDirection.x,
       moveZ: movementDirection.z,
-      jumpPressed: this.keyboardControls.consumeJumpRequest(),
-      interactPressed: this.keyboardControls.consumeInteractRequest?.() ?? false,
-      lockOnHeld: this.keyboardControls.isLockOnHeld(),
+      jumpPressed: Boolean(
+        this.keyboardControls.consumeJumpRequest() ||
+        this.mobileControls?.consumeJumpRequest?.()
+      ),
+      interactPressed: Boolean(
+        this.keyboardControls.consumeInteractRequest?.() ||
+        this.mobileControls?.consumeInteractRequest?.()
+      ),
+      lockOnHeld: Boolean(
+        this.keyboardControls.isLockOnHeld() ||
+        this.mobileControls?.isLockOnHeld?.()
+      ),
       lookX: combatInput.lookX,
       lookY: combatInput.lookY,
       turnX: combatInput.turnX ?? 0,
@@ -578,6 +641,7 @@ export class Game {
     this.resetViewActors();
     this.ui.hideStartMenu();
     this.ui.clearMessage();
+    this.mobileControls?.setEnabled(session.mode !== 'simulator');
     this.syncSessionUiChrome();
     this.ui.updateStalkIndicators(null);
     this.refreshInstructions();
@@ -598,6 +662,8 @@ export class Game {
     this.ui.showStartMenu();
     this.ui.hideTestPanel();
     this.ui.hideSimulatorPanel();
+    this.mobileControls?.setEnabled(false);
+    this.ui.setMobileControlsVisible(false);
     this.ui.setHealthLabels('Player', 'Enemy');
     this.ui.updatePlayerHealth(DEFAULT_MAX_HEALTH, DEFAULT_MAX_HEALTH);
     this.ui.updateEnemyHealth(DEFAULT_BOT_MAX_HEALTH, DEFAULT_BOT_MAX_HEALTH);
@@ -721,6 +787,7 @@ export class Game {
     const localState = this.currentSession?.getLocalPlayerState?.() ?? null;
     const focusState = this.currentSession?.getFocusTargetState?.() ?? this.currentSession?.getOpponentPlayerState?.() ?? null;
     const labels = this.currentSession?.getHudLabels?.(focusState) ?? { opponent: 'Enemy' };
+    this.ui.setMobileControlsVisible(Boolean(this.currentSession && this.currentSession.mode !== 'simulator'));
     this.ui.setHealthLabels('Player', labels.opponent);
     this.ui.updatePlayerHealth(localState?.health ?? DEFAULT_MAX_HEALTH, localState?.maxHealth ?? DEFAULT_MAX_HEALTH);
     this.ui.updateEnemyHealth(
