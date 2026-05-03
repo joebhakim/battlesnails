@@ -20,6 +20,7 @@ The browser client handles rendering, input, HUD, music, simulator reports, and 
 - [Arena And Combat](#arena-and-combat)
 - [LAN Multiplayer](#lan-multiplayer)
 - [Development](#development)
+- [Deployment](#deployment)
 - [Architecture](#architecture)
 - [Debugging](#debugging)
 - [Implementation Notes](#implementation-notes)
@@ -53,6 +54,12 @@ If you want to run the WebSocket server separately, use:
 ```bash
 npm run mp:server
 ```
+
+## Deployment
+
+The static browser client is Netlify-ready. Production deploys use `npm run build` and publish the generated `dist` directory, as configured in `netlify.toml`.
+
+Netlify serves Single Player, Explorer, Test Mode, Simulator, and the browser client. The LAN multiplayer WebSocket server is still a separate Node process and needs a separate host before online multiplayer can work from the deployed site.
 
 ## Modes And Rules
 
