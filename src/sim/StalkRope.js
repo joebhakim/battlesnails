@@ -274,6 +274,26 @@ function getShapeVector(shape, key, fallback) {
   };
 }
 
+function getYawLocalVector(vector, rotationY = 0) {
+  const cos = Math.cos(rotationY);
+  const sin = Math.sin(rotationY);
+  return new THREE.Vector3(
+    (vector.x * cos) - (vector.z * sin),
+    vector.y,
+    (vector.x * sin) + (vector.z * cos)
+  );
+}
+
+function getYawWorldVector(vector, rotationY = 0) {
+  const cos = Math.cos(rotationY);
+  const sin = Math.sin(rotationY);
+  return new THREE.Vector3(
+    (vector.x * cos) + (vector.z * sin),
+    vector.y,
+    (-vector.x * sin) + (vector.z * cos)
+  );
+}
+
 function isBodyObstacleUsable(obstacle) {
   const position = getBodyObstaclePosition(obstacle);
   const shape = getObstacleShape(obstacle);
@@ -376,38 +396,42 @@ function setBoxBodyCorrection(point, radius, obstacle, correction, normal = null
   const position = getBodyObstaclePosition(obstacle);
   const shape = getObstacleShape(obstacle);
   const halfExtents = getShapeVector(shape, 'halfExtents', { x: obstacle.radius, y: obstacle.radius, z: obstacle.radius });
-  const x = point.x - position.x;
-  const y = point.y - position.y;
-  const z = point.z - position.z;
+  const local = getYawLocalVector(point.clone().sub(position), obstacle.rotationY ?? 0);
   const expandedX = halfExtents.x + radius;
   const expandedY = halfExtents.y + radius;
   const expandedZ = halfExtents.z + radius;
 
-  if (Math.abs(x) >= expandedX || Math.abs(y) >= expandedY || Math.abs(z) >= expandedZ) {
+  if (Math.abs(local.x) >= expandedX || Math.abs(local.y) >= expandedY || Math.abs(local.z) >= expandedZ) {
     return false;
   }
 
-  const penetrationX = expandedX - Math.abs(x);
-  const penetrationY = expandedY - Math.abs(y);
-  const penetrationZ = expandedZ - Math.abs(z);
+  const penetrationX = expandedX - Math.abs(local.x);
+  const penetrationY = expandedY - Math.abs(local.y);
+  const penetrationZ = expandedZ - Math.abs(local.z);
+  const localCorrection = new THREE.Vector3();
+  const localNormal = new THREE.Vector3();
 
   if (penetrationX <= penetrationY && penetrationX <= penetrationZ) {
-    const direction = x >= 0 ? 1 : -1;
-    correction.set(direction * penetrationX, 0, 0);
-    normal?.set(direction, 0, 0);
+    const direction = local.x >= 0 ? 1 : -1;
+    localCorrection.set(direction * penetrationX, 0, 0);
+    localNormal.set(direction, 0, 0);
+    correction.copy(getYawWorldVector(localCorrection, obstacle.rotationY ?? 0));
+    normal?.copy(getYawWorldVector(localNormal, obstacle.rotationY ?? 0).normalize());
     return true;
   }
 
   if (penetrationY <= penetrationZ) {
-    const direction = y >= 0 ? 1 : -1;
+    const direction = local.y >= 0 ? 1 : -1;
     correction.set(0, direction * penetrationY, 0);
     normal?.set(0, direction, 0);
     return true;
   }
 
-  const direction = z >= 0 ? 1 : -1;
-  correction.set(0, 0, direction * penetrationZ);
-  normal?.set(0, 0, direction);
+  const direction = local.z >= 0 ? 1 : -1;
+  localCorrection.set(0, 0, direction * penetrationZ);
+  localNormal.set(0, 0, direction);
+  correction.copy(getYawWorldVector(localCorrection, obstacle.rotationY ?? 0));
+  normal?.copy(getYawWorldVector(localNormal, obstacle.rotationY ?? 0).normalize());
   return true;
 }
 
@@ -481,24 +505,22 @@ function getBodySurfacePoint(point, obstacle, normal) {
 
   if (shape.type === 'box') {
     const halfExtents = getShapeVector(shape, 'halfExtents', { x: obstacle.radius, y: obstacle.radius, z: obstacle.radius });
+    const localPoint = getYawLocalVector(point.clone().sub(position), obstacle.rotationY ?? 0);
+    const localNormal = getYawLocalVector(surfaceNormal, obstacle.rotationY ?? 0);
     const local = {
-      x: clamp(point.x - position.x, -halfExtents.x, halfExtents.x),
-      y: clamp(point.y - position.y, -halfExtents.y, halfExtents.y),
-      z: clamp(point.z - position.z, -halfExtents.z, halfExtents.z)
+      x: clamp(localPoint.x, -halfExtents.x, halfExtents.x),
+      y: clamp(localPoint.y, -halfExtents.y, halfExtents.y),
+      z: clamp(localPoint.z, -halfExtents.z, halfExtents.z)
     };
-    if (Math.abs(surfaceNormal.x) >= Math.abs(surfaceNormal.y) && Math.abs(surfaceNormal.x) >= Math.abs(surfaceNormal.z)) {
-      local.x = Math.sign(surfaceNormal.x || 1) * halfExtents.x;
-    } else if (Math.abs(surfaceNormal.y) >= Math.abs(surfaceNormal.z)) {
-      local.y = Math.sign(surfaceNormal.y || 1) * halfExtents.y;
+    if (Math.abs(localNormal.x) >= Math.abs(localNormal.y) && Math.abs(localNormal.x) >= Math.abs(localNormal.z)) {
+      local.x = Math.sign(localNormal.x || 1) * halfExtents.x;
+    } else if (Math.abs(localNormal.y) >= Math.abs(localNormal.z)) {
+      local.y = Math.sign(localNormal.y || 1) * halfExtents.y;
     } else {
-      local.z = Math.sign(surfaceNormal.z || 1) * halfExtents.z;
+      local.z = Math.sign(localNormal.z || 1) * halfExtents.z;
     }
 
-    return new THREE.Vector3(
-      position.x + local.x,
-      position.y + local.y,
-      position.z + local.z
-    );
+    return position.clone().add(getYawWorldVector(new THREE.Vector3(local.x, local.y, local.z), obstacle.rotationY ?? 0));
   }
 
   if (shape.type === 'cylinder') {
@@ -546,12 +568,13 @@ function getBodyContactFeatureId(obstacle, normal) {
     : FORWARD;
 
   if (shape.type === 'box') {
-    const axis = Math.abs(surfaceNormal.x) >= Math.abs(surfaceNormal.y) && Math.abs(surfaceNormal.x) >= Math.abs(surfaceNormal.z)
+    const localNormal = getYawLocalVector(surfaceNormal, obstacle.rotationY ?? 0);
+    const axis = Math.abs(localNormal.x) >= Math.abs(localNormal.y) && Math.abs(localNormal.x) >= Math.abs(localNormal.z)
       ? 'x'
-      : Math.abs(surfaceNormal.y) >= Math.abs(surfaceNormal.z)
+      : Math.abs(localNormal.y) >= Math.abs(localNormal.z)
         ? 'y'
         : 'z';
-    const sign = surfaceNormal[axis] >= 0 ? '+' : '-';
+    const sign = localNormal[axis] >= 0 ? '+' : '-';
     return `box:${axis}${sign}`;
   }
 

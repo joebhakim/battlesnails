@@ -18,6 +18,7 @@ function createBufferedInput() {
     moveX: 0,
     moveZ: 0,
     jumpPressed: false,
+    interactPressed: false,
     lockOnHeld: false,
     lookX: 0,
     lookY: 0,
@@ -266,6 +267,7 @@ export function createLocalMultiplayerServer(options = {}) {
           buffered.turnX += input.turnX;
           buffered.reachDelta += input.reachDelta;
           buffered.jumpPressed = buffered.jumpPressed || input.jumpPressed;
+          buffered.interactPressed = buffered.interactPressed || input.interactPressed;
           room.inputs.set(assignedSlot, buffered);
           break;
         }

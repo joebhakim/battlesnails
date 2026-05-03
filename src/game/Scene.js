@@ -34,12 +34,17 @@ export class Scene {
 
     this.groundMaterial = new THREE.MeshStandardMaterial({
       color: 0x6e9f55,
+      vertexColors: true,
       roughness: 0.9,
       metalness: 0.05
     });
 
     this.ground = new THREE.Mesh(
-      createTerrainGeometry(this.terrainConfig, TERRAIN_VISUAL_SIZE),
+      createTerrainGeometry(
+        this.terrainConfig,
+        this.terrainConfig.visualSize ?? TERRAIN_VISUAL_SIZE,
+        this.terrainConfig.visualSegments
+      ),
       this.groundMaterial
     );
     this.ground.rotation.x = -Math.PI / 2;
@@ -56,7 +61,11 @@ export class Scene {
       return;
     }
 
-    const nextGeometry = createTerrainGeometry(normalized, TERRAIN_VISUAL_SIZE);
+    const nextGeometry = createTerrainGeometry(
+      normalized,
+      normalized.visualSize ?? TERRAIN_VISUAL_SIZE,
+      normalized.visualSegments
+    );
     this.ground.geometry.dispose();
     this.ground.geometry = nextGeometry;
     this.terrainConfig = normalized;

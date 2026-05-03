@@ -171,7 +171,8 @@ export class SinglePlayerSession {
       for (let index = 0; index < steps && this.accumulator >= MATCH_TICK_DURATION; index += 1) {
         this.simulation.setPlayerInput(this.localSlot, {
           ...dividedInput,
-          jumpPressed: index === 0 && localInput.jumpPressed
+          jumpPressed: index === 0 && localInput.jumpPressed,
+          interactPressed: index === 0 && localInput.interactPressed
         });
         for (const [botSlot, botController] of this.botControllers.entries()) {
           this.simulation.setPlayerInput(

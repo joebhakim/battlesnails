@@ -8,6 +8,7 @@ export class KeyboardControls {
       lockOn: false
     };
     this.pendingJump = false;
+    this.pendingInteract = false;
 
     this.setupEventListeners();
   }
@@ -56,6 +57,12 @@ export class KeyboardControls {
         }
         event.preventDefault();
         break;
+      case 'e':
+        if (isPressed && !event.repeat) {
+          this.pendingInteract = true;
+        }
+        event.preventDefault();
+        break;
     }
   }
 
@@ -74,5 +81,11 @@ export class KeyboardControls {
     const shouldJump = this.pendingJump;
     this.pendingJump = false;
     return shouldJump;
+  }
+
+  consumeInteractRequest() {
+    const shouldInteract = this.pendingInteract;
+    this.pendingInteract = false;
+    return shouldInteract;
   }
 }

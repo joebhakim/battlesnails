@@ -6,6 +6,7 @@ import { CameraController } from './CameraController.js';
 import { PlayerSnail } from '../entities/PlayerSnail.js';
 import { NPCSnail } from '../entities/NPCSnail.js';
 import { TestFixtureActor } from '../entities/TestFixtureActor.js';
+import { WorldPropActor } from '../entities/WorldPropActor.js';
 import { MouseControls } from '../controls/MouseControls.js';
 import { KeyboardControls } from '../controls/KeyboardControls.js';
 import { CollisionDetection } from '../utils/CollisionDetection.js';
@@ -17,6 +18,7 @@ import {
   SinglePlayerSession,
   getStoredSinglePlayerOptions
 } from './SinglePlayerSession.js';
+import { ExplorerSession } from './ExplorerSession.js';
 import { MultiplayerSession } from './MultiplayerSession.js';
 import { TestSession } from './TestSession.js';
 import { SimulatorSession } from './SimulatorSession.js';
@@ -68,6 +70,7 @@ export class Game {
 
     this.playerSnail = null;
     this.otherActorViews = new Map();
+    this.worldPropViews = new Map();
     this.mouseControls = null;
     this.keyboardControls = null;
     this.collisionDetection = null;
@@ -109,6 +112,7 @@ export class Game {
     this.ui.setupMusicButton(this.toggleMusic.bind(this));
     this.ui.setupModeButtons({
       onSinglePlayer: this.showSinglePlayerSetup.bind(this),
+      onExplorer: this.startExplorerSession.bind(this),
       onTestMode: this.startTestSession.bind(this),
       onSimulator: this.startSimulatorSession.bind(this),
       onMultiplayer: this.startMultiplayerSession.bind(this)
@@ -185,6 +189,7 @@ export class Game {
     this.scene.setTerrainConfig(terrainConfig);
     this.playerSnail.setTerrainConfig(terrainConfig);
     this.trailRenderer?.applySnapshot(snapshot);
+    this.syncWorldPropViews(snapshot?.worldProps ?? [], delta);
 
     const localState = this.currentSession.getLocalPlayerState();
     const otherStates = this.currentSession.getOtherPlayerStates?.() ?? [];
@@ -192,6 +197,7 @@ export class Game {
     const viewLockOnHeld = localState?.lockOn ?? localInput.lockOnHeld;
     this.applyViewState(localState, otherStates, focusState, viewLockOnHeld, delta);
     this.latestSnapshotEvents = snapshot?.events ?? [];
+    this.applyWorldPropEvents(this.latestSnapshotEvents);
     this.damageIndicators?.handleSnapshotEvents(
       this.latestSnapshotEvents,
       this.getDamageIndicatorColors(localState)
@@ -217,6 +223,7 @@ export class Game {
       moveX: movementDirection.x,
       moveZ: movementDirection.z,
       jumpPressed: this.keyboardControls.consumeJumpRequest(),
+      interactPressed: this.keyboardControls.consumeInteractRequest?.() ?? false,
       lockOnHeld: this.keyboardControls.isLockOnHeld(),
       lookX: combatInput.lookX,
       lookY: combatInput.lookY,
@@ -267,6 +274,42 @@ export class Game {
       actor.setVisible(false);
       this.otherActorViews.set(state.slot, actor);
       this.scene.scene.add(actor.mesh);
+    }
+  }
+
+  syncWorldPropViews(worldProps, delta) {
+    const desiredIds = new Set(worldProps.map((prop) => prop.id));
+
+    for (const [id, actor] of this.worldPropViews.entries()) {
+      if (desiredIds.has(id)) {
+        continue;
+      }
+
+      this.scene.scene.remove(actor.mesh);
+      this.worldPropViews.delete(id);
+    }
+
+    for (const prop of worldProps) {
+      let actor = this.worldPropViews.get(prop.id);
+      if (!actor) {
+        actor = new WorldPropActor(prop);
+        this.worldPropViews.set(prop.id, actor);
+        this.scene.scene.add(actor.mesh);
+      } else {
+        actor.applyPropState(prop);
+      }
+
+      actor.update(delta);
+    }
+  }
+
+  applyWorldPropEvents(events) {
+    for (const event of events ?? []) {
+      if (event.type !== 'log_nibble' || !event.propId) {
+        continue;
+      }
+
+      this.worldPropViews.get(event.propId)?.startNibble();
     }
   }
 
@@ -386,7 +429,7 @@ export class Game {
   handleOverlayAction(actionId) {
     switch (actionId) {
       case 'restart':
-        if (this.currentSession instanceof SinglePlayerSession) {
+        if (typeof this.currentSession?.restart === 'function') {
           this.currentSession.restart();
           this.ui.clearMessage();
           this.currentOverlayKey = null;
@@ -407,6 +450,10 @@ export class Game {
 
   startSinglePlayerSession(options = {}) {
     this.enterSession(new SinglePlayerSession({ options }));
+  }
+
+  startExplorerSession() {
+    this.enterSession(new ExplorerSession());
   }
 
   startTestSession() {
@@ -478,6 +525,11 @@ export class Game {
       return;
     }
 
+    if (this.currentSession?.mode === 'explorer') {
+      this.ui.setInstructions('WASD move · Mouse turn · E nibble logs · Space jump · Hold LMB/RMB stalks · Wheel plane height · Hold Shift lock-on · Click arena');
+      return;
+    }
+
     if (this.currentSession?.mode === 'simulator') {
       this.ui.setInstructions('Simulator is driving both snails · Run batches on the right · Watch the representative match');
       return;
@@ -496,6 +548,11 @@ export class Game {
       this.scene.scene.remove(actor.mesh);
     }
     this.otherActorViews.clear();
+
+    for (const actor of this.worldPropViews.values()) {
+      this.scene.scene.remove(actor.mesh);
+    }
+    this.worldPropViews.clear();
   }
 
   toggleMusic() {

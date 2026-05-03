@@ -108,7 +108,8 @@ export class TestSession {
     for (let index = 0; index < steps && this.accumulator >= MATCH_TICK_DURATION; index += 1) {
       this.simulation.setPlayerInput(this.localSlot, {
         ...dividedInput,
-        jumpPressed: index === 0 && localInput.jumpPressed
+        jumpPressed: index === 0 && localInput.jumpPressed,
+        interactPressed: index === 0 && localInput.interactPressed
       });
 
       this.snapshot = this.simulation.step(MATCH_TICK_DURATION);

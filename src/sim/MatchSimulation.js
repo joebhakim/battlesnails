@@ -24,7 +24,7 @@ import {
   createSimulationProfiles,
   normalizeTuningConfig
 } from './Tuning.js';
-import { createTerrainPosition, getTerrainHeight } from '../world/Terrain.js';
+import { createTerrainPosition, getTerrainHeight, normalizeTerrainConfig } from '../world/Terrain.js';
 import { estimateTerrainBodyClearance, getTerrainBodyGroundHeight } from '../world/TerrainClearance.js';
 
 export const MATCH_TICK_RATE = 60;
@@ -69,6 +69,7 @@ const DEFAULT_INPUT = Object.freeze({
   lookY: 0,
   turnX: 0,
   reachDelta: 0,
+  interactPressed: false,
   leftHeld: false,
   rightHeld: false
 });
@@ -90,6 +91,14 @@ const BASH_DAMAGE_SCALE = 0.2;
 const MIN_DAMAGE_EVENT_AMOUNT = 0.025;
 const CONTACT_RENEWAL_IMPULSE_MARGIN = 10;
 const CONTACT_HYSTERESIS_TICKS = 5;
+const WORLD_PROP_INTERACTION_DISTANCE = 3.1;
+const WORLD_UP = new THREE.Vector3(0, 1, 0);
+const PROP_ADHESION_MARGIN = 0.35;
+const PROP_SUPPORT_SNAP_DISTANCE = 2.2;
+const PROP_CLIMB_SPEED_SCALE = 1.1;
+const PROP_CLIMB_DESCEND_SCALE = 3.5;
+const VERTICAL_SURFACE_MIN_UP_DOT = 0.45;
+const CLIMB_INWARD_INPUT_THRESHOLD = 0.08;
 
 function angleDifference(current, target) {
   return Math.atan2(Math.sin(target - current), Math.cos(target - current));
@@ -101,6 +110,34 @@ function lerpAngle(current, target, alpha) {
 
 function getFacingDirection(rotationY) {
   return new THREE.Vector3(Math.sin(rotationY), 0, Math.cos(rotationY));
+}
+
+function getYawLocalVector(vector, rotationY = 0) {
+  const cos = Math.cos(rotationY);
+  const sin = Math.sin(rotationY);
+  return new THREE.Vector3(
+    (vector.x * cos) - (vector.z * sin),
+    vector.y,
+    (vector.x * sin) + (vector.z * cos)
+  );
+}
+
+function getYawWorldVector(vector, rotationY = 0) {
+  const cos = Math.cos(rotationY);
+  const sin = Math.sin(rotationY);
+  return new THREE.Vector3(
+    (vector.x * cos) + (vector.z * sin),
+    vector.y,
+    (-vector.x * sin) + (vector.z * cos)
+  );
+}
+
+function moveTowards(current, target, maximumDelta) {
+  if (Math.abs(target - current) <= maximumDelta) {
+    return target;
+  }
+
+  return current + Math.sign(target - current) * maximumDelta;
 }
 
 function clamp(value, min, max) {
@@ -123,6 +160,15 @@ function cloneCollisionShape(shape) {
   return {
     ...shape,
     halfExtents: clonePlainVector(shape.halfExtents)
+  };
+}
+
+function cloneWorldProp(prop) {
+  return {
+    ...prop,
+    position: prop.position ? { ...prop.position } : null,
+    collisionShape: cloneCollisionShape(prop.collisionShape),
+    visual: prop.visual ? { ...prop.visual } : {}
   };
 }
 
@@ -586,6 +632,58 @@ function getFixtureHalfHeight(fixture) {
   return null;
 }
 
+function getCollisionShapeHalfHeight(shape, fallback = 1) {
+  if (shape?.type === 'box') {
+    return Number.isFinite(shape.halfExtents?.y) ? shape.halfExtents.y : fallback;
+  }
+
+  if (shape?.type === 'cylinder') {
+    return Number.isFinite(shape.halfHeight)
+      ? shape.halfHeight
+      : Number.isFinite(shape.height)
+        ? shape.height / 2
+        : fallback;
+  }
+
+  return Number.isFinite(shape?.radius) ? shape.radius : fallback;
+}
+
+function getCollisionShapeRadius(shape, fallback = 1) {
+  if (shape?.type === 'box') {
+    const halfExtents = shape.halfExtents ?? {};
+    return Math.hypot(halfExtents.x ?? fallback, halfExtents.z ?? fallback);
+  }
+
+  return Number.isFinite(shape?.radius) ? shape.radius : fallback;
+}
+
+function normalizeWorldProp(rawProp = {}, terrainConfig) {
+  const x = Number.isFinite(rawProp.position?.x) ? rawProp.position.x : 0;
+  const z = Number.isFinite(rawProp.position?.z) ? rawProp.position.z : 0;
+  const collisionShape = cloneCollisionShape(rawProp.collisionShape) ?? { type: 'sphere', radius: rawProp.bodyRadius ?? 1 };
+  const halfHeight = getCollisionShapeHalfHeight(collisionShape, rawProp.bodyRadius ?? 1);
+  const y = Number.isFinite(rawProp.position?.y)
+    ? rawProp.position.y
+    : getTerrainHeight(x, z, terrainConfig) + halfHeight;
+  const bodyRadius = Number.isFinite(rawProp.bodyRadius)
+    ? rawProp.bodyRadius
+    : getCollisionShapeRadius(collisionShape, 1);
+
+  return {
+    id: rawProp.id ? `${rawProp.id}` : `${rawProp.kind ?? 'prop'}:${x.toFixed(2)}:${z.toFixed(2)}`,
+    kind: rawProp.kind ?? 'prop',
+    displayName: rawProp.displayName ?? rawProp.kind ?? 'Prop',
+    position: new THREE.Vector3(x, y, z),
+    rotationY: Number.isFinite(rawProp.rotationY) ? rawProp.rotationY : 0,
+    bodyRadius,
+    blocking: rawProp.blocking !== false,
+    climbable: rawProp.climbable !== false,
+    interactionKind: rawProp.interactionKind ?? null,
+    collisionShape,
+    visual: { ...(rawProp.visual ?? {}) }
+  };
+}
+
 function createFixturePosition(fixture, terrainConfig) {
   const x = fixture.position?.x ?? 0;
   const z = fixture.position?.z ?? 0;
@@ -622,6 +720,7 @@ function normalizeInput(rawInput = {}) {
     lookY: Number.isFinite(rawInput.lookY) ? rawInput.lookY : 0,
     turnX: Number.isFinite(rawInput.turnX) ? rawInput.turnX : 0,
     reachDelta: Number.isFinite(rawInput.reachDelta) ? rawInput.reachDelta : 0,
+    interactPressed: Boolean(rawInput.interactPressed),
     leftHeld: Boolean(rawInput.leftHeld),
     rightHeld: Boolean(rawInput.rightHeld)
   };
@@ -748,6 +847,422 @@ function createBodyObstacles(players) {
     }));
 }
 
+function createWorldPropObstacles(worldProps) {
+  return worldProps
+    .filter((prop) => prop.blocking)
+    .map((prop) => ({
+      slot: `prop:${prop.id}`,
+      propId: prop.id,
+      position: prop.position,
+      radius: prop.bodyRadius,
+      shape: prop.collisionShape,
+      rotationY: prop.rotationY ?? 0
+    }));
+}
+
+function createPropSupport({
+  prop,
+  height,
+  normal,
+  surfaceId,
+  kind = 'prop',
+  climb = false,
+  priority = 0
+}) {
+  const supportNormal = normal.clone();
+  if (supportNormal.lengthSq() <= TOP_DOWN_EPSILON) {
+    supportNormal.copy(WORLD_UP);
+  } else {
+    supportNormal.normalize();
+  }
+
+  return {
+    prop,
+    height,
+    normal: supportNormal,
+    surfaceId,
+    kind,
+    climb,
+    priority
+  };
+}
+
+function getMovementInwardAmount(movement, normal) {
+  if (!movement || movement.lengthSq() <= TOP_DOWN_EPSILON) {
+    return 0;
+  }
+
+  return Math.max(0, -movement.dot(normal));
+}
+
+function shouldDetachFromSurface(player, support, movement) {
+  if (!support || support.normal.y >= VERTICAL_SURFACE_MIN_UP_DOT) {
+    return false;
+  }
+
+  if (player.supportSurfaceId !== support.surfaceId || !movement || movement.lengthSq() <= TOP_DOWN_EPSILON) {
+    return false;
+  }
+
+  return movement.dot(support.normal) > CLIMB_INWARD_INPUT_THRESHOLD;
+}
+
+function getRotatedBoxPlanarContact(player, prop) {
+  const shape = prop.collisionShape ?? { type: 'sphere', radius: prop.bodyRadius };
+  const halfExtents = shape.halfExtents ?? { x: prop.bodyRadius, z: prop.bodyRadius };
+  const local = getYawLocalVector(player.position.clone().sub(prop.position), prop.rotationY ?? 0);
+  const expandedX = (halfExtents.x ?? prop.bodyRadius) + player.bodyRadius;
+  const expandedZ = (halfExtents.z ?? prop.bodyRadius) + player.bodyRadius;
+
+  if (Math.abs(local.x) >= expandedX || Math.abs(local.z) >= expandedZ) {
+    return null;
+  }
+
+  const penetrationX = expandedX - Math.abs(local.x);
+  const penetrationZ = expandedZ - Math.abs(local.z);
+  const localNormal = penetrationX < penetrationZ
+    ? new THREE.Vector3(local.x >= 0 ? 1 : -1, 0, 0)
+    : new THREE.Vector3(0, 0, local.z >= 0 ? 1 : -1);
+  const localCorrection = localNormal.clone().multiplyScalar(Math.min(penetrationX, penetrationZ));
+  const correction = getYawWorldVector(localCorrection, prop.rotationY ?? 0);
+  const normal = getYawWorldVector(localNormal, prop.rotationY ?? 0).normalize();
+
+  return {
+    correction,
+    normal,
+    local,
+    face: Math.abs(localNormal.x) > 0 ? 'x' : 'z'
+  };
+}
+
+function getCylinderPlanarContact(player, prop) {
+  const shape = prop.collisionShape ?? { type: 'sphere', radius: prop.bodyRadius };
+  const obstacleRadius = shape.type === 'cylinder'
+    ? shape.radius
+    : prop.bodyRadius;
+  const delta = player.position.clone().sub(prop.position);
+  delta.y = 0;
+  const minimumDistance = obstacleRadius + player.bodyRadius;
+  const distance = Math.hypot(delta.x, delta.z);
+  if (distance >= minimumDistance) {
+    return null;
+  }
+
+  const normal = distance > TOP_DOWN_EPSILON
+    ? new THREE.Vector3(delta.x / distance, 0, delta.z / distance)
+    : new THREE.Vector3(1, 0, 0);
+
+  return {
+    correction: normal.clone().multiplyScalar(minimumDistance - distance),
+    normal
+  };
+}
+
+function getPropShapeHalfHeight(prop) {
+  const shape = prop.collisionShape ?? { type: 'sphere', radius: prop.bodyRadius };
+  if (shape.type === 'box') {
+    return shape.halfExtents?.y ?? prop.bodyRadius;
+  }
+
+  if (shape.type === 'cylinder') {
+    return Number.isFinite(shape.halfHeight)
+      ? shape.halfHeight
+      : Number.isFinite(shape.height)
+        ? shape.height / 2
+        : prop.bodyRadius;
+  }
+
+  return shape.radius ?? prop.bodyRadius;
+}
+
+function getPropTopSupportHeight(prop, player) {
+  if (prop.kind === 'rotting_log') {
+    const radius = prop.visual?.radius ?? prop.collisionShape?.halfExtents?.y ?? prop.bodyRadius;
+    return prop.position.y + radius + player.bodyRadius;
+  }
+
+  if (prop.kind === 'bamboo_stick') {
+    const length = prop.visual?.length ?? prop.bodyRadius * 2;
+    const radius = prop.visual?.radius ?? prop.bodyRadius;
+    const tilt = prop.visual?.tilt ?? 0;
+    return prop.position.y + (Math.cos(tilt) * length * 0.5) + radius + player.bodyRadius;
+  }
+
+  return prop.position.y + getPropShapeHalfHeight(prop) + player.bodyRadius;
+}
+
+function shouldSkipPlanarPropCollision(player, prop) {
+  if (!prop.climbable) {
+    return false;
+  }
+
+  if (prop.kind === 'giant_tree') {
+    return player.position.y >= getPropTopSupportHeight(prop, player) - PROP_SUPPORT_SNAP_DISTANCE;
+  }
+
+  if (
+    prop.kind === 'rotting_log' ||
+    prop.kind === 'rock' ||
+    prop.kind === 'gravel' ||
+    prop.kind === 'salt_cone' ||
+    prop.kind === 'rock_spire' ||
+    prop.kind === 'bamboo_stick'
+  ) {
+    return true;
+  }
+
+  const shape = prop.collisionShape ?? { type: 'sphere', radius: prop.bodyRadius };
+  return shape.type === 'sphere';
+}
+
+function getBoxTopSupport(player, prop) {
+  const shape = prop.collisionShape ?? { type: 'sphere', radius: prop.bodyRadius };
+  const halfExtents = shape.halfExtents ?? { x: prop.bodyRadius, y: prop.bodyRadius, z: prop.bodyRadius };
+  const local = getYawLocalVector(player.position.clone().sub(prop.position), prop.rotationY ?? 0);
+  const expandedX = (halfExtents.x ?? prop.bodyRadius) + player.bodyRadius;
+  const expandedZ = (halfExtents.z ?? prop.bodyRadius) + player.bodyRadius;
+  if (Math.abs(local.x) > expandedX + PROP_ADHESION_MARGIN || Math.abs(local.z) > expandedZ + PROP_ADHESION_MARGIN) {
+    return null;
+  }
+
+  const topHeight = prop.position.y + (halfExtents.y ?? prop.bodyRadius) + player.bodyRadius;
+  if (player.position.y > topHeight + PROP_SUPPORT_SNAP_DISTANCE) {
+    return null;
+  }
+
+  return createPropSupport({
+    prop,
+    height: topHeight,
+    normal: WORLD_UP,
+    surfaceId: `prop:${prop.id}:box:top`,
+    priority: topHeight
+  });
+}
+
+function getBoxSideClimbSupport(player, prop, movement, speed, delta, planarContact) {
+  if (!planarContact) {
+    return null;
+  }
+
+  const inwardAmount = getMovementInwardAmount(movement, planarContact.normal);
+  const alreadyAttached = player.supportSurfaceId === `prop:${prop.id}:box:${planarContact.face}:${planarContact.normal.x || planarContact.normal.z}`;
+  if (inwardAmount <= CLIMB_INWARD_INPUT_THRESHOLD && !alreadyAttached) {
+    return null;
+  }
+
+  const shape = prop.collisionShape ?? { type: 'sphere', radius: prop.bodyRadius };
+  const halfHeight = shape.halfExtents?.y ?? prop.bodyRadius;
+  const minHeight = prop.position.y - halfHeight + player.bodyRadius;
+  const maxHeight = prop.position.y + halfHeight + player.bodyRadius;
+  const climbDelta = inwardAmount * speed * delta * PROP_CLIMB_SPEED_SCALE;
+  const height = clamp(player.position.y + climbDelta, minHeight, maxHeight);
+
+  return createPropSupport({
+    prop,
+    height,
+    normal: planarContact.normal,
+    surfaceId: `prop:${prop.id}:box:${planarContact.face}:${planarContact.normal.x || planarContact.normal.z}`,
+    climb: true,
+    priority: height + 5
+  });
+}
+
+function getVerticalCylinderSupport(player, prop, movement, speed, delta, planarContact = null) {
+  const shape = prop.collisionShape ?? { type: 'cylinder', radius: prop.bodyRadius, halfHeight: prop.bodyRadius };
+  const radius = shape.radius ?? prop.bodyRadius;
+  const halfHeight = Number.isFinite(shape.halfHeight)
+    ? shape.halfHeight
+    : Number.isFinite(shape.height)
+      ? shape.height / 2
+      : prop.bodyRadius;
+  const deltaPosition = player.position.clone().sub(prop.position);
+  const radialDistance = Math.hypot(deltaPosition.x, deltaPosition.z);
+  const expandedRadius = radius + player.bodyRadius;
+  const normal = radialDistance > TOP_DOWN_EPSILON
+    ? new THREE.Vector3(deltaPosition.x / radialDistance, 0, deltaPosition.z / radialDistance)
+    : planarContact?.normal?.clone() ?? new THREE.Vector3(1, 0, 0);
+  const topHeight = prop.position.y + halfHeight + player.bodyRadius;
+  const bottomHeight = prop.position.y - halfHeight + player.bodyRadius;
+
+  if (radialDistance <= expandedRadius + PROP_ADHESION_MARGIN && player.position.y <= topHeight + PROP_SUPPORT_SNAP_DISTANCE) {
+    const top = createPropSupport({
+      prop,
+      height: topHeight,
+      normal: WORLD_UP,
+      surfaceId: `prop:${prop.id}:cylinder:top`,
+      priority: topHeight
+    });
+    if (player.position.y >= topHeight - PROP_SUPPORT_SNAP_DISTANCE || Math.abs(normal.y) > 0.5) {
+      return top;
+    }
+  }
+
+  if (radialDistance > expandedRadius + PROP_ADHESION_MARGIN) {
+    return null;
+  }
+
+  const inwardAmount = getMovementInwardAmount(movement, normal);
+  const surfaceId = `prop:${prop.id}:cylinder:side`;
+  if (inwardAmount <= CLIMB_INWARD_INPUT_THRESHOLD && player.supportSurfaceId !== surfaceId) {
+    return null;
+  }
+
+  const climbDelta = inwardAmount * speed * delta * PROP_CLIMB_SPEED_SCALE;
+  const height = clamp(player.position.y + climbDelta, bottomHeight, topHeight);
+  return createPropSupport({
+    prop,
+    height,
+    normal,
+    surfaceId,
+    climb: true,
+    priority: height + 5
+  });
+}
+
+function getSphereSupport(player, prop) {
+  const shape = prop.collisionShape ?? { type: 'sphere', radius: prop.bodyRadius };
+  const radius = (shape.radius ?? prop.bodyRadius) + player.bodyRadius;
+  const delta = player.position.clone().sub(prop.position);
+  const planarDistance = Math.hypot(delta.x, delta.z);
+  if (planarDistance > radius + PROP_ADHESION_MARGIN) {
+    return null;
+  }
+
+  const verticalOffset = Math.sqrt(Math.max(0, (radius * radius) - (planarDistance * planarDistance)));
+  const height = prop.position.y + verticalOffset;
+  if (player.position.y > height + PROP_SUPPORT_SNAP_DISTANCE) {
+    return null;
+  }
+
+  const normal = new THREE.Vector3(delta.x, verticalOffset, delta.z);
+  if (normal.lengthSq() <= TOP_DOWN_EPSILON) {
+    normal.copy(WORLD_UP);
+  }
+
+  return createPropSupport({
+    prop,
+    height,
+    normal,
+    surfaceId: `prop:${prop.id}:sphere`,
+    priority: height
+  });
+}
+
+function getConeSupport(player, prop) {
+  const shape = prop.collisionShape ?? { type: 'cylinder', radius: prop.bodyRadius, halfHeight: prop.bodyRadius };
+  const radius = shape.radius ?? prop.visual?.radius ?? prop.bodyRadius;
+  const halfHeight = getPropShapeHalfHeight(prop);
+  const height = halfHeight * 2;
+  const baseY = prop.position.y - halfHeight;
+  const delta = player.position.clone().sub(prop.position);
+  const planarDistance = Math.hypot(delta.x, delta.z);
+  const expandedRadius = radius + player.bodyRadius;
+  if (planarDistance > expandedRadius + PROP_ADHESION_MARGIN || player.position.y > baseY + height + player.bodyRadius + PROP_SUPPORT_SNAP_DISTANCE) {
+    return null;
+  }
+
+  const surfaceRadius = Math.min(radius, planarDistance);
+  const surfaceHeight = baseY + (height * Math.max(0, 1 - (surfaceRadius / Math.max(radius, TOP_DOWN_EPSILON))));
+  const supportHeight = Math.max(baseY + player.bodyRadius, surfaceHeight + player.bodyRadius);
+  const radialNormal = planarDistance > TOP_DOWN_EPSILON
+    ? new THREE.Vector3(delta.x / planarDistance, 0, delta.z / planarDistance)
+    : new THREE.Vector3(1, 0, 0);
+  const sideSlope = height / Math.max(radius, TOP_DOWN_EPSILON);
+  const normal = radialNormal.multiplyScalar(sideSlope).add(WORLD_UP).normalize();
+
+  return createPropSupport({
+    prop,
+    height: supportHeight,
+    normal,
+    surfaceId: `prop:${prop.id}:cone`,
+    priority: supportHeight + normal.y
+  });
+}
+
+function getBambooStickSupport(player, prop) {
+  const length = prop.visual?.length ?? (prop.collisionShape?.halfExtents?.y ?? prop.bodyRadius) * 2;
+  const radius = (prop.visual?.radius ?? prop.bodyRadius) + player.bodyRadius;
+  const tilt = prop.visual?.tilt ?? 0;
+  const localAxis = new THREE.Vector3(-Math.sin(tilt), Math.cos(tilt), 0);
+  const axis = getYawWorldVector(localAxis, prop.rotationY ?? 0).normalize();
+  const delta = player.position.clone().sub(prop.position);
+  const axisPlanar = new THREE.Vector3(axis.x, 0, axis.z);
+  const deltaPlanar = new THREE.Vector3(delta.x, 0, delta.z);
+  let along = 0;
+  if (axisPlanar.lengthSq() > TOP_DOWN_EPSILON) {
+    along = clamp(deltaPlanar.dot(axisPlanar) / axisPlanar.lengthSq(), -length / 2, length / 2);
+  }
+
+  const axisPoint = prop.position.clone().addScaledVector(axis, along);
+  const planarOffset = player.position.clone().sub(axisPoint).setY(0);
+  const planarDistance = planarOffset.length();
+  if (planarDistance > radius + PROP_ADHESION_MARGIN) {
+    return null;
+  }
+
+  const verticalOffset = Math.sqrt(Math.max(0, (radius * radius) - (planarDistance * planarDistance)));
+  const height = axisPoint.y + verticalOffset;
+  const normal = planarOffset.lengthSq() > TOP_DOWN_EPSILON
+    ? planarOffset.normalize().multiplyScalar(Math.max(0.2, 1 - axis.y)).addScaledVector(WORLD_UP, verticalOffset / Math.max(radius, TOP_DOWN_EPSILON)).normalize()
+    : WORLD_UP.clone();
+
+  return createPropSupport({
+    prop,
+    height,
+    normal,
+    surfaceId: `prop:${prop.id}:stick`,
+    priority: height + normal.y
+  });
+}
+
+function getLogSupport(player, prop, movement, speed, delta) {
+  const length = prop.visual?.length ?? (prop.collisionShape?.halfExtents?.x ?? prop.bodyRadius) * 2;
+  const radius = prop.visual?.radius ?? prop.collisionShape?.halfExtents?.y ?? prop.bodyRadius;
+  const expandedRadius = radius + player.bodyRadius;
+  const halfLength = (length / 2) + player.bodyRadius;
+  const local = getYawLocalVector(player.position.clone().sub(prop.position), prop.rotationY ?? 0);
+  if (Math.abs(local.x) > halfLength + PROP_ADHESION_MARGIN || Math.abs(local.z) > expandedRadius + PROP_ADHESION_MARGIN) {
+    return null;
+  }
+
+  const verticalOffset = Math.sqrt(Math.max(0, (expandedRadius * expandedRadius) - (local.z * local.z)));
+  const height = prop.position.y + verticalOffset;
+  const localNormal = new THREE.Vector3(0, verticalOffset, local.z);
+  if (localNormal.lengthSq() <= TOP_DOWN_EPSILON) {
+    localNormal.copy(WORLD_UP);
+  }
+  const normal = getYawWorldVector(localNormal.normalize(), prop.rotationY ?? 0);
+
+  if (normal.y >= VERTICAL_SURFACE_MIN_UP_DOT) {
+    if (player.position.y > height + PROP_SUPPORT_SNAP_DISTANCE) {
+      return null;
+    }
+
+    return createPropSupport({
+      prop,
+      height,
+      normal,
+      surfaceId: `prop:${prop.id}:log:top`,
+      priority: height + normal.y
+    });
+  }
+
+  const inwardAmount = getMovementInwardAmount(movement, normal);
+  const surfaceId = `prop:${prop.id}:log:side`;
+  if (inwardAmount <= CLIMB_INWARD_INPUT_THRESHOLD && player.supportSurfaceId !== surfaceId) {
+    return null;
+  }
+
+  return createPropSupport({
+    prop,
+    height: player.position.y + inwardAmount * speed * delta * PROP_CLIMB_SPEED_SCALE,
+    normal,
+    surfaceId,
+    climb: true,
+    priority: height + 5
+  });
+}
+
 function getStalkObstacleBroadphaseRadius(player) {
   return (
     player.bodyRadius +
@@ -860,6 +1375,9 @@ function createFixtureState(participant, terrainConfig) {
     staticBody: true,
     onTrail: false,
     grounded: true,
+    supportNormal: WORLD_UP.clone(),
+    supportKind: 'terrain',
+    supportSurfaceId: null,
     verticalVelocity: 0,
     lockOnHeld: false,
     controlMode: 'static',
@@ -883,8 +1401,15 @@ function createPlayerState(
   }
 
   const profile = profileTemplates[profileName] ?? profileTemplates.human;
-  const startPoint = getInitialStartPoint(slot);
-  const initialRotation = slot === 1 ? Math.PI : slot === 2 ? 0 : Math.atan2(-startPoint.x, -startPoint.z);
+  const startPoint = participant?.position
+    ? {
+      x: participant.position.x ?? 0,
+      z: participant.position.z ?? 0
+    }
+    : getInitialStartPoint(slot);
+  const initialRotation = Number.isFinite(participant?.rotationY)
+    ? participant.rotationY
+    : slot === 1 ? Math.PI : slot === 2 ? 0 : Math.atan2(-startPoint.x, -startPoint.z);
   const position = createInitialPosition(startPoint, terrainConfig, profile, initialRotation);
   const spawnDropHeight = getProfileSpawnDropHeight(profile);
   const stalks = Object.fromEntries(
@@ -895,6 +1420,8 @@ function createPlayerState(
   return {
     slot,
     profileName,
+    displayName: participant?.displayName ?? null,
+    startPoint: { x: startPoint.x, z: startPoint.z },
     connected,
     profile,
     position,
@@ -909,6 +1436,9 @@ function createPlayerState(
     maxHealth: profile.maxHealth,
     onTrail: false,
     grounded: spawnDropHeight <= 0,
+    supportNormal: WORLD_UP.clone(),
+    supportKind: 'terrain',
+    supportSurfaceId: null,
     verticalVelocity: 0,
     lockOnHeld: false,
     controlMode: 'idle',
@@ -964,6 +1494,18 @@ function applyProfileToPlayer(player, profile) {
   }
 }
 
+function applyArenaRadiusOverride(profileTemplates, arenaRadius) {
+  if (!Number.isFinite(arenaRadius)) {
+    return;
+  }
+
+  for (const profile of Object.values(profileTemplates)) {
+    if (profile && Number.isFinite(profile.arenaRadius)) {
+      profile.arenaRadius = arenaRadius;
+    }
+  }
+}
+
 export class MatchSimulation {
   constructor(options = {}) {
     const participants = options.players ?? [
@@ -974,8 +1516,14 @@ export class MatchSimulation {
     this.tickRate = options.tickRate ?? MATCH_TICK_RATE;
     this.tickDuration = 1 / this.tickRate;
     this.tuningConfig = normalizeTuningConfig(options.tuning ?? DEFAULT_TUNING_CONFIG);
-    this.terrainConfig = createTerrainConfigFromTuning(this.tuningConfig);
+    this.terrainConfig = options.terrainConfig
+      ? normalizeTerrainConfig(options.terrainConfig)
+      : createTerrainConfigFromTuning(this.tuningConfig);
     this.profileTemplates = createSimulationProfiles(this.tuningConfig);
+    this.arenaRadiusOverride = Number.isFinite(options.arenaRadius)
+      ? options.arenaRadius
+      : this.terrainConfig.worldRadius;
+    applyArenaRadiusOverride(this.profileTemplates, this.arenaRadiusOverride);
     this.mode = options.mode ?? 'singleplayer';
     this.phase = options.startImmediately === false ? 'waiting' : 'running';
     this.winnerSlot = null;
@@ -987,6 +1535,7 @@ export class MatchSimulation {
     this.wetTrailCells = new Map();
     this.events = [];
     this.contactMemory = new Map();
+    this.worldProps = (options.worldProps ?? []).map((prop) => normalizeWorldProp(prop, this.terrainConfig));
 
     this.players = new Map();
     this.inputs = new Map();
@@ -1014,7 +1563,7 @@ export class MatchSimulation {
       displayName: player.displayName,
       immortal: player.immortal,
       maxHealth: player.maxHealth,
-      position: player.fixtureKind ? cloneVector(player.position) : null,
+      position: player.fixtureKind ? cloneVector(player.position) : player.startPoint ? { ...player.startPoint } : null,
       rotationY: player.rotationY,
       bodyRadius: player.bodyRadius,
       collisionShape: cloneCollisionShape(player.collisionShape)
@@ -1074,6 +1623,7 @@ export class MatchSimulation {
     this.tuningConfig = normalizeTuningConfig(nextConfig);
     this.terrainConfig = createTerrainConfigFromTuning(this.tuningConfig);
     this.profileTemplates = createSimulationProfiles(this.tuningConfig);
+    applyArenaRadiusOverride(this.profileTemplates, this.arenaRadiusOverride);
     this.trailCellSize = this.tuningConfig.trailCellSize;
     this.trailSpeedMultiplier = this.tuningConfig.trailSpeedMultiplier;
     this.trailContactRadius = this.tuningConfig.trailContactRadius;
@@ -1098,6 +1648,7 @@ export class MatchSimulation {
         x: cell.x,
         z: cell.z
       })),
+      worldProps: this.worldProps.map(cloneWorldProp),
       events: this.events.map(cloneEvent),
       players: Array.from(this.players.values())
         .sort((left, right) => left.slot - right.slot)
@@ -1116,6 +1667,7 @@ export class MatchSimulation {
           groundHeight: player.profile.groundHeight,
           onTrail: player.onTrail,
           grounded: player.grounded,
+          supportNormal: cloneVector(player.supportNormal ?? WORLD_UP),
           lockOn: player.lockOnHeld,
           controlMode: player.controlMode,
           controlIntensity: player.controlIntensity,
@@ -1175,7 +1727,10 @@ export class MatchSimulation {
       }
     }
 
-    const bodyObstacles = createBodyObstacles(orderedPlayers);
+    const bodyObstacles = [
+      ...createBodyObstacles(orderedPlayers),
+      ...createWorldPropObstacles(this.worldProps)
+    ];
 
     for (const player of orderedPlayers) {
       if (!player.connected) {
@@ -1261,6 +1816,17 @@ export class MatchSimulation {
       return;
     }
 
+    if (this.mode === 'explorer') {
+      const livingHumans = this.getLivingPlayers({ humansOnly: true });
+      if (livingHumans.length > 0) {
+        return;
+      }
+
+      const livingBots = this.getLivingPlayers().filter((player) => player.profileName === 'bot');
+      this.endMatch(livingBots[0]?.slot ?? null, 'knockout');
+      return;
+    }
+
     if (this.mode === 'multiplayer') {
       const livingHumans = this.getLivingPlayers({ humansOnly: true });
       if (livingHumans.length > 1) {
@@ -1324,25 +1890,41 @@ export class MatchSimulation {
     const speed = baseSpeed * (this.isPlayerOnWetTrail(player) ? this.trailSpeedMultiplier : 1);
     player.position.addScaledVector(movement, speed * delta);
     this.clampPlanarPosition(player);
+    const propContacts = this.resolveWorldPropCollision(player);
 
-    const groundHeight = getPlayerGroundHeight(player, this.terrainConfig);
+    const terrainHeight = getPlayerGroundHeight(player, this.terrainConfig);
+    const support = this.getBestWorldSupport(player, movement, speed, delta, propContacts);
+    const supportHeight = Math.max(terrainHeight, support?.height ?? terrainHeight);
 
-    if (normalizedInput.jumpPressed && player.grounded) {
+    const startedJump = normalizedInput.jumpPressed && player.grounded;
+    if (startedJump) {
       player.grounded = false;
       player.verticalVelocity = player.profile.jumpVelocity;
-      player.position.y = groundHeight;
+      player.position.y = Math.max(player.position.y, supportHeight);
+      player.supportKind = 'air';
+      player.supportSurfaceId = null;
+      player.supportNormal.copy(WORLD_UP);
     }
 
-    if (player.grounded) {
-      player.position.y = groundHeight;
-    } else {
-      player.verticalVelocity -= player.profile.gravity * delta;
-      player.position.y += player.verticalVelocity * delta;
+    if (!startedJump) {
+      const useTerrainGrounding = this.applySupport(player, support, terrainHeight, speed, delta);
 
-      if (player.position.y <= groundHeight) {
-        player.position.y = groundHeight;
-        player.verticalVelocity = 0;
-        player.grounded = true;
+      if (useTerrainGrounding) {
+        if (player.grounded) {
+          player.position.y = terrainHeight;
+        } else {
+          player.verticalVelocity -= player.profile.gravity * delta;
+          player.position.y += player.verticalVelocity * delta;
+
+          if (player.position.y <= terrainHeight) {
+            player.position.y = terrainHeight;
+            player.verticalVelocity = 0;
+            player.grounded = true;
+            player.supportKind = 'terrain';
+            player.supportSurfaceId = null;
+            player.supportNormal.copy(WORLD_UP);
+          }
+        }
       }
     }
 
@@ -1372,6 +1954,10 @@ export class MatchSimulation {
         const turnAlpha = Math.min(1, player.profile.turnSpeed * delta);
         player.rotationY = lerpAngle(player.rotationY, desiredRotation, turnAlpha);
       }
+    }
+
+    if (normalizedInput.interactPressed) {
+      this.resolveWorldPropInteraction(player);
     }
 
     this.applyCombatInput(player, normalizedInput, delta);
@@ -1563,6 +2149,184 @@ export class MatchSimulation {
     }
 
     return false;
+  }
+
+  getBestWorldSupport(player, movement, speed, delta, contacts = []) {
+    const terrainHeight = getPlayerGroundHeight(player, this.terrainConfig);
+    const terrainSupport = {
+      kind: 'terrain',
+      height: terrainHeight,
+      normal: WORLD_UP.clone(),
+      surfaceId: null,
+      priority: terrainHeight
+    };
+    let bestSupport = terrainSupport;
+    const contactByPropId = new Map(contacts.map((contact) => [contact.prop.id, contact]));
+
+    for (const prop of this.worldProps) {
+      if (!prop.climbable) {
+        continue;
+      }
+
+      const shape = prop.collisionShape ?? { type: 'sphere', radius: prop.bodyRadius };
+      const planarContact = contactByPropId.get(prop.id)?.contact ?? null;
+      let support = null;
+
+      if (prop.kind === 'rotting_log') {
+        support = getLogSupport(player, prop, movement, speed, delta);
+      } else if (prop.kind === 'bamboo_stick') {
+        support = getBambooStickSupport(player, prop);
+      } else if (prop.kind === 'salt_cone' || prop.kind === 'rock_spire') {
+        support = getConeSupport(player, prop);
+      } else if (shape.type === 'box') {
+        support = getBoxSideClimbSupport(player, prop, movement, speed, delta, planarContact) ??
+          getBoxTopSupport(player, prop);
+      } else if (shape.type === 'cylinder') {
+        support = getVerticalCylinderSupport(player, prop, movement, speed, delta, planarContact);
+      } else {
+        support = getSphereSupport(player, prop);
+      }
+
+      if (!support || shouldDetachFromSurface(player, support, movement)) {
+        continue;
+      }
+
+      if (support.priority > bestSupport.priority) {
+        bestSupport = support;
+      }
+    }
+
+    return bestSupport;
+  }
+
+  applySupport(player, support, terrainHeight, speed, delta) {
+    const previousSurfaceId = player.supportSurfaceId;
+    const previousKind = player.supportKind;
+    const nextKind = support?.kind ?? 'terrain';
+    const nextHeight = support?.height ?? terrainHeight;
+    const nextNormal = support?.normal ?? WORLD_UP;
+    const nextSurfaceId = support?.surfaceId ?? null;
+    const wasPropSupported = previousKind === 'prop' && previousSurfaceId;
+    const isPropSupported = nextKind === 'prop' && nextSurfaceId;
+
+    if (!isPropSupported && wasPropSupported && player.position.y > terrainHeight + 0.05) {
+      player.grounded = false;
+      player.verticalVelocity = Math.min(0, player.verticalVelocity);
+      player.supportKind = 'air';
+      player.supportSurfaceId = null;
+      player.supportNormal.copy(WORLD_UP);
+      return false;
+    }
+
+    if (!isPropSupported) {
+      player.supportKind = 'terrain';
+      player.supportSurfaceId = null;
+      player.supportNormal.copy(WORLD_UP);
+      return true;
+    }
+
+    const ascendDelta = Math.max(speed * PROP_CLIMB_SPEED_SCALE * delta, 0.02);
+    const descendDelta = Math.max(speed * PROP_CLIMB_DESCEND_SCALE * delta, ascendDelta);
+    const maxDelta = nextHeight >= player.position.y ? ascendDelta : descendDelta;
+    player.position.y = moveTowards(player.position.y, nextHeight, maxDelta);
+    player.grounded = true;
+    player.verticalVelocity = 0;
+    player.supportKind = 'prop';
+    player.supportSurfaceId = nextSurfaceId;
+    player.supportNormal.copy(nextNormal);
+    return false;
+  }
+
+  resolveWorldPropCollision(player) {
+    if (!player.connected || player.health <= 0 || player.fixtureKind || this.worldProps.length === 0) {
+      return [];
+    }
+
+    const contacts = [];
+
+    for (let pass = 0; pass < 3; pass += 1) {
+      let moved = false;
+
+      for (const prop of this.worldProps) {
+        if (!prop.blocking) {
+          continue;
+        }
+
+        if (shouldSkipPlanarPropCollision(player, prop)) {
+          continue;
+        }
+
+        const shape = prop.collisionShape ?? { type: 'sphere', radius: prop.bodyRadius };
+
+        if (shape.type === 'box') {
+          const contact = getRotatedBoxPlanarContact(player, prop);
+          if (!contact) {
+            continue;
+          }
+
+          player.position.x += contact.correction.x;
+          player.position.z += contact.correction.z;
+          contacts.push({ prop, contact });
+          moved = true;
+          continue;
+        }
+
+        const contact = getCylinderPlanarContact(player, prop);
+        if (!contact) {
+          continue;
+        }
+
+        player.position.x += contact.correction.x;
+        player.position.z += contact.correction.z;
+        contacts.push({ prop, contact });
+        moved = true;
+      }
+
+      if (!moved) {
+        break;
+      }
+
+      this.clampPlanarPosition(player);
+    }
+
+    return contacts;
+  }
+
+  resolveWorldPropInteraction(player) {
+    if (!player.connected || player.health <= 0 || player.fixtureKind) {
+      return;
+    }
+
+    let nearestLog = null;
+    let nearestDistance = Infinity;
+    for (const prop of this.worldProps) {
+      if (prop.interactionKind !== 'rotting_log') {
+        continue;
+      }
+
+      const distance = Math.hypot(
+        player.position.x - prop.position.x,
+        player.position.z - prop.position.z
+      );
+      const interactionDistance = WORLD_PROP_INTERACTION_DISTANCE + player.bodyRadius + prop.bodyRadius;
+      if (distance < interactionDistance && distance < nearestDistance) {
+        nearestLog = prop;
+        nearestDistance = distance;
+      }
+    }
+
+    if (!nearestLog) {
+      return;
+    }
+
+    this.events.push({
+      id: `${this.tick}:nibble:${player.slot}:${nearestLog.id}`,
+      type: 'log_nibble',
+      tick: this.tick,
+      playerSlot: player.slot,
+      propId: nearestLog.id,
+      position: cloneVector(nearestLog.position)
+    });
   }
 
   clampPlanarPosition(player) {

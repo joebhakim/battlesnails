@@ -112,8 +112,10 @@ export class SnailActor {
     this.shellDamagedColor = new THREE.Color(config.shellDamagedColor);
     this.shellCriticalColor = new THREE.Color(config.shellCriticalColor);
 
-    this.mesh.add(this.body);
-    this.mesh.add(this.shell);
+    this.tiltRoot = new THREE.Group();
+    this.tiltRoot.add(this.body);
+    this.tiltRoot.add(this.shell);
+    this.mesh.add(this.tiltRoot);
 
     this.stalks = {
       left: this.createEyeStalk('left'),
@@ -666,6 +668,7 @@ export class SnailActor {
 
     this.mesh.position.set(state.position.x, state.position.y, state.position.z);
     this.mesh.rotation.y = state.rotationY;
+    this.applySupportNormal(state.supportNormal);
 
     for (const side of STALK_SIDE_KEYS) {
       const stalk = this.stalks[side];
@@ -741,6 +744,22 @@ export class SnailActor {
       this.resetDeathBurst();
     }
     this.mesh.visible = visible;
+  }
+
+  applySupportNormal(supportNormal = LOCAL_UP) {
+    const normal = new THREE.Vector3(
+      Number.isFinite(supportNormal?.x) ? supportNormal.x : 0,
+      Number.isFinite(supportNormal?.y) ? supportNormal.y : 1,
+      Number.isFinite(supportNormal?.z) ? supportNormal.z : 0
+    );
+
+    if (normal.lengthSq() === 0) {
+      normal.copy(LOCAL_UP);
+    } else {
+      normal.normalize();
+    }
+
+    this.tiltRoot.quaternion.setFromUnitVectors(LOCAL_UP, normal);
   }
 
   faceDirection(direction, delta, turnSpeed = this.turnSpeed) {

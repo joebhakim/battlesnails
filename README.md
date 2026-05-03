@@ -2,8 +2,9 @@
 
 BattleSnails is a deliberately jarring third-person arena game built with Three.js and Vite. You control a blue snail, drive two floppy eye stalks with held mouse input, fight across configurable terrain, and leave permanent wet trails that turn the map into a speed trap.
 
-The project currently supports four modes:
+The project currently supports five modes:
 - `Single Player`: one human vs a simple enemy preset, with persisted stage and encounter options
+- `Explorer`: a roughly `2000 x 2000` mossland expedition map with fixed landmarks, world props, and one optional boss landmark
 - `Test Mode`: a local tuning lab with staged sliders, configurable bot count, and an explicit apply step
 - `Simulator`: a visual balance harness that batch-runs a simulated humanlike player against the bot
 - `LAN Multiplayer`: two human players plus a crowd of NPC snails driven by the server
@@ -56,6 +57,7 @@ npm run mp:server
 ## Modes And Rules
 
 - `Single Player`: one human player vs a simple encounter preset chosen from the start menu.
+- `Explorer`: one human player in a roughly `2000 x 2000` bounded mossland map with static terrain props, fixed landmark trees, a rocky boss landmark, and comical log nibbling.
 - `Test Mode`: one human player plus `0..40` local bots, staged tuning controls, local browser persistence for the last-used lab settings, and switchable terrain presets.
 - `Simulator`: an automated browser-visible balance runner. It runs an average-but-skilled simulated humanlike player across selected stage/enemy-mode searches, reports aggregate and per-scenario metrics, replays a representative match, and uses the same duel knobs for HP, movement, combat, stalk, and bot behavior.
 - `LAN Multiplayer`: two human players plus `40` NPC snails by default.
@@ -65,6 +67,7 @@ npm run mp:server
 - Damage is momentum-based and scales with impact strength, not button-window-based.
 - Passive body contact does not deal damage.
 - Body overlap only pushes snails apart.
+- Snails automatically climb world props through cheap primitive surface queries rather than mesh collision.
 - There is no level progression.
 - There is no persistence, matchmaking, auth, rollback, or prediction.
 
@@ -74,6 +77,7 @@ npm run mp:server
 - Outside lock-on, backward and pure side movement backpedal or strafe without rotating the body; forward-diagonal movement turns.
 - `Space`: jump.
 - Hold `Shift`: enable lock-on framing and target-facing behavior while held.
+- `E` in Explorer: nibble a nearby rotting log.
 - Click the arena: capture the mouse with pointer lock.
 - With pointer lock and no stalk button held, move the mouse horizontally to turn the snail in free mode.
 - `Esc`: release pointer lock.
@@ -91,6 +95,7 @@ On-screen HUD:
 - Bottom left: left stalk top-down plane widget showing target point vs current point.
 - Bottom right: right stalk top-down plane widget showing target point vs current point.
 - Single Player: stage and enemy setup options appear before the match starts.
+- Explorer: no setup panel yet; the map is a deterministic mossland expedition.
 - Test Mode and Simulator: right-side tuning panel for terrain, HP, movement, trail, combat, stalk, bot-AI tuning, and simulator search scope.
 
 ## Gameplay Flow
@@ -106,6 +111,15 @@ Single-player win condition:
 - The match ends when only one combatant is left alive.
 - Pick a stage and enemy setup from the start menu before the match begins.
 - The current single-player options are saved locally in the browser and remain separate from Test Mode settings.
+
+Explorer flow:
+- The map is large and bounded rather than an infinite world.
+- Massive trees and the rocky mountain landmark stay fixed so the world can be learned.
+- Salt cones, bamboo sticks, gravel chunks, rocks, and rotting logs are static geometric props.
+- Explorer props are climbable analytic surfaces; walking into a log, rock, salt pile, or vertical tree automatically attaches and crawls without a separate button.
+- The generated world can be exported as sparse Unicode grids for feature symbols and elevation buckets via `createExplorerMapGrids`.
+- Press `E` near a rotting log to nibble it; this is cosmetic and gives no resource, health, score, or progression.
+- The Rocky Crown boss is optional; defeating it does not end exploration.
 
 Test mode flow:
 - The match does not end automatically.
@@ -129,6 +143,7 @@ LAN multiplayer win condition:
 
 - The shipped default arena is a flat `plane`.
 - Single Player, Test Mode, and Simulator can swap the map to `plane`, `hyperboloid_bowl`, `sphere_dome`, `sphere_bowl`, `cone`, `paraboloid_bowl`, `saddle`, or `ripple_bowl`.
+- Explorer uses a separate hidden `explorer_mossland` heightfield so duel balance stays isolated from expedition terrain.
 - Terrain remains heightfield-based in every mode: the surface is always `y = f(x, z)`.
 - Snails stay upright while moving over the surface.
 - Traversing slopes is intentionally easy; the terrain affects position more than body tilt.
@@ -240,6 +255,7 @@ Every so often, re-run a quick online-readiness profile: measure authoritative t
 
 - `src/game/Game.js`: top-level runtime that owns the scene, renderer, actors, input, UI, debug, and the active session.
 - `src/game/SinglePlayerSession.js`: local solo mode with persisted stage and encounter presets.
+- `src/game/ExplorerSession.js`: local mossland expedition mode with world props and one optional boss.
 - `src/game/TestSession.js`: local endless tuning lab with persisted slider state and dynamic bot count.
 - `src/game/Scene.js`: lights, arena mesh, and other scene setup.
 - `src/game/Renderer.js`: Three.js renderer setup with fallback profiles for weaker WebGL environments.
@@ -262,7 +278,7 @@ Every so often, re-run a quick online-readiness profile: measure authoritative t
 <summary>Input, HUD, and debug tools</summary>
 
 - `src/controls/MouseControls.js`: pointer lock, idle free-turn capture, held-button stalk ownership, and relative mouse delta capture.
-- `src/controls/KeyboardControls.js`: movement axes, lock-on hold state, and jump requests.
+- `src/controls/KeyboardControls.js`: movement axes, lock-on hold state, jump requests, and explorer interact requests.
 - `src/utils/UI.js`: menu, overlays, HUD bars, stalk plane widgets, and music controls.
 - `src/sim/Tuning.js`: shared tuning schema, default values, normalization, and bot/simulation profile derivation.
 - `src/utils/Debug.js`: text-only debug panel and recent-event log.
@@ -280,6 +296,7 @@ Every so often, re-run a quick online-readiness profile: measure authoritative t
 - `src/sim/HumanVision.js`: simple geometric FOV and short noisy memory for simulator perception.
 - `src/sim/BalanceRunner.js`: seeded batch runner and aggregate balance metrics.
 - `src/world/Terrain.js`: shared terrain-preset math and mesh generation used by both rendering and simulation.
+- `src/world/ExplorerWorld.js`: deterministic explorer terrain, landmark, prop generation, and coarse Unicode map-grid export.
 
 </details>
 
@@ -333,7 +350,7 @@ The current debug mode is text-only. It does not add scene helpers, wireframes, 
 - Single-player and LAN multiplayer use the same movement, jump, stalk physics, trail, damage, and win logic.
 - The browser client is primarily a renderer and input source.
 - LAN clients do not author world state.
-- Terrain is part of authoritative snapshot state, and Single Player, Test Mode, and Simulator expose terrain switching in the UI.
+- Terrain is part of authoritative snapshot state. Single Player, Test Mode, and Simulator expose arena terrain switching in the UI; Explorer uses its own mossland terrain.
 
 ### Bot behavior
 

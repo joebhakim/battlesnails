@@ -302,6 +302,7 @@ test('keyboard S maps to backward movement intent', () => {
     lockOn: false
   };
   controls.pendingJump = false;
+  controls.pendingInteract = false;
 
   const keydown = createKeyboardEvent('s');
   controls.handleKeyChange(keydown, true);
@@ -311,6 +312,26 @@ test('keyboard S maps to backward movement intent', () => {
   const keyup = createKeyboardEvent('s');
   controls.handleKeyChange(keyup, false);
   assert.deepEqual(controls.getMovementAxes(), { forward: 0, right: 0 });
+});
+
+test('keyboard E maps to one-shot interact intent', () => {
+  const controls = Object.create(KeyboardControls.prototype);
+  controls.keys = {
+    forward: false,
+    backward: false,
+    left: false,
+    right: false,
+    lockOn: false
+  };
+  controls.pendingJump = false;
+  controls.pendingInteract = false;
+
+  const keydown = createKeyboardEvent('e');
+  controls.handleKeyChange(keydown, true);
+
+  assert.equal(keydown.defaultPrevented, true);
+  assert.equal(controls.consumeInteractRequest(), true);
+  assert.equal(controls.consumeInteractRequest(), false);
 });
 
 test('S-style movement backs away from the lock-on opponent', () => {

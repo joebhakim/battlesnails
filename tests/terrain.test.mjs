@@ -3,11 +3,15 @@ import assert from 'node:assert/strict';
 
 import { MatchSimulation } from '../src/sim/MatchSimulation.js';
 import {
+  ALL_TERRAIN_PRESET_OPTIONS,
   DEFAULT_TERRAIN_CONFIG,
+  EXPLORER_TERRAIN_PRESET,
   TERRAIN_PRESET_OPTIONS,
   getTerrainHeight,
+  getTerrainConfigKey,
   normalizeTerrainConfig
 } from '../src/world/Terrain.js';
+import { createExplorerWorld } from '../src/world/ExplorerWorld.js';
 import {
   BODY_CAPSULE_VISUAL_RADIUS,
   DEFAULT_ABOVE_GROUND_HEIGHT,
@@ -31,16 +35,7 @@ function createTerrainConfig(overrides) {
 }
 
 test('all shipped terrain presets produce finite heights across the arena', () => {
-  const presets = [
-    'plane',
-    'hyperboloid_bowl',
-    'sphere_dome',
-    'sphere_bowl',
-    'cone',
-    'paraboloid_bowl',
-    'saddle',
-    'ripple_bowl'
-  ];
+  const presets = ALL_TERRAIN_PRESET_OPTIONS.map((option) => option.value);
 
   for (const preset of presets) {
     const terrain = createTerrainConfig({ preset });
@@ -48,6 +43,13 @@ test('all shipped terrain presets produce finite heights across the arena', () =
       assert.equal(Number.isFinite(getTerrainHeight(x, z, terrain)), true, `${preset} @ ${x},${z}`);
     }
   }
+});
+
+test('explorer mossland is valid but hidden from arena terrain choices', () => {
+  const terrain = normalizeTerrainConfig({ preset: EXPLORER_TERRAIN_PRESET });
+
+  assert.equal(terrain.preset, EXPLORER_TERRAIN_PRESET);
+  assert.equal(TERRAIN_PRESET_OPTIONS.some((option) => option.value === EXPLORER_TERRAIN_PRESET), false);
 });
 
 test('default terrain is a flat plane', () => {
@@ -142,4 +144,31 @@ test('terrain body clearance is numerically derived from terrain shape', () => {
   });
 
   assert(steep > shallow);
+});
+
+test('explorer world has stable landmarks and seeded filler props', () => {
+  const first = createExplorerWorld(44);
+  const second = createExplorerWorld(44);
+  const different = createExplorerWorld(45);
+
+  assert.deepEqual(first.landmarks, second.landmarks);
+  assert.deepEqual(
+    first.props.slice(0, first.landmarks.length).map((prop) => prop.id),
+    second.props.slice(0, second.landmarks.length).map((prop) => prop.id)
+  );
+  assert.notDeepEqual(
+    first.props.map((prop) => [prop.id, prop.position.x, prop.position.z]).slice(first.landmarks.length),
+    different.props.map((prop) => [prop.id, prop.position.x, prop.position.z]).slice(first.landmarks.length)
+  );
+});
+
+test('explorer terrain key changes with seed and uses a large visual map', () => {
+  const first = createExplorerWorld(90).terrainConfig;
+  const second = createExplorerWorld(91).terrainConfig;
+
+  assert.notEqual(getTerrainConfigKey(first), getTerrainConfigKey(second));
+  assert.equal(first.worldRadius, 1000);
+  assert.equal(first.visualSize, 2200);
+  assert(first.visualSize > DEFAULT_TERRAIN_CONFIG.visualSize);
+  assert(first.worldRadius > DEFAULT_TERRAIN_CONFIG.worldRadius);
 });

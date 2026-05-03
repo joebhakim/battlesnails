@@ -286,6 +286,39 @@ test('eye box collision bounces from a flat cube face', () => {
   assert(nodes[1].x - previousNodes[1].x > 0);
 });
 
+test('eye box collision respects obstacle yaw rotation', () => {
+  const rootWorld = new THREE.Vector3(3, 0, 0);
+  const nodes = [
+    rootWorld.clone(),
+    new THREE.Vector3(0.6, 0, 0)
+  ];
+  const previousNodes = [
+    rootWorld.clone(),
+    new THREE.Vector3(0.2, 0, 0)
+  ];
+
+  applyStalkCollisionConstraints({
+    nodes,
+    previousNodes,
+    rootWorld,
+    bodyObstacles: [{
+      position: new THREE.Vector3(0, 0, 0),
+      radius: 3,
+      rotationY: Math.PI / 2,
+      shape: {
+        type: 'box',
+        halfExtents: { x: 3, y: 1, z: 0.5 }
+      }
+    }],
+    segmentRadius: 0.05,
+    eyeRadius: 0.2,
+    includeSegmentMidpoints: false
+  });
+
+  assert(Math.abs(nodes[1].x - 0.7) < 0.0001);
+  assert(Math.abs(nodes[1].z) < 0.0001);
+});
+
 test('eye cylinder collision bounces from the curved side normal', () => {
   const rootWorld = new THREE.Vector3(3, 0, 0);
   const nodes = [

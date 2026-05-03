@@ -168,6 +168,7 @@ export class UI {
     this.startMenuCopy = this.startMenu.querySelector('.menu-copy');
     this.modeActions = document.getElementById('mode-actions');
     this.startSinglePlayerButton = document.getElementById('start-singleplayer');
+    this.startExplorerButton = document.getElementById('start-explorer');
     this.startTestModeButton = document.getElementById('start-testmode');
     this.startSimulatorButton = document.getElementById('start-simulator');
     this.startMultiplayerButton = document.getElementById('start-multiplayer');
@@ -265,8 +266,9 @@ export class UI {
     this.musicButton.addEventListener('click', toggleCallback);
   }
 
-  setupModeButtons({ onSinglePlayer, onTestMode, onSimulator, onMultiplayer }) {
+  setupModeButtons({ onSinglePlayer, onExplorer, onTestMode, onSimulator, onMultiplayer }) {
     this.startSinglePlayerButton.addEventListener('click', onSinglePlayer);
+    this.startExplorerButton?.addEventListener('click', onExplorer);
     this.startTestModeButton.addEventListener('click', onTestMode);
     this.startSimulatorButton.addEventListener('click', onSimulator);
     this.startMultiplayerButton.addEventListener('click', onMultiplayer);
@@ -295,7 +297,7 @@ export class UI {
 
   showModeSelect() {
     this.startMenuTitle.textContent = 'Choose A Mode';
-    this.startMenuCopy.textContent = 'Single Player, Test Mode, Simulator, or LAN Multiplayer. The snails keep getting stranger.';
+    this.startMenuCopy.textContent = 'Single Player, Explorer, Test Mode, Simulator, or LAN Multiplayer. The snails keep getting stranger.';
     this.modeActions.classList.remove('hidden');
     this.singlePlayerSetup.classList.add('hidden');
   }
