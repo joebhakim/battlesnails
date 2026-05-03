@@ -32,13 +32,21 @@ The exaggerated hover test used final visible hover `8`, producing a plane cente
 
 Measured on 2026-05-02 in Node on the local dev machine. Re-run these occasionally as local/single-player changes accumulate, especially after changing snapshot shape, trail serialization, stalk node counts, bot counts, or collision rules.
 
-- Current 2-human snapshot payload: `3,165` bytes JSON.
-- Current 2-human + 40-NPC snapshot payload: roughly `70-90 KiB` JSON depending on trail state.
+- Before network-shape reduction, the 2-human snapshot payload was `3,165` bytes JSON, mostly player state; `2,364` bytes were stalks and `1,204` bytes were stalk node arrays.
+- Before network-shape reduction, the full 2-human + 40-NPC authoritative snapshot payload was roughly `70-90 KiB` JSON depending on trail state.
 - 42 active actors with bot AI, trails, stalk collisions, and forced alive state: `5.48 ms/tick`, about `183 ticks/sec`, roughly `3x` CPU headroom against a 60 Hz server tick.
 - 42-player snapshot stringify: about `0.184 ms` per JSON payload.
-- Estimated outbound bandwidth at 60 Hz to two clients:
-  - 2 humans: about `3 Mbps`.
-  - 2 humans + 40 NPCs: about `67-85 Mbps`.
-- The sim CPU is acceptable for one current-style room; the full JSON snapshot protocol is the online bottleneck.
-- Snapshot byte breakdown for 2 humans: total `3,165` bytes; players `2,895`; stalks `2,364`; stalk node arrays `1,204`; top-level metadata about `238`.
-- Rounding all numbers to 3 decimals only reduced the 2-human payload by about `14%`; a compact array sketch reduced it by about `75%`. Main bloat is JSON object shape plus repeated fields and full rope nodes, not precision alone.
+- After omitting stalk nodes and splitting static metadata from dynamic updates, a 42-player match measured: internal authoritative snapshot `97,086` bytes, one-time static network snapshot `19,572` bytes, repeated dynamic network snapshot `13,130` bytes, and dynamic snapshot plus ten trail-cell deltas `13,315` bytes.
+- The target online rate is `30 Hz` dynamic snapshots from a `60 Hz` authoritative sim. At that rate, the 42-player dynamic payload is about `3.15 Mbps` per receiving client before WebSocket framing. At `20 Hz` it is about `2.10 Mbps`; at `10 Hz` it is about `1.05 Mbps`, but those lower rates are fallback/LOD experiments rather than the main combat target.
+- The sim CPU is acceptable for one current-style room; the remaining network bottleneck is JSON object shape, repeated dynamic player field names, and unquantized vector numbers.
+- Rounding all numbers to 3 decimals previously reduced the 2-human payload by only about `14%`; a compact array sketch reduced it by about `75%`. Main bloat is still JSON object shape plus repeated fields, even though full rope nodes are no longer transmitted.
+
+## TypeScript Migration
+
+The codebase is now TypeScript end to end: browser runtime, shared sim, server, tests, scripts, and Vite config all use `.ts` sources. Node commands use `tsx`; browser imports keep `.js` specifiers for ESM compatibility under TypeScript bundler resolution. The first migration pass is intentionally behavior-preserving and compiler-loose (`strict: false`, `noImplicitAny: false`) with many internal `declare ...: any` class fields. Tightening public simulation/network shapes and then re-enabling stricter compiler flags should be done incrementally after gameplay churn slows.
+
+## Explorer Worldgen V3
+
+Explorer worldgen v3 should feel like a snail-scale forest floor rather than a human-scale terrain demo. The ground-cover layer is now a deterministic random-site Voronoi patchwork over most non-mountain forest floor: roughly `60%` rough dry-leaf carpet, `30%` moss mat, and `10%` dirt-with-sticks. These cells must render from their clipped polygon footprints without random actor rotation, otherwise they stop reading as a tessellation and look like placed patches. Do not generate individual dead-leaf props or flower petals. Keep leaf debris as rough, climbable polygon-prism cells with oriented overlapping “snake scale” facets; the sim uses cheap point-in-polygon top support plus a ridged height function, not mesh collision. Moss and dirt cells use the same polygon support at lower relief. Keep bare dirt as explicit `dirt_stick_patch` cells rather than exposed empty terrain. The prop language is: beauty/wetness (`dew_bead`, `dew_pool`, moss cushions/mats), edible decay/cover (`rotting_log`, mushrooms), fretting/danger mood (`salt_cone`, rough dry-leaf carpet patches, ant roads), and climbable memory anchors (`giant_tree`, `deciduous_tree`, `conifer_tree`, lichen towers, shell shards, rocky crown, root branches, twigs, talus rocks). Keep new props expressed as existing cheap primitives or analytic polygon prisms. Tree collision uses slim trunks, with deciduous and conifer canopies as visual mass rather than fat collision bodies. The denser prop field is backed by a spatial grid broadphase in the sim. Use `npm run map:explorer -- <seed> <cellSize>` to inspect the Unicode feature/elevation grids.
+
+Snail readability now includes a visual-only blob drop shadow plus light `bodyVerticalDamping` on vertical velocity. Keep that damping modest; it is for platformer readability, not for turning jumps into a heavy hover.

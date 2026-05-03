@@ -36,6 +36,11 @@
         </div>
       </div>
 
+      <div class="hud-card perf-card" id="perf-readout">
+        <span><span class="perf-label">FPS</span> <span id="fps-value">--</span></span>
+        <span><span class="perf-label">TPS</span> <span id="tps-value">--</span></span>
+      </div>
+
       <div class="hud-card controls-card" id="controls-hint">
         WASD move · Mouse turn · Space jump · Hold LMB/RMB stalks · Wheel plane height · Hold Shift lock-on · Click arena
       </div>
@@ -186,7 +191,7 @@
     <button id="music-toggle" type="button">Music Off</button>
     <div id="game-message"></div>
   </div>
-  <script type="module" src="/src/main.js"></script>
+  <script type="module" src="/src/main.ts"></script>
 </body>
 
 </html>

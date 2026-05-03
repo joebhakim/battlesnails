@@ -158,6 +158,20 @@ select {
   background: #888078;
 }
 
+.perf-card {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 0.82rem;
+  letter-spacing: 0.04em;
+  color: var(--text);
+}
+
+.perf-label {
+  color: var(--muted);
+}
+
 .controls-card {
   font-size: 0.85rem;
   line-height: 1.4;
