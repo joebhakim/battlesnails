@@ -294,7 +294,35 @@ Run the headless Chromium Arena draw-time profile:
 npm run perf:browser-arena -- --bots 40 --seconds 8 --warmup 1
 ```
 
-This browser profiler measures the live Three.js scene in Chromium. The primary draw metric is `renderer.render(...)` plus `gl.finish()`, and the report also includes update time, draw calls, triangles, scene mesh counts, and optional CI thresholds such as `--max-render-p95-ms` and `--max-frame-p95-ms`.
+Run the same browser profiler against the dense Adventure world:
+
+```bash
+npm run perf:browser -- --mode adventure --seconds 8 --warmup 1
+```
+
+Use the browser profiler as the main rendering feedback loop when changing worldgen density, actor rendering, culling, batching, trails, camera range, materials, or renderer settings:
+
+```bash
+npm run perf:browser -- --mode adventure --seconds 20 --warmup 3 --headful
+```
+
+Use this heavier stress profile when testing lock-on combat with many rendered snails:
+
+```bash
+npm run perf:browser -- --mode adventure --npcs 15 --input random-lock --seconds 20 --warmup 3 --headful
+```
+
+For production-build measurements, run preview in one terminal and point the profiler at it from another:
+
+```bash
+npm run build
+npm run preview -- --host 127.0.0.1
+npm run perf:browser -- --mode adventure --url http://127.0.0.1:4173/ --seconds 20 --warmup 3 --headful
+```
+
+The browser profiler measures the live Three.js scene in Chromium. The primary draw metric is `renderer.render(...)` plus `gl.finish()`, and the report also includes effective FPS, update time, session tick time, draw calls, triangles, and scene mesh counts. Use `--width`, `--height`, `--device-scale-factor`, `--input idle|walk|roam`, `--scene-sample-every`, `--headful`, and optional CI thresholds such as `--max-render-p95-ms`, `--max-frame-p95-ms`, and `--min-fps`.
+
+Prefer `--headful` for matching the FPS you see while playing. Headless Chromium is useful for repeatable CI-style timing buckets, but some machines throttle headless `requestAnimationFrame`, so `effectiveFps` can be misleading even when measured update/render work is under budget. When that happens, compare `game frame`, `update`, `render + finish`, draw calls, triangles, and visible meshes against the baselines in `WORKING_MEMORY.md`.
 
 ## Architecture
 

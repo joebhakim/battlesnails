@@ -12,6 +12,7 @@
     "mp:server": "node --import tsx server/index.ts",
     "test": "node --import tsx --test tests/*.test.ts",
     "perf:arena": "node --import tsx scripts/profile-arena.ts",
+    "perf:browser": "node --import tsx scripts/profile-browser-arena.ts",
     "perf:browser-arena": "node --import tsx scripts/profile-browser-arena.ts",
     "probe:controls": "node --import tsx scripts/probe-controls.ts",
     "map:explorer": "node --import tsx scripts/print-explorer-map.ts"

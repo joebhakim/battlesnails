@@ -85,7 +85,7 @@ async function runBrowserArenaProfile(options) {
   const profileUrl = withProfileParam(baseUrl);
   const browser = await chromium.launch({
     executablePath: resolveChromiumPath(options),
-    headless: true,
+    headless: !options.headful,
     args: buildChromiumArgs(options)
   });
 
@@ -113,19 +113,33 @@ async function runBrowserArenaProfile(options) {
 
     const startResult = await page.evaluate((profileOptions) => {
       const profile = (window as any).__battlesnailsProfile;
-      const result = profile.startArena({
-        botCount: profileOptions.botCount,
-        stagePreset: profileOptions.stagePreset
+      const result = profileOptions.mode === 'adventure'
+        ? profile.startAdventure({
+          seed: profileOptions.seed,
+          npcCount: profileOptions.npcCount
+        })
+        : profile.startArena({
+          botCount: profileOptions.botCount,
+          stagePreset: profileOptions.stagePreset
+        });
+      profile.installInputDriver({
+        mode: profileOptions.inputMode
       });
       profile.installFrameProfiler({
-        glFinish: profileOptions.glFinish
+        glFinish: profileOptions.glFinish,
+        sceneSampleEvery: profileOptions.sceneSampleEvery
       });
       profile.resetSamples();
       return result;
     }, {
+      mode: options.mode,
       botCount: options.botCount,
+      npcCount: options.npcCount,
       stagePreset: options.stagePreset,
-      glFinish: options.glFinish
+      seed: options.seed,
+      inputMode: options.inputMode,
+      glFinish: options.glFinish,
+      sceneSampleEvery: options.sceneSampleEvery
     });
 
     await delay(options.warmupSeconds * 1000);
@@ -153,8 +167,10 @@ async function runBrowserArenaProfile(options) {
     return createBrowserArenaProfileResult({
       options: {
         ...options,
-        botCount: startResult.options.botCount,
-        stagePreset: startResult.options.stagePreset
+        botCount: startResult.options.botCount ?? options.botCount,
+        npcCount: startResult.options.npcCount ?? options.npcCount,
+        stagePreset: startResult.options.stagePreset ?? options.stagePreset,
+        seed: startResult.options.seed ?? options.seed
       },
       samples: payload.samples,
       finalState: payload.finalState,

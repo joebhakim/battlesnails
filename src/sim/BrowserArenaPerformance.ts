@@ -4,6 +4,15 @@ const DEFAULT_WARMUP_SECONDS = 1;
 const DEFAULT_WIDTH = 1280;
 const DEFAULT_HEIGHT = 720;
 const DEFAULT_DEVICE_SCALE_FACTOR = 1;
+const DEFAULT_SCENE_SAMPLE_EVERY = 10;
+
+function normalizeBrowserProfileMode(value) {
+  if (value === 'adventure' || value === 'explorer' || value === 'explore') {
+    return 'adventure';
+  }
+
+  return 'arena';
+}
 
 function clampInteger(value, fallback, min, max) {
   const numericValue = Number(value);
@@ -111,22 +120,34 @@ export function parseBrowserArenaArgs(argv) {
   const glFinish = 'gl-finish' in args
     ? getBoolean(args, 'gl-finish', true)
     : !getBoolean(args, 'no-gl-finish');
+  const mode = normalizeBrowserProfileMode(getString(args, 'mode', 'arena'));
+  const defaultInputMode = mode === 'adventure' ? 'roam' : 'idle';
+  const botCount = clampInteger(getNumber(args, 'bots'), DEFAULT_BOT_COUNT, 0, 120);
+  const npcCount = mode === 'adventure'
+    ? clampInteger(getNumber(args, 'npcs', getNumber(args, 'bots', 0)), 0, 0, 120)
+    : 0;
 
   return {
     rawArgs: args,
-    botCount: clampInteger(getNumber(args, 'bots'), DEFAULT_BOT_COUNT, 0, 120),
+    mode,
+    botCount,
+    npcCount,
     seconds: clampNumber(getNumber(args, 'seconds'), DEFAULT_SECONDS, 0.1, 300),
     warmupSeconds: clampNumber(getNumber(args, 'warmup'), DEFAULT_WARMUP_SECONDS, 0, 60),
     stagePreset: getString(args, 'stage', undefined),
+    seed: clampInteger(getNumber(args, 'seed'), 137, 0, Number.MAX_SAFE_INTEGER),
+    inputMode: getString(args, 'input', defaultInputMode),
     chromiumPath: getString(args, 'chromium-path', undefined),
     url: getString(args, 'url', undefined),
     glFinish,
+    headful: getBoolean(args, 'headful'),
     json: getBoolean(args, 'json'),
     verbose: getBoolean(args, 'verbose'),
     gl: getString(args, 'gl', 'default'),
     width: clampInteger(getNumber(args, 'width'), DEFAULT_WIDTH, 320, 7680),
     height: clampInteger(getNumber(args, 'height'), DEFAULT_HEIGHT, 240, 4320),
     deviceScaleFactor: clampNumber(getNumber(args, 'device-scale-factor'), DEFAULT_DEVICE_SCALE_FACTOR, 0.5, 4),
+    sceneSampleEvery: clampInteger(getNumber(args, 'scene-sample-every'), DEFAULT_SCENE_SAMPLE_EVERY, 1, 600),
     thresholds: {
       maxRenderP95Ms: getNumber(args, 'max-render-p95-ms'),
       maxFrameP95Ms: getNumber(args, 'max-frame-p95-ms'),
@@ -169,17 +190,23 @@ export function createBrowserArenaProfileResult({ options, samples, finalState, 
   const rafIntervals = getSampleValues(samples, 'rafIntervalMs');
   const longFrameCount = rafIntervals.filter((value) => value > 50).length;
   const effectiveFps = getEffectiveFps(samples);
+  const finalSnapshot = finalState?.snapshot ?? null;
 
   return {
     scenario: {
-      mode: 'browser-arena',
+      mode: `browser-${options.mode ?? 'arena'}`,
       botCount: options.botCount,
-      playerCount: options.botCount + 1,
+      npcCount: options.npcCount ?? 0,
+      playerCount: finalSnapshot?.playerCount ?? options.botCount + 1,
       stagePreset: options.stagePreset ?? null,
+      seed: options.mode === 'adventure' ? options.seed : null,
+      inputMode: options.inputMode,
       seconds: options.seconds,
       warmupSeconds: options.warmupSeconds,
       glFinish: options.glFinish,
+      headless: !options.headful,
       gl: options.gl,
+      sceneSampleEvery: options.sceneSampleEvery,
       viewport: {
         width: options.width,
         height: options.height,
@@ -260,9 +287,16 @@ function formatMs(metric) {
 }
 
 export function formatBrowserArenaProfile(result, failures: string[] = []) {
+  const modeLabel = result.scenario.mode === 'browser-adventure' ? 'Adventure' : 'Arena';
+  const stageOrSeed = result.scenario.mode === 'browser-adventure'
+    ? `seed ${result.scenario.seed}`
+    : `stage ${result.scenario.stagePreset ?? 'default'}`;
+  const population = result.scenario.mode === 'browser-adventure'
+    ? `npcs ${result.scenario.npcCount ?? 0}`
+    : `bots ${result.scenario.botCount}`;
   const lines = [
-    `Browser Arena profile: ${result.scenario.botCount} bots, ${result.scenario.seconds}s (${result.samples} frames)`,
-    `stage ${result.scenario.stagePreset ?? 'default'} · viewport ${result.scenario.viewport.width}x${result.scenario.viewport.height}@${result.scenario.viewport.deviceScaleFactor} · gl.finish ${result.scenario.glFinish ? 'on' : 'off'}`,
+    `Browser ${modeLabel} profile: ${result.scenario.seconds}s (${result.samples} frames)`,
+    `${stageOrSeed} · ${population} · input ${result.scenario.inputMode ?? 'idle'} · viewport ${result.scenario.viewport.width}x${result.scenario.viewport.height}@${result.scenario.viewport.deviceScaleFactor} · gl.finish ${result.scenario.glFinish ? 'on' : 'off'}`,
     '',
     `fps:               ${result.frameRate.effectiveFps} effective · interval ${formatMs(result.frameRate.interval)} · >50ms ${result.frameRate.longFramesOver50Ms}`,
     `update:            ${formatMs(result.metrics.update)}`,

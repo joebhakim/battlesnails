@@ -14,8 +14,9 @@ import {
 export class ExplorerSession {
   declare localSlot: any;
   declare accumulator: any;
+  declare botControllers: any;
   declare bossSlot: any;
-  declare botController: any;
+  declare extraNpcCount: any;
   declare mode: any;
   declare seed: any;
   declare simulation: any;
@@ -28,8 +29,9 @@ export class ExplorerSession {
     this.localSlot = 1;
     this.bossSlot = EXPLORER_BOSS_SLOT;
     this.seed = options.seed ?? EXPLORER_DEFAULT_SEED;
+    this.extraNpcCount = Math.max(0, Math.floor(Number(options.npcCount) || 0));
     this.accumulator = 0;
-    this.botController = new BotController(createBotControllerConfig(DEFAULT_TUNING_CONFIG));
+    this.botControllers = new Map();
     this.snapshot = null;
 
     this.rebuildSimulation();
@@ -44,25 +46,56 @@ export class ExplorerSession {
     });
   }
 
+  createExtraNpcParticipants() {
+    const participants: any[] = [];
+    const start = this.world.playerStart;
+    const goldenAngle = Math.PI * (3 - Math.sqrt(5));
+
+    for (let index = 0; index < this.extraNpcCount; index += 1) {
+      const ring = Math.floor(index / 8);
+      const radius = 18 + ring * 10 + (index % 3) * 2.5;
+      const angle = index * goldenAngle;
+      const x = start.x + Math.sin(angle) * radius;
+      const z = start.z + Math.cos(angle) * radius;
+
+      participants.push({
+        slot: EXPLORER_BOSS_SLOT + 1 + index,
+        profile: 'bot',
+        connected: true,
+        position: { x, z },
+        rotationY: Math.atan2(start.x - x, start.z - z),
+        displayName: `Wild Snail ${index + 1}`
+      });
+    }
+
+    return participants;
+  }
+
   rebuildSimulation() {
     this.world = createExplorerWorld(this.seed);
     this.tuningConfig = this.createExplorerTuning();
+    const participants = [
+      {
+        slot: this.localSlot,
+        profile: 'human',
+        connected: true,
+        position: {
+          x: this.world.playerStart.x,
+          z: this.world.playerStart.z
+        },
+        rotationY: this.world.playerStart.rotationY
+      },
+      this.world.bossParticipant,
+      ...this.createExtraNpcParticipants()
+    ];
+    const botControllerConfig = createBotControllerConfig(this.tuningConfig);
+    this.botControllers = new Map(participants
+      .filter((participant) => participant.profile === 'bot')
+      .map((participant) => [participant.slot, new BotController(botControllerConfig)]));
 
     this.simulation = new MatchSimulation({
       mode: 'explorer',
-      players: [
-        {
-          slot: this.localSlot,
-          profile: 'human',
-          connected: true,
-          position: {
-            x: this.world.playerStart.x,
-            z: this.world.playerStart.z
-          },
-          rotationY: this.world.playerStart.rotationY
-        },
-        this.world.bossParticipant
-      ],
+      players: participants,
       tuning: this.tuningConfig,
       terrainConfig: this.world.terrainConfig,
       arenaRadius: this.world.worldBounds.radius,
@@ -94,13 +127,19 @@ export class ExplorerSession {
         interactPressed: index === 0 && localInput.interactPressed
       });
 
-      const boss = this.simulation.getPlayerState(this.bossSlot);
       const player = this.simulation.getPlayerState(this.localSlot);
-      if (boss?.connected && boss.health > 0 && player?.connected && player.health > 0) {
-        this.simulation.setPlayerInput(
-          this.bossSlot,
-          this.botController.getInput(this.simulation, this.bossSlot, this.localSlot, MATCH_TICK_DURATION)
-        );
+      if (player?.connected && player.health > 0) {
+        for (const [botSlot, botController] of this.botControllers.entries()) {
+          const bot = this.simulation.getPlayerState(botSlot);
+          if (!bot?.connected || bot.health <= 0) {
+            continue;
+          }
+
+          this.simulation.setPlayerInput(
+            botSlot,
+            botController.getInput(this.simulation, botSlot, this.localSlot, MATCH_TICK_DURATION)
+          );
+        }
       }
 
       this.snapshot = {
@@ -138,13 +177,24 @@ export class ExplorerSession {
   }
 
   getFocusTargetState() {
-    const boss = this.snapshot?.players.find((player) => player.slot === this.bossSlot) ?? null;
-    return boss?.connected && boss.health > 0 ? boss : null;
+    const local = this.getLocalPlayerState();
+    const candidates = this.getOtherPlayerStates()
+      .filter((player) => player.connected && player.health > 0);
+    if (!local || candidates.length === 0) {
+      return null;
+    }
+
+    return candidates
+      .map((player) => ({
+        player,
+        distanceSq: (player.position.x - local.position.x) ** 2 + (player.position.z - local.position.z) ** 2
+      }))
+      .sort((left, right) => left.distanceSq - right.distanceSq)[0]?.player ?? null;
   }
 
-  getHudLabels() {
+  getHudLabels(focusState = null) {
     return {
-      opponent: 'Rocky Crown'
+      opponent: focusState?.displayName ?? 'Rocky Crown'
     };
   }
 

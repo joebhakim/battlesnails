@@ -1,3 +1,4 @@
+import { ExplorerSession } from './ExplorerSession.js';
 import { ProfileArenaSession, normalizeProfileArenaOptions } from './ProfileArenaSession.js';
 
 const DEFAULT_MAX_SAMPLES = 60000;
@@ -62,12 +63,14 @@ function getProfileState(game) {
 export function installBrowserProfileHarness(game) {
   let samples: any[] = [];
   let restoreProfiler: any = null;
+  let restoreInputDriver: any = null;
   let latestUpdateMs = 0;
   let latestSessionUpdateMs = 0;
   let latestViewSyncMs = 0;
   let latestTicksAdvanced = 0;
   let latestDeltaSeconds = 0;
   let lastRenderTimestampMs = null;
+  let latestSceneCounts = countSceneObjects(game.scene?.scene);
   let frameIndex = 0;
 
   function trimSamples(maxSamples) {
@@ -98,13 +101,99 @@ export function installBrowserProfileHarness(game) {
     restoreProfiler = null;
   }
 
+  function uninstallInputDriver() {
+    if (!restoreInputDriver) {
+      return;
+    }
+
+    restoreInputDriver();
+    restoreInputDriver = null;
+  }
+
+  function installInputDriver(rawOptions: any = {}) {
+    uninstallInputDriver();
+
+    const mode = rawOptions.mode ?? 'idle';
+    if (mode === 'none') {
+      return { mode };
+    }
+
+    const originalBuildLocalInput = game.buildLocalInput;
+    const startTimeMs = performance.now();
+    let lastJumpBucket = -1;
+
+    game.buildLocalInput = function profileBuildLocalInput() {
+      const elapsedSeconds = (performance.now() - startTimeMs) / 1000;
+      const baseInput = {
+        moveX: 0,
+        moveZ: 0,
+        jumpPressed: false,
+        interactPressed: false,
+        lockOnHeld: false,
+        lookX: 0,
+        lookY: 0,
+        turnX: 0,
+        reachDelta: 0,
+        leftHeld: false,
+        rightHeld: false
+      };
+      const jumpBucket = Math.floor(elapsedSeconds / 3.25);
+      const shouldJump = jumpBucket !== lastJumpBucket && elapsedSeconds > 0.5;
+      if (shouldJump) {
+        lastJumpBucket = jumpBucket;
+      }
+
+      if (mode === 'idle') {
+        return baseInput;
+      }
+
+      if (mode === 'walk') {
+        return {
+          ...baseInput,
+          moveZ: -1
+        };
+      }
+
+      if (mode === 'random-lock' || mode === 'locked-roam' || mode === 'combat-lock') {
+        const stalkPulse = Math.sin(elapsedSeconds * 1.7) > -0.25;
+        return {
+          ...baseInput,
+          moveX: Math.sin(elapsedSeconds * 0.91) * 0.85,
+          moveZ: -0.55 + Math.sin(elapsedSeconds * 0.37) * 0.45,
+          lockOnHeld: true,
+          lookX: Math.sin(elapsedSeconds * 7.3) * 14 + Math.sin(elapsedSeconds * 2.1) * 8,
+          lookY: Math.cos(elapsedSeconds * 5.1) * 10,
+          reachDelta: Math.sin(elapsedSeconds * 1.3) * 0.35,
+          leftHeld: stalkPulse,
+          rightHeld: Math.cos(elapsedSeconds * 1.1) > -0.1,
+          jumpPressed: shouldJump
+        };
+      }
+
+      return {
+        ...baseInput,
+        moveX: Math.sin(elapsedSeconds * 0.42) * 0.5,
+        moveZ: -0.85,
+        turnX: Math.sin(elapsedSeconds * 0.55) * 0.75,
+        jumpPressed: shouldJump
+      };
+    };
+
+    restoreInputDriver = () => {
+      game.buildLocalInput = originalBuildLocalInput;
+    };
+
+    return { mode };
+  }
+
   function installFrameProfiler(rawOptions: any = {}) {
     uninstallFrameProfiler();
     resetSamples();
 
     const options = {
       glFinish: rawOptions.glFinish !== false,
-      maxSamples: Math.max(1, Math.floor(Number(rawOptions.maxSamples) || DEFAULT_MAX_SAMPLES))
+      maxSamples: Math.max(1, Math.floor(Number(rawOptions.maxSamples) || DEFAULT_MAX_SAMPLES)),
+      sceneSampleEvery: Math.max(1, Math.floor(Number(rawOptions.sceneSampleEvery) || 10))
     };
     const originalUpdate = game.update;
     const originalRender = game.renderer.render;
@@ -162,6 +251,9 @@ export function installBrowserProfileHarness(game) {
       const rafIntervalMs = lastRenderTimestampMs === null ? null : renderEnd - lastRenderTimestampMs;
       lastRenderTimestampMs = renderEnd;
       frameIndex += 1;
+      if (frameIndex === 1 || frameIndex % options.sceneSampleEvery === 0) {
+        latestSceneCounts = countSceneObjects(scene);
+      }
 
       samples.push({
         frameIndex,
@@ -178,7 +270,7 @@ export function installBrowserProfileHarness(game) {
         gameFrameMs: latestUpdateMs + (renderEnd - renderStart),
         rafIntervalMs,
         rendererStats: getRendererStats(renderer),
-        sceneCounts: countSceneObjects(scene)
+        sceneCounts: latestSceneCounts
       });
       trimSamples(options.maxSamples);
 
@@ -192,7 +284,8 @@ export function installBrowserProfileHarness(game) {
 
     return {
       glFinish: options.glFinish,
-      maxSamples: options.maxSamples
+      maxSamples: options.maxSamples,
+      sceneSampleEvery: options.sceneSampleEvery
     };
   }
 
@@ -205,8 +298,23 @@ export function installBrowserProfileHarness(game) {
         state: getProfileState(game)
       };
     },
+    startAdventure(rawOptions: any = {}) {
+      game.enterSession(new ExplorerSession({
+        seed: rawOptions.seed,
+        npcCount: rawOptions.npcCount
+      }));
+      return {
+        options: {
+          seed: rawOptions.seed ?? null,
+          npcCount: rawOptions.npcCount ?? 0
+        },
+        state: getProfileState(game)
+      };
+    },
     installFrameProfiler,
     uninstallFrameProfiler,
+    installInputDriver,
+    uninstallInputDriver,
     resetSamples,
     getSamples() {
       return samples.slice();
@@ -216,6 +324,7 @@ export function installBrowserProfileHarness(game) {
     },
     dispose() {
       uninstallFrameProfiler();
+      uninstallInputDriver();
       resetSamples();
     }
   };

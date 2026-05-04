@@ -41,6 +41,70 @@ Measured on 2026-05-02 in Node on the local dev machine. Re-run these occasional
 - The sim CPU is acceptable for one current-style room; the remaining network bottleneck is JSON object shape, repeated dynamic player field names, and unquantized vector numbers.
 - Rounding all numbers to 3 decimals previously reduced the 2-human payload by only about `14%`; a compact array sketch reduced it by about `75%`. Main bloat is still JSON object shape plus repeated fields, even though full rope nodes are no longer transmitted.
 
+## Browser Rendering Checkpoints
+
+Measured on 2026-05-04 on this desktop with the browser profiler. Re-run this loop when changing Adventure/worldgen density, prop rendering, batching, culling, trails, materials, camera draw distance, or renderer settings. Use `--headful` when possible to match real play FPS; headless Chromium on this machine appears to throttle `requestAnimationFrame` to roughly `13 FPS`, so measured timing buckets are more reliable than headless `effectiveFps`.
+
+Current feedback-loop command:
+
+```bash
+npm run perf:browser -- --mode adventure --seconds 20 --warmup 3 --headful
+```
+
+Current production-preview loop:
+
+```bash
+npm run build
+npm run preview -- --host 127.0.0.1
+npm run perf:browser -- --mode adventure --url http://127.0.0.1:4173/ --seconds 20 --warmup 3 --headful
+```
+
+Headless Adventure baseline on `main`, seed `137`, `1280x720@1`, `input roam`, `gl.finish on`, dev server, `8s + 1s warmup`:
+
+- Headless effective FPS: `13.18`, but likely RAF-throttled in this shell.
+- Game frame timing: `9.51 ms avg`, `11.1 ms p95`, `14.1 ms max`.
+- Update timing: `5.06 ms avg`, `6.3 ms p95`; session update `3.88 ms avg`, `5.0 ms p95`; session per tick `1.29 ms avg`, `1.67 ms p95`.
+- Render timing: `4.44 ms avg`, `5.4 ms p95`, `6.6 ms max`; `gl.finish` wait was negligible at `0.01 ms avg`.
+- Renderer load: `157` draw calls avg, `198` max; `157k` triangles avg, `179k` p95; `84` geometries max; `26` textures max.
+- Scene load: about `6.0k` visible meshes avg, `6.1k` p95/max; `1988` world props; final trail cells about `325`.
+
+Headless Adventure with `--no-gl-finish` was effectively the same: `13.05` effective FPS, `9.86 ms` game frame avg, `12.3 ms` p95, `4.62 ms` render avg, `5.6 ms` render p95. This suggests GPU queue waiting is not the measured bottleneck in headless Chromium.
+
+Production preview headless Adventure baseline on the same scene was also similar: `12.73` effective FPS, `10.04 ms` game frame avg, `13.1 ms` p95, `4.77 ms` render avg, `6.4 ms` render p95, about `156` draw calls avg and `159k` triangles avg. Dev-server overhead is not the obvious cause of the local `30-60 FPS` play reports.
+
+Headless Arena browser baseline on `main`, plane stage, `40` bots plus player, `1280x720@1`, `6s + 1s warmup`:
+
+- Headless effective FPS: `10.84`, also likely RAF-throttled.
+- Game frame timing: `26.20 ms avg`, `32.1 ms p95`; session update `16.05 ms avg`; session per tick `5.35 ms avg`.
+- Render timing: `3.66 ms avg`, `4.6 ms p95`.
+- Renderer load: about `1058` draw calls avg, `1211` max; `148k` triangles avg, `161k` max; about `1.1k-1.2k` visible meshes.
+
+Headful Adventure real-desktop baseline on `main`, seed `137`, `1280x720@1`, `input roam`, `20s + 3s warmup`:
+
+- Effective FPS: `70.00`; interval `14.29 ms avg`, `15.9 ms p95`, `24.8 ms max`, no frames over `50 ms`.
+- Game frame timing: `6.93 ms avg`, `11.2 ms p95`, `17.0 ms max`.
+- Update timing: `2.27 ms avg`, `3.3 ms p95`; session update `1.09 ms avg`, `1.6 ms p95`; session per tick `1.28 ms avg`, `1.6 ms p95`.
+- Render timing: `4.66 ms avg`, `7.9 ms p95`, `13.1 ms max`; `gl.finish` wait was negligible.
+- Renderer load: about `92` draw calls avg, `232` max; `109k` triangles avg, `167k` p95; about `6.5k` visible meshes avg.
+
+Headful Adventure lock-on stress profile on `main`, seed `137`, `15` extra NPC snails plus boss, `input random-lock`, `1280x720@1`, `20s + 3s warmup`:
+
+- Command: `npm run perf:browser -- --mode adventure --npcs 15 --input random-lock --seconds 20 --warmup 3 --headful`
+- Effective FPS: `22.99`; interval `43.50 ms avg`, `56.6 ms p95`, `77.1 ms max`, `139` frames over `50 ms`.
+- Game frame timing: `42.25 ms avg`, `55.1 ms p95`, `74.9 ms max`.
+- Update timing: `33.01 ms avg`, `43.1 ms p95`; session update `30.45 ms avg`, `40.2 ms p95`; session per tick `11.93 ms avg`, `13.5 ms p95`, `18.13 ms max`.
+- Render timing: `9.24 ms avg`, `12.3 ms p95`, `17.3 ms max`; `gl.finish` wait was negligible.
+- Renderer load: about `1856` draw calls avg, `3109` p95, `3228` max; `292k` triangles avg, `341k` p95; about `7.6k` visible meshes avg.
+- Interpretation: this stress case is primarily simulation-bound (`session update` dominates), with a secondary draw-call/render cost from many snail actors and active stalks. It is much more representative of the lock-on combat slowdown than the empty Adventure roam baseline.
+
+Node-only analytic stalk prototype comparison on 2026-05-04, `40` bots plus player, plane Arena, `8s + 1s warmup`:
+
+- `main` sim-only: `5.35 ms/tick avg`, `5.90 ms/tick p95`, about `187 ticks/sec`.
+- `analytic-stalk-prototype` sim-only: `0.65 ms/tick avg`, `0.91 ms/tick p95`, about `1542 ticks/sec`, roughly `8.25x` faster than `main`.
+- With Node-side presentation sync included: `main` local frame `6.43 ms avg`; analytic branch `1.15 ms avg`.
+- Snapshot size also improved on analytic: network snapshot `16.6 KiB avg` to `15.2 KiB avg`; full snapshot `107.5 KiB avg` to `72.8 KiB avg`.
+- No explicit laptop/other-machine perf numbers were found in repo notes as of this check.
+
 ## TypeScript Migration
 
 The codebase is now TypeScript end to end: browser runtime, shared sim, server, tests, scripts, and Vite config all use `.ts` sources. Node commands use `tsx`; browser imports keep `.js` specifiers for ESM compatibility under TypeScript bundler resolution. The first migration pass is intentionally behavior-preserving and compiler-loose (`strict: false`, `noImplicitAny: false`) with many internal `declare ...: any` class fields. Tightening public simulation/network shapes and then re-enabling stricter compiler flags should be done incrementally after gameplay churn slows.
