@@ -97,6 +97,13 @@ Headful Adventure lock-on stress profile on `main`, seed `137`, `15` extra NPC s
 - Renderer load: about `1856` draw calls avg, `3109` p95, `3228` max; `292k` triangles avg, `341k` p95; about `7.6k` visible meshes avg.
 - Interpretation: this stress case is primarily simulation-bound (`session update` dominates), with a secondary draw-call/render cost from many snail actors and active stalks. It is much more representative of the lock-on combat slowdown than the empty Adventure roam baseline.
 
+On 2026-05-04, `aggressive-optimizations` was branched from `main` after merging `analytic-stalk-prototype`. The same 15-NPC random-lock stress shape became fast enough after analytic authority plus render batching:
+
+- After analytic stalk authority only, 10s headful stress: `69.77 FPS`, `11.15 ms` game frame avg, `13.2 ms` p95; session update `1.36 ms` avg, `1.9 ms` p95; render `7.31 ms` avg, `9.2 ms` p95; draw calls `1161` avg, `1795` p95.
+- After wet-trail instancing and player-pair broadphase: `69.53 FPS`, `9.17 ms` game frame avg, `10.9 ms` p95; render `5.44 ms` avg, `6.1 ms` p95; draw calls `468` avg, `534` p95.
+- After per-snail stalk segment instancing: `70.07 FPS`, `8.75 ms` game frame avg, `10.2 ms` p95; render `5.12 ms` avg, `5.8 ms` p95; draw calls `314` avg, `374` p95.
+- Current remaining cost is not the old all-rope sim wall; it is normal render/update overhead plus triangle count. Trails and stalk segments are no longer the main draw-call explosion.
+
 Node-only analytic stalk prototype comparison on 2026-05-04, `40` bots plus player, plane Arena, `8s + 1s warmup`:
 
 - `main` sim-only: `5.35 ms/tick avg`, `5.90 ms/tick p95`, about `187 ticks/sec`.

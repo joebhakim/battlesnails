@@ -116,6 +116,7 @@ const CONTACT_HYSTERESIS_TICKS = 5;
 const ANALYTIC_STALK_AUTHORITY = true;
 const WORLD_PROP_INTERACTION_DISTANCE = 3.1;
 const WORLD_PROP_SPATIAL_CELL_SIZE = 80;
+const PLAYER_SPATIAL_CELL_SIZE = 16;
 const WORLD_UP = new THREE.Vector3(0, 1, 0);
 const STALK_FORWARD = new THREE.Vector3(0, 0, 1);
 const PROP_ADHESION_MARGIN = 0.35;
@@ -829,6 +830,93 @@ function queryWorldPropSpatialIndex(cells, position, radius, cellSize = WORLD_PR
   }
 
   return nearby;
+}
+
+function createPlayerSpatialCellKey(cellX, cellZ) {
+  return `${cellX}:${cellZ}`;
+}
+
+function quantizePlayerSpatialCoord(value, cellSize) {
+  return Math.floor(value / cellSize);
+}
+
+function createPlayerSpatialIndex(players, cellSize = PLAYER_SPATIAL_CELL_SIZE) {
+  const cells = new Map();
+  const safeCellSize = Math.max(1, cellSize);
+
+  for (const player of players) {
+    if (!player.connected || player.health <= 0) {
+      continue;
+    }
+
+    const radius = Math.max(0, player.bodyRadius ?? 0);
+    const minCellX = quantizePlayerSpatialCoord(player.position.x - radius, safeCellSize);
+    const maxCellX = quantizePlayerSpatialCoord(player.position.x + radius, safeCellSize);
+    const minCellZ = quantizePlayerSpatialCoord(player.position.z - radius, safeCellSize);
+    const maxCellZ = quantizePlayerSpatialCoord(player.position.z + radius, safeCellSize);
+
+    for (let cellX = minCellX; cellX <= maxCellX; cellX += 1) {
+      for (let cellZ = minCellZ; cellZ <= maxCellZ; cellZ += 1) {
+        const key = createPlayerSpatialCellKey(cellX, cellZ);
+        const bucket = cells.get(key);
+        if (bucket) {
+          bucket.push(player);
+        } else {
+          cells.set(key, [player]);
+        }
+      }
+    }
+  }
+
+  return cells;
+}
+
+function queryPlayerSpatialIndex(cells, position, radius, cellSize = PLAYER_SPATIAL_CELL_SIZE) {
+  if (!cells || cells.size === 0 || !position) {
+    return [];
+  }
+
+  const safeCellSize = Math.max(1, cellSize);
+  const safeRadius = Math.max(0, radius);
+  const minCellX = quantizePlayerSpatialCoord(position.x - safeRadius, safeCellSize);
+  const maxCellX = quantizePlayerSpatialCoord(position.x + safeRadius, safeCellSize);
+  const minCellZ = quantizePlayerSpatialCoord(position.z - safeRadius, safeCellSize);
+  const maxCellZ = quantizePlayerSpatialCoord(position.z + safeRadius, safeCellSize);
+  const seen = new Set();
+  const nearby = [];
+
+  for (let cellX = minCellX; cellX <= maxCellX; cellX += 1) {
+    for (let cellZ = minCellZ; cellZ <= maxCellZ; cellZ += 1) {
+      const bucket = cells.get(createPlayerSpatialCellKey(cellX, cellZ));
+      if (!bucket) {
+        continue;
+      }
+
+      for (const player of bucket) {
+        if (seen.has(player.slot)) {
+          continue;
+        }
+        seen.add(player.slot);
+
+        const maximumDistance = safeRadius + Math.max(0, player.bodyRadius ?? 0);
+        const deltaX = position.x - player.position.x;
+        const deltaZ = position.z - player.position.z;
+        if ((deltaX * deltaX) + (deltaZ * deltaZ) <= maximumDistance * maximumDistance) {
+          nearby.push(player);
+        }
+      }
+    }
+  }
+
+  return nearby;
+}
+
+function getMaximumPlayerBodyRadius(players) {
+  return players.reduce((maximum, player) => (
+    player.connected && player.health > 0
+      ? Math.max(maximum, player.bodyRadius ?? 0)
+      : maximum
+  ), 0);
 }
 
 function createFixturePosition(fixture, terrainConfig) {
@@ -2100,13 +2188,36 @@ export class MatchSimulation {
       this.applyInput(player, target, input, delta);
     }
 
+    const playerSpatialIndex = createPlayerSpatialIndex(orderedPlayers);
+    const maximumBodyRadius = getMaximumPlayerBodyRadius(orderedPlayers);
+    const resolvedBodyPairs = new Set();
     for (let leftIndex = 0; leftIndex < orderedPlayers.length; leftIndex += 1) {
-      for (let rightIndex = leftIndex + 1; rightIndex < orderedPlayers.length; rightIndex += 1) {
-        this.resolveBodyCollision(orderedPlayers[leftIndex], orderedPlayers[rightIndex]);
+      const player = orderedPlayers[leftIndex];
+      if (!player.connected || player.health <= 0) {
+        continue;
+      }
+
+      const bodyCandidates = queryPlayerSpatialIndex(
+        playerSpatialIndex,
+        player.position,
+        player.bodyRadius + maximumBodyRadius
+      );
+      for (const candidate of bodyCandidates) {
+        if (candidate.slot === player.slot) {
+          continue;
+        }
+
+        const leftSlot = Math.min(player.slot, candidate.slot);
+        const rightSlot = Math.max(player.slot, candidate.slot);
+        const pairKey = `${leftSlot}:${rightSlot}`;
+        if (resolvedBodyPairs.has(pairKey)) {
+          continue;
+        }
+
+        resolvedBodyPairs.add(pairKey);
+        this.resolveBodyCollision(player, candidate);
       }
     }
-
-    const playerBodyObstacles = createBodyObstacles(orderedPlayers);
 
     for (const player of orderedPlayers) {
       if (!player.connected) {
@@ -2130,6 +2241,12 @@ export class MatchSimulation {
         }
       }
 
+      const nearbyBodyPlayers = queryPlayerSpatialIndex(
+        playerSpatialIndex,
+        player.position,
+        getStalkObstacleBroadphaseRadius(player) + maximumBodyRadius
+      );
+      const playerBodyObstacles = createBodyObstacles(nearbyBodyPlayers);
       const stalkPropObstacles = createWorldPropObstacles(
         this.getNearbyWorldProps(player.position, getStalkObstacleBroadphaseRadius(player))
       );
@@ -2143,7 +2260,16 @@ export class MatchSimulation {
     }
 
     for (const attacker of orderedPlayers) {
-      for (const target of orderedPlayers) {
+      if (!attacker.connected || attacker.health <= 0) {
+        continue;
+      }
+
+      const targetCandidates = queryPlayerSpatialIndex(
+        playerSpatialIndex,
+        attacker.position,
+        getStalkObstacleBroadphaseRadius(attacker) + maximumBodyRadius + 0.5
+      );
+      for (const target of targetCandidates) {
         if (attacker.slot === target.slot) {
           continue;
         }
