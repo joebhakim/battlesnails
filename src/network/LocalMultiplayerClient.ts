@@ -15,14 +15,16 @@ export function resolveDefaultUrl(locationLike: any = globalThis?.window?.locati
 }
 
 export class LocalMultiplayerClient {
+  declare joinOptions: any;
   declare onClose: any;
   declare isConnected: any;
   declare onError: any;
   declare onMessage: any;
   declare socket: any;
   declare url: any;
-  constructor(url = import.meta.env.VITE_MULTIPLAYER_WS_URL || resolveDefaultUrl()) {
+  constructor(url = import.meta.env.VITE_MULTIPLAYER_WS_URL || resolveDefaultUrl(), joinOptions: any = {}) {
     this.url = url;
+    this.joinOptions = joinOptions;
     this.socket = null;
     this.isConnected = false;
     this.onMessage = () => {};
@@ -38,7 +40,7 @@ export class LocalMultiplayerClient {
     this.socket = new WebSocket(this.url);
     this.socket.addEventListener('open', () => {
       this.isConnected = true;
-      this.send({ type: 'join' });
+      this.send({ type: 'join', options: this.joinOptions });
     });
 
     this.socket.addEventListener('message', (event) => {

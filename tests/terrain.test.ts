@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import { MatchSimulation } from '../src/sim/MatchSimulation.js';
 import {
   ALL_TERRAIN_PRESET_OPTIONS,
+  ARENA_TERRAIN_PRESET_OPTIONS,
   DEFAULT_TERRAIN_CONFIG,
   EXPLORER_TERRAIN_PRESET,
   TERRAIN_PRESET_OPTIONS,
@@ -45,11 +46,12 @@ test('all shipped terrain presets produce finite heights across the arena', () =
   }
 });
 
-test('explorer mossland is valid but hidden from arena terrain choices', () => {
+test('explorer mossland is valid and available to arena stage choices', () => {
   const terrain = normalizeTerrainConfig({ preset: EXPLORER_TERRAIN_PRESET });
 
   assert.equal(terrain.preset, EXPLORER_TERRAIN_PRESET);
   assert.equal(TERRAIN_PRESET_OPTIONS.some((option) => option.value === EXPLORER_TERRAIN_PRESET), false);
+  assert.equal(ARENA_TERRAIN_PRESET_OPTIONS.some((option) => option.value === EXPLORER_TERRAIN_PRESET), true);
 });
 
 test('default terrain is a flat plane', () => {

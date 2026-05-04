@@ -173,6 +173,7 @@ export class UI {
   declare enemyLabel: any;
   declare fullSimulatorTuningControlSchema: any;
   declare fullTestControlSchema: any;
+  declare developerModesVisible: any;
   declare fpsValue: any;
   declare gameMessage: any;
   declare leftStalkIndicator: any;
@@ -197,6 +198,9 @@ export class UI {
   declare singlePlayerBackButton: any;
   declare singlePlayerOptionRefs: any;
   declare singlePlayerOptionValues: any;
+  declare singlePlayerSetupOnBack: any;
+  declare singlePlayerSetupOnStart: any;
+  declare singlePlayerSetupSchema: any;
   declare singlePlayerStartButton: any;
   declare startExplorerButton: any;
   declare startMenu: any;
@@ -281,8 +285,13 @@ export class UI {
     this.pendingSimulatorTuningValues = null;
     this.appliedSimulatorTuningValues = null;
     this.onSimulatorTuningApply = null;
+    this.developerModesVisible = false;
     this.singlePlayerOptionValues = {};
     this.singlePlayerOptionRefs = new Map();
+    this.singlePlayerSetupSchema = [];
+    this.singlePlayerSetupOnStart = null;
+    this.singlePlayerSetupOnBack = null;
+    this.setDeveloperModesVisible(false);
 
     this.drawStalkIndicator(this.leftStalkIndicator, null);
     this.drawStalkIndicator(this.rightStalkIndicator, null);
@@ -351,12 +360,15 @@ export class UI {
   setupModeButtons({ onSinglePlayer, onExplorer, onTestMode, onSimulator, onMultiplayer }) {
     this.startSinglePlayerButton.addEventListener('click', onSinglePlayer);
     this.startExplorerButton?.addEventListener('click', onExplorer);
-    this.startTestModeButton.addEventListener('click', onTestMode);
-    this.startSimulatorButton.addEventListener('click', onSimulator);
+    this.startTestModeButton?.addEventListener('click', onTestMode);
+    this.startSimulatorButton?.addEventListener('click', onSimulator);
     this.startMultiplayerButton.addEventListener('click', onMultiplayer);
   }
 
   setupSinglePlayerSetup({ schema = [], values = {}, onStart, onBack }: any) {
+    this.singlePlayerSetupSchema = schema;
+    this.singlePlayerSetupOnStart = onStart;
+    this.singlePlayerSetupOnBack = onBack;
     this.singlePlayerOptionValues = { ...values };
     this.renderSinglePlayerSetupControls(schema, this.singlePlayerOptionValues);
     this.singlePlayerStartButton.onclick = () => {
@@ -379,17 +391,50 @@ export class UI {
 
   showModeSelect() {
     this.startMenuTitle.textContent = 'Choose A Mode';
-    this.startMenuCopy.textContent = 'Single Player, Explorer, Test Mode, Simulator, or LAN Multiplayer. The snails keep getting stranger.';
+    this.startMenuCopy.textContent = this.developerModesVisible
+      ? 'Arena, Adventure, LAN Multiplayer, Test Mode, or Simulator. Debug modes are currently unlocked.'
+      : 'Arena is the configurable one-on-one/survival stage mode. Adventure is the forest-floor expedition. LAN supports arena duels and generated adventure formats. Press ` for debug modes.';
     this.modeActions.classList.remove('hidden');
     this.singlePlayerSetup.classList.add('hidden');
   }
 
   showSinglePlayerSetup(values: any = {}) {
-    this.startMenuTitle.textContent = 'Single Player';
-    this.startMenuCopy.textContent = 'Pick a stage and enemy setup.';
+    this.showModeSetup({
+      title: 'Arena',
+      copy: 'Pick a stage and enemy setup for the configurable arena mode.',
+      schema: this.singlePlayerSetupSchema,
+      values,
+      startLabel: 'Start Arena',
+      onStart: this.singlePlayerSetupOnStart,
+      onBack: this.singlePlayerSetupOnBack
+    });
+  }
+
+  showModeSetup({ title, copy, schema = [], values = {}, startLabel = 'Start', onStart, onBack }: any) {
+    this.startMenuTitle.textContent = title;
+    this.startMenuCopy.textContent = copy;
+    this.singlePlayerStartButton.textContent = startLabel;
+    this.singlePlayerOptionValues = { ...values };
+    this.renderSinglePlayerSetupControls(schema, this.singlePlayerOptionValues);
+    this.singlePlayerStartButton.onclick = () => {
+      onStart?.({ ...this.singlePlayerOptionValues });
+    };
+    this.singlePlayerBackButton.onclick = () => {
+      this.showModeSelect();
+      onBack?.();
+    };
     this.modeActions.classList.add('hidden');
     this.singlePlayerSetup.classList.remove('hidden');
     this.updateSinglePlayerSetupValues(values);
+  }
+
+  setDeveloperModesVisible(visible) {
+    this.developerModesVisible = Boolean(visible);
+    this.startTestModeButton?.classList.toggle('hidden', !this.developerModesVisible);
+    this.startSimulatorButton?.classList.toggle('hidden', !this.developerModesVisible);
+    if (this.startMenu?.classList.contains('visible') && this.singlePlayerSetup?.classList.contains('hidden')) {
+      this.showModeSelect();
+    }
   }
 
   renderSinglePlayerSetupControls(schema, values) {

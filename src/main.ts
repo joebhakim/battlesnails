@@ -1,4 +1,5 @@
 import { Game } from './game/Game.js';
+import { installBrowserProfileHarness } from './game/BrowserProfileHarness.js';
 
 function showBootError(error) {
   const message = error instanceof Error ? error.message : String(error);
@@ -32,6 +33,7 @@ document.addEventListener('DOMContentLoaded', () => {
     game.init();
     if (new URLSearchParams(window.location.search).has('profile')) {
       (window as any).__battlesnailsGame = game;
+      (window as any).__battlesnailsProfile = installBrowserProfileHarness(game);
     }
     game.start();
   } catch (error) {

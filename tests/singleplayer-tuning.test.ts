@@ -8,6 +8,7 @@ import {
 } from '../src/game/SinglePlayerSession.js';
 import { Game } from '../src/game/Game.js';
 import { DEFAULT_TUNING_CONFIG } from '../src/sim/Tuning.js';
+import { EXPLORER_TERRAIN_PRESET } from '../src/world/Terrain.js';
 
 class MemoryStorage {
   declare store: any;
@@ -28,7 +29,7 @@ class MemoryStorage {
   }
 }
 
-test('single player exposes only simple stage and encounter options', () => {
+test('arena exposes only stage and encounter options', () => {
   const session = new SinglePlayerSession({ storage: new MemoryStorage() });
   const schemaIds = session.getTuningSchema().map((entry) => entry.id);
   const snapshot = session.getSnapshot();
@@ -45,7 +46,7 @@ test('single player exposes only simple stage and encounter options', () => {
   assert.equal(bot.maxHealth, DEFAULT_TUNING_CONFIG.botMaxHealth);
 });
 
-test('single player stage and encounter options rebuild the match', () => {
+test('arena stage and encounter options rebuild the match', () => {
   const session = new SinglePlayerSession({ storage: new MemoryStorage() });
 
   const result = session.setTuningConfig({
@@ -64,7 +65,22 @@ test('single player stage and encounter options rebuild the match', () => {
   assert.equal(session.getTestPanelState().entityLabel, 'enemies');
 });
 
-test('single player options persist separately from test mode tuning', () => {
+test('arena can use the generated forest-floor map as a stage', () => {
+  const session = new SinglePlayerSession({
+    storage: new MemoryStorage(),
+    options: {
+      stagePreset: EXPLORER_TERRAIN_PRESET,
+      encounterPreset: 'one_strong'
+    }
+  });
+  const snapshot = session.getSnapshot();
+
+  assert.equal(snapshot.terrain.preset, EXPLORER_TERRAIN_PRESET);
+  assert(snapshot.terrain.worldRadius > 100);
+  assert(snapshot.worldProps.length > 0);
+});
+
+test('arena options persist separately from test mode tuning', () => {
   const storage = new MemoryStorage();
   const firstSession = new SinglePlayerSession({ storage });
 
@@ -86,7 +102,7 @@ test('single player options persist separately from test mode tuning', () => {
   assert.equal(storage.getItem(SINGLE_PLAYER_OPTIONS_STORAGE_KEY), null);
 });
 
-test('single player launch options are stored from the mode menu flow', () => {
+test('arena launch options are stored from the mode menu flow', () => {
   const storage = new MemoryStorage();
 
   new SinglePlayerSession({
@@ -103,7 +119,7 @@ test('single player launch options are stored from the mode menu flow', () => {
   });
 });
 
-test('single player does not use the in-game tuning panel hook', () => {
+test('arena does not use the in-game tuning panel hook', () => {
   const game = Object.create(Game.prototype);
   game.currentSession = new SinglePlayerSession({ storage: new MemoryStorage() });
 

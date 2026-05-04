@@ -11,12 +11,15 @@
     "preview": "vite preview",
     "mp:server": "node --import tsx server/index.ts",
     "test": "node --import tsx --test tests/*.test.ts",
+    "perf:arena": "node --import tsx scripts/profile-arena.ts",
+    "perf:browser-arena": "node --import tsx scripts/profile-browser-arena.ts",
     "probe:controls": "node --import tsx scripts/probe-controls.ts",
     "map:explorer": "node --import tsx scripts/print-explorer-map.ts"
   },
   "devDependencies": {
     "@types/node": "^25.6.0",
     "@types/three": "^0.184.0",
+    "playwright-core": "^1.59.1",
     "tsx": "^4.21.0",
     "typescript": "^6.0.3",
     "vite": "^5.0.8"

@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 
 import { createLocalMultiplayerServer } from '../server/createLocalMultiplayerServer.js';
 import { DEFAULT_TUNING_CONFIG } from '../src/sim/Tuning.js';
+import { MULTIPLAYER_MATCH_MODE } from '../src/sim/MultiplayerOptions.js';
+import { EXPLORER_TERRAIN_PRESET } from '../src/world/Terrain.js';
 
 class TestClient {
   declare queue: any;
@@ -59,7 +61,7 @@ class TestClient {
   }
 }
 
-test('multiplayer server auto-pairs two clients and starts a match with 40 NPCs by default', async () => {
+test('multiplayer server auto-pairs two clients into an arena 1v1 by default', async () => {
   const server = createLocalMultiplayerServer({ port: 0 });
   await server.start();
   const port = server.getPort();
@@ -80,15 +82,15 @@ test('multiplayer server auto-pairs two clients and starts a match with 40 NPCs 
 
   assert.equal(welcomeA.slot, 1);
   assert.equal(welcomeB.slot, 2);
+  assert.equal(welcomeA.options.matchMode, MULTIPLAYER_MATCH_MODE.ARENA_PVP);
   assert.equal(matchStartA.snapshot.phase, 'running');
-  assert.equal(matchStartB.snapshot.players.length, 42);
+  assert.equal(matchStartB.snapshot.players.length, 2);
   assert.equal('stalks' in matchStartA.snapshot.players[0], false);
   assert.equal(Array.isArray(matchStartA.snapshot.trailCells), true);
   assert.equal(typeof matchStartA.snapshot.trailCellSize, 'number');
   assert.equal(matchStartA.snapshot.terrain?.preset, 'plane');
-  assert.equal(matchStartA.snapshot.players.filter((player) => player.profileName === 'bot').length, 40);
+  assert.equal(matchStartA.snapshot.players.filter((player) => player.profileName === 'bot').length, 0);
   assert.equal(matchStartA.snapshot.players.find((player) => player.slot === 1)?.maxHealth, DEFAULT_TUNING_CONFIG.playerMaxHealth);
-  assert.equal(matchStartA.snapshot.players.find((player) => player.profileName === 'bot')?.maxHealth, DEFAULT_TUNING_CONFIG.botMaxHealth);
 
   const dynamicSnapshot = await clientA.nextMessageOfType('snapshot');
   assert.equal(dynamicSnapshot.snapshot.terrain, undefined);
@@ -98,6 +100,39 @@ test('multiplayer server auto-pairs two clients and starts a match with 40 NPCs 
   assert.equal(dynamicSnapshot.snapshot.players[0].profileName, undefined);
   assert.equal('stalks' in dynamicSnapshot.snapshot.players[0], false);
   assert.equal(typeof dynamicSnapshot.snapshot.players[0].position.x, 'number');
+
+  clientA.close();
+  clientB.close();
+  await server.stop();
+});
+
+test('multiplayer server can start a generated adventure co-op room', async () => {
+  const server = createLocalMultiplayerServer({ port: 0 });
+  await server.start();
+  const port = server.getPort();
+  const url = `ws://127.0.0.1:${port}`;
+
+  const clientA = new TestClient(url);
+  const clientB = new TestClient(url);
+  await clientA.open();
+  await clientB.open();
+
+  clientA.send({
+    type: 'join',
+    options: {
+      matchMode: MULTIPLAYER_MATCH_MODE.ADVENTURE_COOP
+    }
+  });
+  clientB.send({ type: 'join' });
+
+  const matchStartA = await clientA.nextMessageOfType('match_start');
+  const matchStartB = await clientB.nextMessageOfType('match_start');
+
+  assert.equal(matchStartA.options.matchMode, MULTIPLAYER_MATCH_MODE.ADVENTURE_COOP);
+  assert.equal(matchStartB.snapshot.terrain?.preset, EXPLORER_TERRAIN_PRESET);
+  assert.equal(matchStartB.snapshot.players.filter((player) => player.profileName === 'human').length, 2);
+  assert.equal(matchStartB.snapshot.players.filter((player) => player.profileName === 'bot').length, 1);
+  assert(matchStartB.snapshot.worldProps.length > 0);
 
   clientA.close();
   clientB.close();

@@ -1,5 +1,9 @@
 import { LocalMultiplayerClient } from '../network/LocalMultiplayerClient.js';
 import { normalizePlayerInput } from '../sim/MatchSimulation.js';
+import {
+  MULTIPLAYER_MATCH_MODE,
+  normalizeMultiplayerOptions
+} from '../sim/MultiplayerOptions.js';
 
 function createTrailCellKey(cell: any) {
   return `${cell.x}:${cell.z}`;
@@ -50,11 +54,13 @@ export class MultiplayerSession {
   declare closedByUser: any;
   declare errorMessage: any;
   declare mode: any;
+  declare options: any;
   declare snapshot: any;
   declare waitingReason: any;
-  constructor() {
+  constructor(options: any = {}) {
     this.mode = 'multiplayer';
-    this.client = new LocalMultiplayerClient();
+    this.options = normalizeMultiplayerOptions(options.options ?? options);
+    this.client = new LocalMultiplayerClient(options.url, this.options);
     this.localSlot = null;
     this.snapshot = null;
     this.connectionState = 'connecting';
@@ -92,6 +98,7 @@ export class MultiplayerSession {
     switch (message.type) {
       case 'welcome':
         this.localSlot = message.slot;
+        this.options = normalizeMultiplayerOptions(message.options ?? this.options);
         this.connectionState = 'waiting';
         this.waitingReason = null;
         break;
@@ -100,6 +107,7 @@ export class MultiplayerSession {
         this.waitingReason = message.reason ?? null;
         break;
       case 'match_start':
+        this.options = normalizeMultiplayerOptions(message.options ?? this.options);
         this.connectionState = 'running';
         this.snapshot = this.mergeSnapshot(message.snapshot ?? null, true);
         this.waitingReason = null;
@@ -176,7 +184,11 @@ export class MultiplayerSession {
       return null;
     }
 
-    const livingOthers = others.filter((player) => player.connected && player.health > 0);
+    const wantsPveTarget = this.options.matchMode === MULTIPLAYER_MATCH_MODE.ADVENTURE_COOP;
+    const targetableOthers = wantsPveTarget
+      ? others.filter((player) => player.profileName === 'bot')
+      : others;
+    const livingOthers = targetableOthers.filter((player) => player.connected && player.health > 0);
     const pool = livingOthers.length > 0 ? livingOthers : others;
     if (!localPlayer) {
       return pool[0];
@@ -201,7 +213,11 @@ export class MultiplayerSession {
 
   getHudLabels(targetState = this.getFocusTargetState()) {
     return {
-      opponent: targetState?.profileName === 'bot' ? 'NPC' : 'Opponent'
+      opponent: targetState?.profileName === 'bot'
+        ? 'Enemy'
+        : this.options.matchMode === MULTIPLAYER_MATCH_MODE.ADVENTURE_COOP
+          ? 'Ally'
+          : 'Opponent'
     };
   }
 

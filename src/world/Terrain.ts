@@ -46,13 +46,15 @@ export const TERRAIN_PRESET_OPTIONS: readonly TerrainPresetOption[] = Object.fre
 ]);
 
 export const EXPLORER_TERRAIN_PRESET_OPTIONS: readonly TerrainPresetOption[] = Object.freeze([
-  { value: EXPLORER_TERRAIN_PRESET, label: 'Explorer Mossland' }
+  { value: EXPLORER_TERRAIN_PRESET, label: 'Generated Forest Floor' }
 ]);
 
 export const ALL_TERRAIN_PRESET_OPTIONS: readonly TerrainPresetOption[] = Object.freeze([
   ...TERRAIN_PRESET_OPTIONS,
   ...EXPLORER_TERRAIN_PRESET_OPTIONS
 ]);
+
+export const ARENA_TERRAIN_PRESET_OPTIONS: readonly TerrainPresetOption[] = ALL_TERRAIN_PRESET_OPTIONS;
 
 const VALID_TERRAIN_PRESETS = new Set(ALL_TERRAIN_PRESET_OPTIONS.map((entry) => entry.value));
 

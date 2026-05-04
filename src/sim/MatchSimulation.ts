@@ -2166,7 +2166,27 @@ export class MatchSimulation {
       return;
     }
 
-    if (this.mode === 'multiplayer') {
+    if (this.mode === 'multiplayer_adventure_pve') {
+      const livingHumans = this.getLivingPlayers({ humansOnly: true });
+      const livingBots = this.getLivingPlayers().filter((player) => player.profileName === 'bot');
+      if (livingHumans.length > 0 && livingBots.length > 0) {
+        return;
+      }
+
+      if (livingHumans.length > 0) {
+        this.endMatch(livingHumans[0].slot, 'knockout');
+        return;
+      }
+
+      this.endMatch(livingBots[0]?.slot ?? null, livingBots.length > 0 ? 'knockout' : 'draw');
+      return;
+    }
+
+    if (
+      this.mode === 'multiplayer' ||
+      this.mode === 'multiplayer_arena_pvp' ||
+      this.mode === 'multiplayer_adventure_pvp'
+    ) {
       const livingHumans = this.getLivingPlayers({ humansOnly: true });
       if (livingHumans.length > 1) {
         return;

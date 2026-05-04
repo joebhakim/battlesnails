@@ -4,6 +4,7 @@ import {
   DEFAULT_TUNING_CONFIG,
   createBotControllerConfig
 } from '../sim/Tuning.js';
+import { createArenaEnvironment } from '../sim/ArenaEnvironment.js';
 import {
   DEFAULT_SINGLE_PLAYER_OPTIONS as DEFAULT_SCENARIO_OPTIONS,
   ENCOUNTER_PRESETS as SHARED_ENCOUNTER_PRESETS,
@@ -11,7 +12,7 @@ import {
   createTuningConfigFromScenario,
   normalizeScenarioOptions
 } from '../sim/EncounterPresets.js';
-import { TERRAIN_PRESET_OPTIONS } from '../world/Terrain.js';
+import { ARENA_TERRAIN_PRESET_OPTIONS } from '../world/Terrain.js';
 
 export const SINGLE_PLAYER_OPTIONS_STORAGE_KEY = 'battlesnails:singleplayer-options-v1';
 export const SINGLE_PLAYER_TUNING_STORAGE_KEY = SINGLE_PLAYER_OPTIONS_STORAGE_KEY;
@@ -26,7 +27,7 @@ export const SINGLE_PLAYER_OPTIONS_SCHEMA: ReadonlyArray<any> = Object.freeze([
     defaultValue: DEFAULT_SINGLE_PLAYER_OPTIONS.stagePreset,
     structural: true,
     kind: 'choice',
-    options: TERRAIN_PRESET_OPTIONS
+    options: ARENA_TERRAIN_PRESET_OPTIONS
   }),
   Object.freeze({
     id: 'encounterPreset',
@@ -121,6 +122,7 @@ export class SinglePlayerSession {
   declare options: any;
   declare simulation: any;
   declare snapshot: any;
+  declare staticWorldProps: any;
   declare storage: any;
   constructor(options: any = {}) {
     this.mode = 'singleplayer';
@@ -136,6 +138,7 @@ export class SinglePlayerSession {
     this.tuningConfig = createTuningConfigFromOptions(this.options);
     this.botControllers = new Map();
     this.snapshot = null;
+    this.staticWorldProps = [];
 
     this.rebuildSimulation();
   }
@@ -143,11 +146,15 @@ export class SinglePlayerSession {
   rebuildSimulation() {
     this.tuningConfig = createTuningConfigFromOptions(this.options);
     const participants = createParticipantsForScenario(this.options);
+    const environment = createArenaEnvironment(this.options);
 
     this.simulation = new MatchSimulation({
       mode: 'singleplayer',
       players: participants,
-      tuning: this.tuningConfig
+      tuning: this.tuningConfig,
+      terrainConfig: environment?.terrainConfig,
+      arenaRadius: environment?.arenaRadius,
+      worldProps: environment?.worldProps
     });
 
     const botControllerConfig = createBotControllerConfig(this.tuningConfig);
@@ -160,6 +167,7 @@ export class SinglePlayerSession {
 
     this.opponentSlot = participants.find((participant) => participant.profile === 'bot')?.slot ?? null;
     this.snapshot = this.simulation.getSnapshot();
+    this.staticWorldProps = this.snapshot.worldProps ?? [];
     this.accumulator = 0;
   }
 
@@ -190,11 +198,17 @@ export class SinglePlayerSession {
             botController.getInput(this.simulation, botSlot, this.localSlot, MATCH_TICK_DURATION)
           );
         }
-        this.snapshot = this.simulation.step(MATCH_TICK_DURATION);
+        this.snapshot = {
+          ...this.simulation.step(MATCH_TICK_DURATION, { includeWorldProps: false }),
+          worldProps: this.staticWorldProps
+        };
         this.accumulator -= MATCH_TICK_DURATION;
       }
     } else {
-      this.snapshot = this.simulation.getSnapshot();
+      this.snapshot = {
+        ...this.simulation.getSnapshot({ includeWorldProps: false }),
+        worldProps: this.staticWorldProps
+      };
       this.accumulator = 0;
     }
   }

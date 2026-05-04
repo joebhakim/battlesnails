@@ -1,5 +1,5 @@
 import { DEFAULT_TUNING_CONFIG, normalizeTuningConfig } from './Tuning.js';
-import { DEFAULT_TERRAIN_CONFIG, TERRAIN_PRESET_OPTIONS } from '../world/Terrain.js';
+import { ARENA_TERRAIN_PRESET_OPTIONS, DEFAULT_TERRAIN_CONFIG } from '../world/Terrain.js';
 
 export const ENCOUNTER_PRESETS = Object.freeze([
   Object.freeze({
@@ -43,7 +43,7 @@ export const DEFAULT_SINGLE_PLAYER_OPTIONS = Object.freeze({
   encounterPreset: 'one_strong'
 });
 
-const VALID_STAGE_PRESETS = new Set(TERRAIN_PRESET_OPTIONS.map((option) => option.value));
+const VALID_STAGE_PRESETS = new Set(ARENA_TERRAIN_PRESET_OPTIONS.map((option) => option.value));
 const VALID_ENCOUNTER_PRESETS = new Set(ENCOUNTER_PRESETS.map((preset) => preset.value));
 
 export function getEncounterPreset(value) {
@@ -51,7 +51,7 @@ export function getEncounterPreset(value) {
 }
 
 export function getStagePresetLabel(value) {
-  return TERRAIN_PRESET_OPTIONS.find((option) => option.value === value)?.label ?? value;
+  return ARENA_TERRAIN_PRESET_OPTIONS.find((option) => option.value === value)?.label ?? value;
 }
 
 export function normalizeScenarioOptions(rawOptions: any = {}) {

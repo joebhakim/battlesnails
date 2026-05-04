@@ -28,6 +28,11 @@ import { TrailRenderer } from './TrailRenderer.js';
 import { DamageIndicators } from './DamageIndicators.js';
 import { DEFAULT_BOT_MAX_HEALTH, DEFAULT_MAX_HEALTH } from '../sim/MatchSimulation.js';
 import { DEFAULT_TERRAIN_CONFIG } from '../world/Terrain.js';
+import {
+  DEFAULT_MULTIPLAYER_OPTIONS,
+  MULTIPLAYER_OPTIONS_SCHEMA,
+  normalizeMultiplayerOptions
+} from '../sim/MultiplayerOptions.js';
 
 const DEFAULT_CAMERA_PLAYER = new THREE.Vector3(0, 1, 6);
 const DEFAULT_CAMERA_ENEMY = new THREE.Vector3(0, 1, -6);
@@ -113,7 +118,9 @@ export class Game {
   declare currentOverlayKey: any;
   declare currentSession: any;
   declare damageIndicators: any;
+  declare developerModesVisible: any;
   declare debug: any;
+  declare handleGlobalKeyDown: any;
   declare hasRenderedMatchState: any;
   declare isRunning: any;
   declare keyboardControls: any;
@@ -140,6 +147,8 @@ export class Game {
     this.cameraController = new CameraController(this.camera);
     this.trailRenderer = null;
     this.damageIndicators = null;
+    this.developerModesVisible = false;
+    this.handleGlobalKeyDown = this.onGlobalKeyDown.bind(this);
 
     this.playerSnail = null;
     this.otherActorViews = new Map();
@@ -197,7 +206,7 @@ export class Game {
       onExplorer: this.startExplorerSession.bind(this),
       onTestMode: this.startTestSession.bind(this),
       onSimulator: this.startSimulatorSession.bind(this),
-      onMultiplayer: this.startMultiplayerSession.bind(this)
+      onMultiplayer: this.showMultiplayerSetup.bind(this)
     });
     this.ui.setupSinglePlayerSetup({
       schema: SINGLE_PLAYER_OPTIONS_SCHEMA,
@@ -205,6 +214,7 @@ export class Game {
       onStart: this.startSinglePlayerSession.bind(this)
     });
     this.ui.showStartMenu();
+    this.ui.setDeveloperModesVisible(this.developerModesVisible);
 
     this.cameraController.setLockOnEnabled(false);
     this.cameraController.snapToTarget(
@@ -215,6 +225,7 @@ export class Game {
 
     this.onWindowResize();
     window.addEventListener('resize', this.onWindowResize.bind(this));
+    document.addEventListener('keydown', this.handleGlobalKeyDown);
   }
 
   start() {
@@ -613,6 +624,17 @@ export class Game {
     this.ui.showSinglePlayerSetup(getStoredSinglePlayerOptions());
   }
 
+  showMultiplayerSetup() {
+    this.ui.showModeSetup({
+      title: 'LAN Multiplayer',
+      copy: 'Choose an arena duel or a generated forest-floor adventure format for two LAN players.',
+      schema: MULTIPLAYER_OPTIONS_SCHEMA,
+      values: DEFAULT_MULTIPLAYER_OPTIONS,
+      startLabel: 'Join LAN',
+      onStart: this.startMultiplayerSession.bind(this)
+    });
+  }
+
   startSinglePlayerSession(options: any = {}) {
     this.enterSession(new SinglePlayerSession({ options }));
   }
@@ -625,8 +647,8 @@ export class Game {
     this.enterSession(new TestSession());
   }
 
-  startMultiplayerSession() {
-    this.enterSession(new MultiplayerSession());
+  startMultiplayerSession(options: any = {}) {
+    this.enterSession(new MultiplayerSession({ options: normalizeMultiplayerOptions(options) }));
   }
 
   startSimulatorSession() {
@@ -706,6 +728,22 @@ export class Game {
     }
 
     this.ui.setInstructions('WASD move · Mouse turn · Space jump · Hold LMB/RMB stalks · Mouse Y reach · Wheel plane height · Hold Shift lock-on · Click arena');
+  }
+
+  onGlobalKeyDown(event) {
+    const target = event.target;
+    const tagName = target?.tagName?.toLowerCase?.();
+    if (tagName === 'input' || tagName === 'select' || tagName === 'textarea') {
+      return;
+    }
+
+    if (event.key !== '`' && event.code !== 'Backquote') {
+      return;
+    }
+
+    event.preventDefault();
+    this.developerModesVisible = !this.developerModesVisible;
+    this.ui.setDeveloperModesVisible(this.developerModesVisible);
   }
 
   resetViewActors() {

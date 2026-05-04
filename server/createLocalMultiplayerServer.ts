@@ -1,6 +1,12 @@
 import { createMinimalWebSocketServer, type MinimalWebSocketConnection } from './MinimalWebSocketServer.js';
 import { MatchSimulation, MATCH_TICK_DURATION, createIdleInput, normalizePlayerInput } from '../src/sim/MatchSimulation.js';
 import { BotController } from '../src/sim/BotController.js';
+import { createArenaEnvironment } from '../src/sim/ArenaEnvironment.js';
+import {
+  MULTIPLAYER_MATCH_MODE,
+  normalizeMultiplayerOptions
+} from '../src/sim/MultiplayerOptions.js';
+import { createExplorerWorld } from '../src/world/ExplorerWorld.js';
 
 const DEFAULT_MULTIPLAYER_NPC_COUNT = 40;
 const DEFAULT_NETWORK_SNAPSHOT_RATE = 30;
@@ -87,6 +93,7 @@ export function createLocalMultiplayerServer(options: LocalMultiplayerServerOpti
     pendingEvents: [],
     ticksSinceSnapshot: 0
   };
+  let roomOptions = normalizeMultiplayerOptions();
 
   function stopTickLoop() {
     if (room.intervalId) {
@@ -99,6 +106,7 @@ export function createLocalMultiplayerServer(options: LocalMultiplayerServerOpti
     return {
       type: 'waiting',
       connectedSlots: Array.from(room.clients.keys()).sort((left, right) => left - right),
+      options: roomOptions,
       reason
     };
   }
@@ -197,20 +205,81 @@ export function createLocalMultiplayerServer(options: LocalMultiplayerServerOpti
     }, null);
   }
 
+  function createAdventureSecondStart(world: any) {
+    return {
+      x: world.playerStart.x + 8,
+      z: world.playerStart.z + 4,
+      rotationY: world.playerStart.rotationY
+    };
+  }
+
+  function createMatchConfig() {
+    const normalizedOptions = normalizeMultiplayerOptions(roomOptions);
+
+    if (normalizedOptions.matchMode === MULTIPLAYER_MATCH_MODE.ARENA_PVP) {
+      const environment = createArenaEnvironment(normalizedOptions);
+      return {
+        options: normalizedOptions,
+        mode: 'multiplayer_arena_pvp',
+        players: [
+          { slot: 1, profile: 'human', connected: true },
+          { slot: 2, profile: 'human', connected: true }
+        ],
+        terrainConfig: environment?.terrainConfig,
+        arenaRadius: environment?.arenaRadius,
+        worldProps: environment?.worldProps
+      };
+    }
+
+    const world = createExplorerWorld();
+    const secondStart = createAdventureSecondStart(world);
+    return {
+      options: normalizedOptions,
+      mode: normalizedOptions.matchMode === MULTIPLAYER_MATCH_MODE.ADVENTURE_COOP
+        ? 'multiplayer_adventure_pve'
+        : 'multiplayer_adventure_pvp',
+      players: [
+        {
+          slot: 1,
+          profile: 'human',
+          connected: true,
+          position: {
+            x: world.playerStart.x,
+            z: world.playerStart.z
+          },
+          rotationY: world.playerStart.rotationY
+        },
+        {
+          slot: 2,
+          profile: 'human',
+          connected: true,
+          position: {
+            x: secondStart.x,
+            z: secondStart.z
+          },
+          rotationY: secondStart.rotationY
+        },
+        {
+          ...world.bossParticipant,
+          slot: 3
+        }
+      ],
+      terrainConfig: world.terrainConfig,
+      arenaRadius: world.worldBounds.radius,
+      worldProps: world.props
+    };
+  }
+
   function startMatch() {
-    const participants = [
-      { slot: 1, profile: 'human', connected: true },
-      { slot: 2, profile: 'human', connected: true },
-      ...Array.from({ length: npcCount }, (_, index) => ({
-        slot: index + 3,
-        profile: 'bot',
-        connected: true
-      }))
-    ];
+    const matchConfig = createMatchConfig();
+    const participants = matchConfig.players;
 
     room.simulation = new MatchSimulation({
-      mode: 'multiplayer',
-      players: participants
+      mode: matchConfig.mode,
+      players: participants,
+      terrainConfig: matchConfig.terrainConfig,
+      arenaRadius: matchConfig.arenaRadius,
+      worldProps: matchConfig.worldProps
     });
 
     room.phase = 'running';
@@ -233,6 +302,7 @@ export function createLocalMultiplayerServer(options: LocalMultiplayerServerOpti
       connection.sendJson({
         type: 'match_start',
         slot,
+        options: matchConfig.options,
         snapshot
       });
     }
@@ -283,6 +353,7 @@ export function createLocalMultiplayerServer(options: LocalMultiplayerServerOpti
     if (remainingSlots.length === 0) {
       room.phase = 'waiting';
       room.simulation = null;
+      roomOptions = normalizeMultiplayerOptions();
       room.inputs.clear();
       room.botControllers.clear();
       return;
@@ -330,10 +401,14 @@ export function createLocalMultiplayerServer(options: LocalMultiplayerServerOpti
             return;
           }
 
+          if (room.clients.size === 0) {
+            roomOptions = normalizeMultiplayerOptions(message.options);
+          }
+
           assignedSlot = slot;
           room.clients.set(slot, connection);
           room.inputs.set(slot, createBufferedInput());
-          connection.sendJson({ type: 'welcome', slot });
+          connection.sendJson({ type: 'welcome', slot, options: roomOptions });
 
           if (room.clients.size === 2) {
             startMatch();
@@ -429,7 +504,8 @@ export function createLocalMultiplayerServer(options: LocalMultiplayerServerOpti
       return {
         phase: room.phase,
         connectedSlots: Array.from(room.clients.keys()).sort((left, right) => left - right),
-        npcCount
+        npcCount,
+        options: roomOptions
       };
     }
   };
