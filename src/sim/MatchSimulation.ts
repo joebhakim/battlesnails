@@ -113,9 +113,11 @@ const BASH_DAMAGE_SCALE = 0.2;
 const MIN_DAMAGE_EVENT_AMOUNT = 0.025;
 const CONTACT_RENEWAL_IMPULSE_MARGIN = 10;
 const CONTACT_HYSTERESIS_TICKS = 5;
+const ANALYTIC_STALK_AUTHORITY = true;
 const WORLD_PROP_INTERACTION_DISTANCE = 3.1;
 const WORLD_PROP_SPATIAL_CELL_SIZE = 80;
 const WORLD_UP = new THREE.Vector3(0, 1, 0);
+const STALK_FORWARD = new THREE.Vector3(0, 0, 1);
 const PROP_ADHESION_MARGIN = 0.35;
 const PROP_SUPPORT_SNAP_DISTANCE = 2.2;
 const PROP_CLIMB_SPEED_SCALE = 1.1;
@@ -1526,6 +1528,46 @@ function getStalkBodyObstacles(player, bodyObstacles) {
     }));
 }
 
+function getAnalyticStalkSample(stalk, delta, eyeRadius = STALK_SEGMENT_RADIUS * STALK_EYE_RADIUS_SCALE) {
+  const previousTip = stalk.previousTipPosition ?? stalk.tipPosition;
+  const safeDelta = Math.max(delta, 1 / 120);
+  const movement = stalk.tipPosition.clone().sub(previousTip);
+  const direction = movement.lengthSq() > TOP_DOWN_EPSILON
+    ? movement.clone().normalize()
+    : stalk.rootWorld
+      ? stalk.tipPosition.clone().sub(stalk.rootWorld).normalize()
+      : STALK_FORWARD.clone();
+
+  return {
+    index: 0,
+    isEye: true,
+    start: previousTip.clone(),
+    end: stalk.tipPosition.clone(),
+    center: stalk.tipPosition.clone(),
+    velocity: movement.clone().divideScalar(safeDelta),
+    radius: eyeRadius,
+    direction: direction.lengthSq() > TOP_DOWN_EPSILON ? direction : STALK_FORWARD.clone(),
+    length: movement.length()
+  };
+}
+
+function canAnalyticStalkReachTarget(attacker, target) {
+  const maximumReach = (
+    attacker.bodyRadius +
+    target.bodyRadius +
+    (attacker.profile.stalkTotalLength * Math.max(1, attacker.profile.stalkReachMax)) +
+    (attacker.profile.stalkSegmentRadius * STALK_EYE_RADIUS_SCALE) +
+    0.5
+  );
+
+  return attacker.position.distanceToSquared(target.position) <= maximumReach * maximumReach;
+}
+
+function canAnalyticSampleHitTarget(sample, target) {
+  const maximumDistance = target.bodyRadius + sample.radius + sample.length + 0.25;
+  return sample.center.distanceToSquared(target.position) <= maximumDistance * maximumDistance;
+}
+
 function getCompositeTipPosition(player) {
   if (!player.stalks) {
     return player.position.clone();
@@ -1553,7 +1595,6 @@ function serializeStalk(stalk) {
   const currentPoint = stalk.currentVector.clone().multiplyScalar(stalk.currentReach);
 
   return {
-    nodes: serializeNodes(stalk.nodes),
     segmentRadius: stalk.segmentRadius,
     held: stalk.held,
     impactPower: stalk.impactPower,
@@ -1563,6 +1604,8 @@ function serializeStalk(stalk) {
     currentReach: stalk.currentReach,
     targetPoint: cloneVector(targetPoint),
     currentPoint: cloneVector(currentPoint),
+    tipPosition: cloneVector(stalk.tipPosition),
+    tipVelocity: cloneVector(stalk.tipVelocity),
     targetYaw: stalk.desiredYaw,
     targetPitch: stalk.desiredPitch
   };
@@ -2390,6 +2433,45 @@ export class MatchSimulation {
   }
 
   updateStalkRopes(player, delta, bodyObstacles = []) {
+    if (ANALYTIC_STALK_AUTHORITY) {
+      for (const [, stalk] of getStalkEntries(player)) {
+        advanceAppliedStalkTarget(stalk, player.profile, delta);
+
+        const rootWorld = getStalkRootWorldPosition(player.position, player.rotationY, stalk.rootOffset);
+        const goalWorld = getStalkGoalWorldPositionFromDirection(
+          player.position,
+          player.rotationY,
+          stalk.appliedVector,
+          player.profile.stalkTotalLength * stalk.appliedReach,
+          stalk.rootOffset
+        );
+
+        stalk.rootWorld = rootWorld;
+        stalk.previousTipPosition.copy(stalk.tipPosition);
+        stalk.tipPosition.copy(goalWorld);
+        if (delta > 0) {
+          stalk.tipVelocity.copy(stalk.tipPosition).sub(stalk.previousTipPosition).divideScalar(delta);
+        } else {
+          stalk.tipVelocity.set(0, 0, 0);
+        }
+
+        const rootToTip = stalk.tipPosition.clone().sub(rootWorld);
+        stalk.currentReach = Math.min(
+          player.profile.stalkReachMax,
+          rootToTip.length() / Math.max(0.0001, player.profile.stalkTotalLength)
+        );
+        if (rootToTip.lengthSq() === 0) {
+          stalk.currentVector.copy(stalk.targetVector);
+        } else {
+          stalk.currentVector.copy(getBodyLocalDirection(rootToTip.normalize(), player.rotationY));
+        }
+
+        const eyeRadius = (stalk.segmentRadius ?? STALK_SEGMENT_RADIUS) * STALK_EYE_RADIUS_SCALE;
+        stalk.impactSamples = [getAnalyticStalkSample(stalk, delta, eyeRadius)];
+      }
+      return;
+    }
+
     const collisionBodyObstacles = getStalkBodyObstacles(player, bodyObstacles);
     const terrainHeightAt = (x, z) => getTerrainHeight(x, z, this.terrainConfig);
 
@@ -2754,18 +2836,29 @@ export class MatchSimulation {
       return;
     }
 
+    if (ANALYTIC_STALK_AUTHORITY && !canAnalyticStalkReachTarget(attacker, target)) {
+      return;
+    }
+
     let totalDamage = 0;
     let strongestImpact = attacker.impactPower;
     const pendingDamageEvents = [];
 
     for (const [side, stalk] of getStalkEntries(attacker)) {
       const eyeRadius = (stalk.segmentRadius ?? STALK_SEGMENT_RADIUS) * STALK_EYE_RADIUS_SCALE;
-      const eyeSamples = buildStalkEyeSamples(
-        stalk.incidentNodes ?? stalk.nodes,
-        stalk.incidentPreviousNodes ?? stalk.previousNodes,
-        delta,
-        eyeRadius
-      );
+      const eyeSamples = ANALYTIC_STALK_AUTHORITY
+        ? (stalk.impactSamples ?? [getAnalyticStalkSample(stalk, delta, eyeRadius)])
+        : buildStalkEyeSamples(
+          stalk.incidentNodes ?? stalk.nodes,
+          stalk.incidentPreviousNodes ?? stalk.previousNodes,
+          delta,
+          eyeRadius
+        );
+
+      if (ANALYTIC_STALK_AUTHORITY && !eyeSamples.some((sample) => canAnalyticSampleHitTarget(sample, target))) {
+        continue;
+      }
+
       const impactResult = evaluateStalkImpact(
         eyeSamples,
         target.position,

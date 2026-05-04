@@ -16,6 +16,7 @@ import {
   getBodyLocalDirection,
   getLocalStalkDirection,
   getStalkGoalWorldPosition,
+  getStalkGoalWorldPositionFromDirection,
   getStalkRootWorldPosition,
   simulateStalkRope
 } from '../sim/StalkRope.js';
@@ -883,6 +884,30 @@ export class SnailActor {
   }
 
   getSyntheticStalkPose(side, state) {
+    const incoming = state.stalks?.[side] ?? null;
+    if (incoming?.currentVector) {
+      const vector = new THREE.Vector3(
+        incoming.currentVector.x,
+        incoming.currentVector.y,
+        incoming.currentVector.z
+      );
+      if (vector.lengthSq() <= 0.000001) {
+        vector.copy(LOCAL_FORWARD);
+      } else {
+        vector.normalize();
+      }
+
+      return {
+        vector,
+        yaw: incoming.targetYaw ?? this.stalkNeutralPose.yaw,
+        pitch: incoming.targetPitch ?? this.stalkNeutralPose.pitch,
+        reach: incoming.currentReach ?? incoming.targetReach ?? 1,
+        held: Boolean(incoming.held),
+        intensity: THREE.MathUtils.clamp(state.controlIntensity ?? 0, 0, 1),
+        impactPower: incoming.impactPower ?? 0
+      };
+    }
+
     const sideSign = side === 'left' ? -1 : 1;
     const controlMode = state.controlMode ?? 'idle';
     const intensity = THREE.MathUtils.clamp(state.controlIntensity ?? 0, 0, 1);
@@ -900,14 +925,22 @@ export class SnailActor {
 
   createSyntheticStalkNodes(stalk, pose) {
     const rootWorld = getStalkRootWorldPosition(this.mesh.position, this.mesh.rotation.y, stalk.rootOffset);
-    const goalWorld = getStalkGoalWorldPosition(
-      this.mesh.position,
-      this.mesh.rotation.y,
-      pose.yaw,
-      pose.pitch,
-      this.stalkLength * pose.reach,
-      stalk.rootOffset
-    );
+    const goalWorld = pose.vector
+      ? getStalkGoalWorldPositionFromDirection(
+        this.mesh.position,
+        this.mesh.rotation.y,
+        pose.vector,
+        this.stalkLength * pose.reach,
+        stalk.rootOffset
+      )
+      : getStalkGoalWorldPosition(
+        this.mesh.position,
+        this.mesh.rotation.y,
+        pose.yaw,
+        pose.pitch,
+        this.stalkLength * pose.reach,
+        stalk.rootOffset
+      );
     const right = getWorldRight(this.mesh.rotation.y);
     const sideSign = stalk.side === 'left' ? -1 : 1;
     const sag = pose.held ? SYNTHETIC_HELD_SAG : SYNTHETIC_IDLE_SAG;
@@ -946,10 +979,14 @@ export class SnailActor {
       }
 
       stalk.held = pose.held;
-      stalk.impactPower = (state.impactPower ?? 0) * (pose.held ? 0.5 : 0.15);
+      stalk.impactPower = pose.impactPower ?? (state.impactPower ?? 0) * (pose.held ? 0.5 : 0.15);
       stalk.targetYaw = pose.yaw;
       stalk.targetPitch = pose.pitch;
-      stalk.targetVector.copy(getLocalStalkDirection(pose.yaw, pose.pitch));
+      if (pose.vector) {
+        stalk.targetVector.copy(pose.vector);
+      } else {
+        stalk.targetVector.copy(getLocalStalkDirection(pose.yaw, pose.pitch));
+      }
       stalk.previousTipPosition.copy(stalk.tipPosition);
       stalk.tipPosition.copy(stalk.nodes[stalk.nodes.length - 1]);
       if (delta > 0) {
