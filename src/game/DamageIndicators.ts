@@ -59,7 +59,16 @@ const HIT_PEAK_THRESHOLD = 1.25;
 const BURST_TOTAL_THRESHOLD = 6;
 const BURST_PEAK_THRESHOLD = 4.5;
 const MAX_SEEN_EVENT_IDS = 240;
+const MAX_ACTIVE_WINDOWS = 24;
+const MAX_ACTIVE_PICKUP_BURSTS = 28;
 const DEFAULT_DAMAGE_COLOR = '#ffe28a';
+const POWERUP_BURST_CONFIG = Object.freeze({
+  dew: Object.freeze({ color: '#a8f0ff', glow: 'rgba(114, 225, 255, 0.78)' }),
+  food: Object.freeze({ color: '#ffc87a', glow: 'rgba(255, 170, 84, 0.72)' }),
+  calcium: Object.freeze({ color: '#fff2c8', glow: 'rgba(255, 237, 178, 0.76)' }),
+  grit: Object.freeze({ color: '#e3d27a', glow: 'rgba(226, 205, 90, 0.72)' })
+});
+const DEFAULT_POWERUP_BURST = Object.freeze({ color: '#f1dfaf', glow: 'rgba(241, 223, 175, 0.68)' });
 
 function clamp(value, min, max) {
   return Math.min(max, Math.max(min, value));
@@ -201,6 +210,7 @@ export class DamageIndicators {
   declare layer: any;
   declare nextGroupId: any;
   declare projectedPosition: any;
+  declare pickupBursts: any;
   declare recentBurstByPair: any;
   declare seenEventIds: any;
   declare seenEventQueue: any;
@@ -215,6 +225,7 @@ export class DamageIndicators {
     this.activeGroupsByPair = new Map<any, any>();
     this.activeBurstGroupsByPair = new Map<any, any>();
     this.recentBurstByPair = new Map<any, any>();
+    this.pickupBursts = new Map<any, any>();
     this.nextGroupId = 1;
     this.seenEventIds = new Set<any>();
     this.seenEventQueue = [] as any[];
@@ -223,7 +234,7 @@ export class DamageIndicators {
 
   handleSnapshotEvents(events: any[] = [], slotColors = new Map<any, any>()) {
     for (const [index, event] of events.entries()) {
-      if (event?.type !== 'damage') {
+      if (event?.type !== 'damage' && event?.type !== 'powerup') {
         continue;
       }
 
@@ -233,7 +244,11 @@ export class DamageIndicators {
       }
 
       this.rememberEventId(eventId);
-      this.addToWindow(event, slotColors.get(event.targetSlot));
+      if (event.type === 'damage') {
+        this.addToWindow(event, slotColors.get(event.targetSlot));
+      } else {
+        this.addPowerupBurst(event);
+      }
     }
   }
 
@@ -247,7 +262,7 @@ export class DamageIndicators {
   }
 
   getWindowKey(event) {
-    return `${event.attackerSlot ?? 'a'}:${event.targetSlot ?? 'b'}`;
+    return `${event.targetSlot ?? 'target'}`;
   }
 
   createWindow(event, bodyColor, pairKey, tier, lane, impactRatio) {
@@ -262,6 +277,7 @@ export class DamageIndicators {
 
     const totalElement = document.createElement('div');
     totalElement.className = 'damage-window-total';
+
     element.replaceChildren(totalElement);
     this.layer.appendChild(element);
 
@@ -271,6 +287,7 @@ export class DamageIndicators {
       lane,
       element,
       totalElement,
+      breakdownElement: null,
       tier,
       tierConfig,
       ageSinceEvent: 0,
@@ -280,6 +297,7 @@ export class DamageIndicators {
       displayedTotal: 0,
       peakAmount: 0,
       bashTotal: 0,
+      scrapeTotal: 0,
       hitCount: 0,
       maxImpactRatio: impactRatio,
       pulse: 1,
@@ -378,6 +396,7 @@ export class DamageIndicators {
   addToWindow(event, bodyColor: any = null) {
     const amount = getEventDamage(event, 'amount');
     const bashDamage = getEventDamage(event, 'bashDamage');
+    const scrapeDamage = getEventDamage(event, 'scrapeDamage');
     const impact = getImpactStrength(event);
     const impactRatio = clamp(impact / 24, 0, 1);
     const pairKey = this.getWindowKey(event);
@@ -392,6 +411,7 @@ export class DamageIndicators {
     windowState.total += amount;
     windowState.peakAmount = Math.max(windowState.peakAmount, amount);
     windowState.bashTotal += bashDamage;
+    windowState.scrapeTotal += scrapeDamage;
     windowState.hitCount += 1;
     windowState.ageSinceEvent = 0;
     windowState.finalAge = 0;
@@ -416,6 +436,111 @@ export class DamageIndicators {
 
     windowState.worldPosition.lerp(createPosition(event.position), 0.42);
     this.windows.set(windowState.id, windowState);
+    this.pruneWindows();
+  }
+
+  pruneWindows() {
+    while (this.windows.size > MAX_ACTIVE_WINDOWS) {
+      let oldestKey = null;
+      let oldestAge = -Infinity;
+      for (const [key, windowState] of this.windows.entries()) {
+        const age = windowState.finalized
+          ? windowState.finalAge + 1000
+          : windowState.ageSinceEvent;
+        if (age > oldestAge) {
+          oldestAge = age;
+          oldestKey = key;
+        }
+      }
+
+      if (oldestKey === null) {
+        return;
+      }
+
+      const windowState = this.windows.get(oldestKey);
+      if (windowState) {
+        this.forgetWindowMappings(windowState);
+        windowState.element.remove();
+      }
+      this.windows.delete(oldestKey);
+    }
+  }
+
+  addPowerupBurst(event) {
+    const element = document.createElement('div');
+    element.className = `pickup-burst pickup-burst--${event.powerupType ?? 'unknown'}`;
+    const colorConfig = POWERUP_BURST_CONFIG[event.powerupType] ?? DEFAULT_POWERUP_BURST;
+    element.style.setProperty('--pickup-color', colorConfig.color);
+    element.style.setProperty('--pickup-glow', colorConfig.glow);
+
+    const ring = document.createElement('div');
+    ring.className = 'pickup-burst-ring';
+    const label = document.createElement('div');
+    label.className = 'pickup-burst-label';
+    label.textContent = event.label ?? event.powerupType ?? 'Powerup';
+    element.replaceChildren(ring, label);
+    this.layer.appendChild(element);
+
+    const burstId = event.id ?? `pickup:${this.nextGroupId++}`;
+    this.pickupBursts.set(burstId, {
+      element,
+      age: 0,
+      duration: 0.82,
+      worldPosition: createPosition(event.position),
+      phase: Math.random() * Math.PI * 2
+    });
+    this.prunePickupBursts();
+  }
+
+  prunePickupBursts() {
+    while (this.pickupBursts.size > MAX_ACTIVE_PICKUP_BURSTS) {
+      const [oldestKey, oldestBurst] = this.pickupBursts.entries().next().value ?? [];
+      if (!oldestKey) {
+        return;
+      }
+
+      oldestBurst?.element?.remove();
+      this.pickupBursts.delete(oldestKey);
+    }
+  }
+
+  updatePickupBursts(delta, width, height) {
+    for (const [key, burst] of this.pickupBursts.entries()) {
+      burst.age += delta;
+      const progress = clamp(burst.age / burst.duration, 0, 1);
+      if (progress >= 1) {
+        burst.element.remove();
+        this.pickupBursts.delete(key);
+        continue;
+      }
+
+      this.projectedPosition.copy(burst.worldPosition).project(this.camera);
+      if (
+        this.projectedPosition.z < -1 ||
+        this.projectedPosition.z > 1 ||
+        this.projectedPosition.x < -1.25 ||
+        this.projectedPosition.x > 1.25 ||
+        this.projectedPosition.y < -1.25 ||
+        this.projectedPosition.y > 1.25
+      ) {
+        burst.element.style.opacity = '0';
+        continue;
+      }
+
+      const screenX = ((this.projectedPosition.x * 0.5) + 0.5) * width;
+      const screenY = ((-this.projectedPosition.y * 0.5) + 0.5) * height;
+      const popScale = 0.35 + easeOutCubic(progress) * 1.35;
+      const labelLift = -34 * easeOutCubic(progress);
+      const wobble = Math.sin(burst.phase + burst.age * 24) * 3 * (1 - progress);
+      const opacity = 1 - smoothstep(0.68, 1, progress);
+
+      burst.element.style.opacity = opacity.toFixed(3);
+      burst.element.style.transform = [
+        `translate(${(screenX + wobble).toFixed(2)}px, ${(screenY + labelLift).toFixed(2)}px)`,
+        'translate(-50%, -50%)',
+        `scale(${popScale.toFixed(3)})`
+      ].join(' ');
+    }
   }
 
   update(delta) {
@@ -492,6 +617,8 @@ export class DamageIndicators {
         `scale(${(baseScale * pop).toFixed(3)})`
       ].join(' ');
     }
+
+    this.updatePickupBursts(delta, width, height);
   }
 
   clear() {
@@ -500,6 +627,10 @@ export class DamageIndicators {
     }
 
     this.windows.clear();
+    for (const burst of this.pickupBursts.values()) {
+      burst.element.remove();
+    }
+    this.pickupBursts.clear();
     this.activeGroupsByPair.clear();
     this.activeBurstGroupsByPair.clear();
     this.recentBurstByPair.clear();

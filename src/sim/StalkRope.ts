@@ -1,5 +1,7 @@
 import * as THREE from 'three';
 
+import { findClosestTriangleContact } from '../entities/VisualCollisionMesh.js';
+
 export const STALK_BASE_OFFSET = new THREE.Vector3(0.65, 0.55, 1.5);
 export const STALK_ROOT_OFFSETS = Object.freeze({
   left: new THREE.Vector3(-STALK_BASE_OFFSET.x, STALK_BASE_OFFSET.y, STALK_BASE_OFFSET.z),
@@ -274,6 +276,42 @@ function getShapeVector(shape, key, fallback) {
   };
 }
 
+function getTransformedMeshPartObstacle(obstacle, part) {
+  const position = getBodyObstaclePosition(obstacle);
+  const rotationY = obstacle.rotationY ?? 0;
+  const transformPoint = (point: any = {}) => position.clone().add(getYawWorldVector(
+    new THREE.Vector3(point.x ?? 0, point.y ?? 0, point.z ?? 0),
+    rotationY
+  ));
+
+  if (part.type === 'capsule') {
+    const start = transformPoint(part.start);
+    const end = transformPoint(part.end);
+    return {
+      position: start.clone().add(end).multiplyScalar(0.5),
+      radius: part.radius ?? obstacle.radius ?? 1,
+      shape: {
+        type: 'capsule',
+        start,
+        end,
+        radius: part.radius ?? obstacle.radius ?? 1
+      },
+      rotationY
+    };
+  }
+
+  const center = transformPoint(part.center);
+  return {
+    position: center,
+    radius: part.radius ?? obstacle.radius ?? 1,
+    shape: {
+      ...part,
+      center: undefined
+    },
+    rotationY: rotationY + (part.rotationY ?? 0)
+  };
+}
+
 function getYawLocalVector(vector, rotationY = 0) {
   const cos = Math.cos(rotationY);
   const sin = Math.sin(rotationY);
@@ -350,13 +388,19 @@ function getClosestPolygonBoundary(point, polygon) {
 function isBodyObstacleUsable(obstacle) {
   const position = getBodyObstaclePosition(obstacle);
   const shape = getObstacleShape(obstacle);
-  const hasUsableShape = shape.type === 'box'
+  const hasUsableShape = Array.isArray(shape.meshParts) && shape.meshParts.length > 0
+    ? true
+    : shape.type === 'box'
     ? Boolean(shape.halfExtents)
     : shape.type === 'cylinder'
       ? Number.isFinite(shape.radius) && shape.radius > 0
       : shape.type === 'polygon_prism'
         ? getPolygonPrismPoints(shape).length >= 3 && Number.isFinite(shape.halfHeight)
-        : Number.isFinite(obstacle.radius) && obstacle.radius > 0;
+        : shape.type === 'capsule'
+          ? shape.start && shape.end && Number.isFinite(shape.radius) && shape.radius > 0
+          : shape.type === 'triangle_mesh'
+            ? Array.isArray(shape.triangles) && shape.triangles.length > 0
+            : Number.isFinite(obstacle.radius) && obstacle.radius > 0;
 
   return Boolean(
     position &&
@@ -592,12 +636,117 @@ function setPolygonPrismBodyCorrection(point, radius, obstacle, correction, norm
   return true;
 }
 
+function setCapsuleBodyCorrection(point, radius, obstacle, rootWorld, correction, normal = null) {
+  const shape = getObstacleShape(obstacle);
+  const start = shape.start;
+  const end = shape.end;
+  if (!start || !end || !Number.isFinite(shape.radius)) {
+    return false;
+  }
+
+  const segment = end.clone().sub(start);
+  const lengthSquared = segment.lengthSq();
+  const alpha = lengthSquared <= COLLISION_EPSILON
+    ? 0
+    : clamp(point.clone().sub(start).dot(segment) / lengthSquared, 0, 1);
+  const closest = start.clone().addScaledVector(segment, alpha);
+  const delta = point.clone().sub(closest);
+  const minimumDistance = shape.radius + radius;
+  const distanceSquared = delta.lengthSq();
+  if (distanceSquared >= minimumDistance * minimumDistance) {
+    return false;
+  }
+
+  if (distanceSquared <= COLLISION_EPSILON) {
+    correction.copy(rootWorld).sub(closest);
+    if (correction.lengthSq() <= COLLISION_EPSILON) {
+      correction.copy(FORWARD);
+    } else {
+      correction.normalize();
+    }
+    normal?.copy(correction);
+    correction.multiplyScalar(minimumDistance);
+    return true;
+  }
+
+  const distance = Math.sqrt(distanceSquared);
+  normal?.copy(delta).divideScalar(distance);
+  correction.copy(delta).multiplyScalar((minimumDistance - distance) / distance);
+  return true;
+}
+
+function setMeshPartsBodyCorrection(point, radius, obstacle, rootWorld, correction, normal = null) {
+  const parts = getObstacleShape(obstacle).meshParts;
+  if (!Array.isArray(parts) || parts.length === 0) {
+    return false;
+  }
+
+  const bestCorrection = new THREE.Vector3();
+  const bestNormal = new THREE.Vector3();
+  const scratchCorrection = new THREE.Vector3();
+  const scratchNormal = new THREE.Vector3();
+  let bestDistanceSquared = 0;
+
+  for (const part of parts) {
+    const partObstacle = getTransformedMeshPartObstacle(obstacle, part);
+    if (!setBodyCorrection(point, radius, partObstacle, rootWorld, scratchCorrection, scratchNormal)) {
+      continue;
+    }
+
+    const distanceSquared = scratchCorrection.lengthSq();
+    if (distanceSquared > bestDistanceSquared) {
+      bestDistanceSquared = distanceSquared;
+      bestCorrection.copy(scratchCorrection);
+      bestNormal.copy(scratchNormal);
+    }
+  }
+
+  if (bestDistanceSquared <= COLLISION_EPSILON) {
+    return false;
+  }
+
+  correction.copy(bestCorrection);
+  normal?.copy(bestNormal);
+  return true;
+}
+
+function setTriangleMeshBodyCorrection(point, radius, obstacle, correction, normal = null) {
+  const shape = getObstacleShape(obstacle);
+  if (!Array.isArray(shape.triangles) || shape.triangles.length === 0) {
+    return false;
+  }
+
+  const position = getBodyObstaclePosition(obstacle);
+  const rotationY = obstacle.rotationY ?? 0;
+  const localPoint = getYawLocalVector(point.clone().sub(position), rotationY);
+  const contact = findClosestTriangleContact(localPoint, shape.triangles, radius);
+  if (!contact || contact.distance >= radius) {
+    return false;
+  }
+
+  const localCorrection = contact.normal.clone().multiplyScalar(radius - contact.distance);
+  correction.copy(getYawWorldVector(localCorrection, rotationY));
+  if (normal) {
+    normal.copy(getYawWorldVector(contact.normal, rotationY));
+    if (normal.lengthSq() <= COLLISION_EPSILON) {
+      normal.copy(FORWARD);
+    } else {
+      normal.normalize();
+    }
+  }
+  return true;
+}
+
 function setBodyCorrection(point, radius, obstacle, rootWorld, correction, normal = null) {
   if (!isBodyObstacleUsable(obstacle)) {
     return false;
   }
 
   const shape = getObstacleShape(obstacle);
+  if (Array.isArray(shape.meshParts) && shape.meshParts.length > 0) {
+    return setMeshPartsBodyCorrection(point, radius, obstacle, rootWorld, correction, normal);
+  }
+
   if (shape.type === 'box') {
     return setBoxBodyCorrection(point, radius, obstacle, correction, normal);
   }
@@ -608,6 +757,14 @@ function setBodyCorrection(point, radius, obstacle, rootWorld, correction, norma
 
   if (shape.type === 'polygon_prism') {
     return setPolygonPrismBodyCorrection(point, radius, obstacle, correction, normal);
+  }
+
+  if (shape.type === 'capsule') {
+    return setCapsuleBodyCorrection(point, radius, obstacle, rootWorld, correction, normal);
+  }
+
+  if (shape.type === 'triangle_mesh') {
+    return setTriangleMeshBodyCorrection(point, radius, obstacle, correction, normal);
   }
 
   return setSphereBodyCorrection(point, radius, obstacle, rootWorld, correction, normal);
@@ -675,6 +832,14 @@ function getBodySurfacePoint(point, obstacle, normal) {
     );
   }
 
+  if (shape.type === 'triangle_mesh' && Array.isArray(shape.triangles)) {
+    const localPoint = getYawLocalVector(point.clone().sub(position), obstacle.rotationY ?? 0);
+    const contact = findClosestTriangleContact(localPoint, shape.triangles, Infinity);
+    if (contact) {
+      return position.clone().add(getYawWorldVector(contact.point, obstacle.rotationY ?? 0));
+    }
+  }
+
   return position.clone().addScaledVector(surfaceNormal, obstacle.radius);
 }
 
@@ -701,6 +866,10 @@ function getBodyContactFeatureId(obstacle, normal) {
     }
 
     return 'cylinder:side';
+  }
+
+  if (shape.type === 'triangle_mesh') {
+    return 'triangle_mesh';
   }
 
   return 'sphere';

@@ -174,6 +174,16 @@ export class TestSession {
     return this.snapshot;
   }
 
+  grantDebugResource(type, amount) {
+    const applied = this.simulation?.grantPowerupToSlot?.(this.localSlot, type, amount, `Debug ${type}`) ?? false;
+    if (!applied) {
+      return false;
+    }
+
+    this.snapshot = this.simulation.getSnapshot();
+    return true;
+  }
+
   getLocalSlot() {
     return this.localSlot;
   }

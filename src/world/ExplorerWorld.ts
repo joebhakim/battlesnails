@@ -3,17 +3,42 @@ import * as THREE from 'three';
 import {
   EXPLORER_TERRAIN_PRESET,
   EXPLORER_REFERENCE_WORLD_RADIUS,
+  getExplorerCoastWeights,
   getExplorerTerrainRegionWeights,
   getTerrainHeight,
   normalizeTerrainConfig
 } from './Terrain.js';
+import {
+  createHexRingOneTiles,
+  getScaledBoundary,
+  getWorldBoundsArea,
+  getWorldBoundsBoundaryPoints,
+  getWorldBoundsOuterRadius,
+  isPointInsideWorldBounds
+} from './WorldBounds.js';
 import { SeededRandom, normalizeSeed } from '../sim/SeededRandom.js';
 
 export const EXPLORER_WORLD_SCALE = 10;
-export const EXPLORER_WORLD_RADIUS = EXPLORER_REFERENCE_WORLD_RADIUS * EXPLORER_WORLD_SCALE;
+export const EXPLORER_TERRAIN_FEATURE_RADIUS = EXPLORER_REFERENCE_WORLD_RADIUS * EXPLORER_WORLD_SCALE;
+export const EXPLORER_HEX_TILE_RADIUS = EXPLORER_TERRAIN_FEATURE_RADIUS * 0.72;
+export const EXPLORER_BEACH_WIDTH = EXPLORER_HEX_TILE_RADIUS * Math.sqrt(3) * 0.7;
+export const EXPLORER_WATER_MARGIN = EXPLORER_HEX_TILE_RADIUS * 0.45;
+export const EXPLORER_HEX_TILES = Object.freeze(createHexRingOneTiles(EXPLORER_HEX_TILE_RADIUS));
+const EXPLORER_LAND_BOUNDS_TEMPLATE = Object.freeze({
+  shape: 'hex_cluster',
+  hexRadius: EXPLORER_HEX_TILE_RADIUS,
+  tiles: EXPLORER_HEX_TILES
+});
+const EXPLORER_LAND_BOUNDARY = Object.freeze(getWorldBoundsBoundaryPoints(EXPLORER_LAND_BOUNDS_TEMPLATE));
+export const EXPLORER_LAND_RADIUS = getWorldBoundsOuterRadius(EXPLORER_LAND_BOUNDS_TEMPLATE);
+export const EXPLORER_WORLD_RADIUS = getWorldBoundsOuterRadius({
+  shape: 'coastal_hex_cluster',
+  boundary: getScaledBoundary(EXPLORER_LAND_BOUNDARY, EXPLORER_WATER_MARGIN)
+});
 export const EXPLORER_MAP_DEFAULT_CELL_SIZE = 100;
 export const EXPLORER_DEFAULT_SEED = 137;
-export const EXPLORER_WORLDGEN_VERSION = 7;
+export const EXPLORER_WORLDGEN_VERSION = 8;
+export const EXPLORER_BIRD_COUNT = 8;
 export const EXPLORER_PLAYER_START = Object.freeze({ x: 0, z: 12 * EXPLORER_WORLD_SCALE, rotationY: Math.PI });
 export const EXPLORER_BOSS_SLOT = 2;
 
@@ -24,6 +49,9 @@ const UNITS_PER_INCH = FICTIONAL_SNAIL_HEIGHT_UNITS / 6;
 const UNITS_PER_FOOT = UNITS_PER_INCH * 12;
 const inches = (value) => value * UNITS_PER_INCH;
 const feet = (value) => value * UNITS_PER_FOOT;
+const GROUND_COVER_EDGE_LIFT = inches(0.55);
+const GROUND_COVER_EDGE_BLEND_INSET = inches(8);
+const GROUND_COVER_VISUAL_OVERLAP = inches(11);
 
 const FIXED_LANDMARKS = Object.freeze([
   Object.freeze({ id: 'elder-tree', kind: 'giant_tree', treeType: 'deciduous', x: scaleWorld(-24), z: scaleWorld(36), radius: scaleWorld(1.6), canopyRadius: scaleWorld(13), height: scaleWorld(52), label: 'Elder Moss Tree' }),
@@ -37,7 +65,29 @@ function clamp(value, min, max) {
   return Math.min(max, Math.max(min, value));
 }
 
+function hashUnit(seed, index = 0) {
+  const value = Math.sin(seed * 12.9898 + index * 78.233) * 43758.5453123;
+  return value - Math.floor(value);
+}
+
+function hashText(text) {
+  let hash = 2166136261;
+  for (let index = 0; index < `${text}`.length; index += 1) {
+    hash ^= `${text}`.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return Math.abs(hash);
+}
+
 function getShapeHalfHeight(shape: any = {}, fallback = 0.5) {
+  if (Number.isFinite(shape.placementHalfHeight)) {
+    return shape.placementHalfHeight;
+  }
+
+  if (shape.type === 'visual_mesh') {
+    return Number.isFinite(shape.halfHeight) ? shape.halfHeight : fallback;
+  }
+
   if (shape.type === 'box') {
     return Number.isFinite(shape.halfExtents?.y) ? shape.halfExtents.y : fallback;
   }
@@ -58,6 +108,14 @@ function getShapeHalfHeight(shape: any = {}, fallback = 0.5) {
 }
 
 function getPropRadius(shape: any = {}, fallback = 1) {
+  if (Number.isFinite(shape.meshRadius)) {
+    return shape.meshRadius;
+  }
+
+  if (shape.type === 'visual_mesh') {
+    return Number.isFinite(shape.radius) ? shape.radius : fallback;
+  }
+
   if (shape.type === 'box') {
     const halfExtents = shape.halfExtents ?? {};
     return Math.hypot(halfExtents.x ?? fallback, halfExtents.z ?? fallback);
@@ -84,6 +142,7 @@ function placeProp({
   blocking = true,
   climbable = true,
   interactionKind = null,
+  powerup = null,
   visual = {}
 }: any) {
   const halfHeight = getShapeHalfHeight(collisionShape);
@@ -92,7 +151,9 @@ function placeProp({
     y: getTerrainHeight(x, z, terrainConfig) + halfHeight,
     z
   };
-  const radius = getPropRadius(collisionShape, visual.radius ?? 1);
+  const radius = Number.isFinite(visual.bodyRadius)
+    ? visual.bodyRadius
+    : getPropRadius(collisionShape, visual.radius ?? 1);
 
   return {
     id,
@@ -104,12 +165,42 @@ function placeProp({
     blocking,
     climbable,
     interactionKind,
+    powerup,
     collisionShape,
     visual
   };
 }
 
+function makeVisualMeshCollisionShape({
+  radius,
+  halfHeight,
+  nearTriangleLimit = 520,
+  farTriangleLimit = 96
+}: any) {
+  return {
+    type: 'visual_mesh',
+    radius,
+    halfHeight,
+    nearTriangleLimit,
+    farTriangleLimit
+  };
+}
+
 function createTreeProp(landmark, terrainConfig) {
+  const visual: any = {
+    treeType: landmark.treeType ?? 'deciduous',
+    radius: landmark.radius,
+    trunkRadius: landmark.radius,
+    canopyRadius: landmark.canopyRadius ?? landmark.radius * 4,
+    height: landmark.height,
+    branchReach: (landmark.canopyRadius ?? landmark.radius * 4) * (landmark.treeType === 'conifer' ? 0.62 : 0.9)
+  };
+  const meshRadius = Math.max(
+    landmark.radius,
+    visual.canopyRadius * 1.05,
+    landmark.radius + visual.branchReach + landmark.radius * 1.7
+  );
+  visual.bodyRadius = meshRadius;
   return placeProp({
     id: landmark.id,
     kind: 'giant_tree',
@@ -117,19 +208,13 @@ function createTreeProp(landmark, terrainConfig) {
     x: landmark.x,
     z: landmark.z,
     terrainConfig,
-    collisionShape: {
-      type: 'cylinder',
-      radius: landmark.radius,
-      halfHeight: landmark.height / 2
-    },
-    visual: {
-      treeType: landmark.treeType ?? 'deciduous',
-      radius: landmark.radius,
-      trunkRadius: landmark.radius,
-      canopyRadius: landmark.canopyRadius ?? landmark.radius * 4,
-      height: landmark.height,
-      branchReach: (landmark.canopyRadius ?? landmark.radius * 4) * (landmark.treeType === 'conifer' ? 0.62 : 0.9)
-    }
+    collisionShape: makeVisualMeshCollisionShape({
+      radius: meshRadius,
+      halfHeight: landmark.height / 2,
+      nearTriangleLimit: 900,
+      farTriangleLimit: 180
+    }),
+    visual
   });
 }
 
@@ -145,28 +230,37 @@ function createForestTree(index, rng, terrainConfig, treeType = 'deciduous', cen
   const canopyRadius = treeType === 'conifer'
     ? trunkRadius * rng.range(5.4, 8.5)
     : trunkRadius * rng.range(7.0, 10.5);
+  const visual: any = {
+    treeType,
+    radius: trunkRadius,
+    trunkRadius,
+    canopyRadius,
+    height,
+    branchReach: canopyRadius * (treeType === 'conifer' ? 0.62 : 0.9)
+  };
+  const id = `${treeType}-tree-${index}`;
+  const meshRadius = Math.max(
+    trunkRadius,
+    canopyRadius * 1.05,
+    trunkRadius + visual.branchReach + trunkRadius * 1.7
+  );
+  visual.bodyRadius = meshRadius;
 
   return placeProp({
-    id: `${treeType}-tree-${index}`,
+    id,
     kind: treeType === 'conifer' ? 'conifer_tree' : 'deciduous_tree',
     displayName: treeType === 'conifer' ? 'Needle Sapling' : 'Leaf Tree',
     x,
     z,
     rotationY: rng.range(0, Math.PI * 2),
     terrainConfig,
-    collisionShape: {
-      type: 'cylinder',
-      radius: trunkRadius,
-      halfHeight: height / 2
-    },
-    visual: {
-      treeType,
-      radius: trunkRadius,
-      trunkRadius,
-      canopyRadius,
-      height,
-      branchReach: canopyRadius * (treeType === 'conifer' ? 0.62 : 0.9)
-    }
+    collisionShape: makeVisualMeshCollisionShape({
+      radius: meshRadius,
+      halfHeight: height / 2,
+      nearTriangleLimit: 720,
+      farTriangleLimit: 144
+    }),
+    visual
   });
 }
 
@@ -180,11 +274,12 @@ function createMountainMarker(landmark, terrainConfig) {
     x: landmark.x,
     z: landmark.z,
     terrainConfig,
-    collisionShape: {
-      type: 'cylinder',
+    collisionShape: makeVisualMeshCollisionShape({
       radius,
-      halfHeight: height / 2
-    },
+      halfHeight: height / 2,
+      nearTriangleLimit: 80,
+      farTriangleLimit: 20
+    }),
     visual: {
       radius,
       height
@@ -192,12 +287,12 @@ function createMountainMarker(landmark, terrainConfig) {
   });
 }
 
-function createSaltCone(index, rng, terrainConfig) {
+function createSaltCone(index, rng, terrainConfig, center = null) {
   const angle = rng.range(0, Math.PI * 2);
   const distance = scaleWorld(rng.range(38, 88));
   const radius = inches(rng.range(2.5, 8));
-  const x = Math.sin(angle) * distance;
-  const z = Math.cos(angle) * distance;
+  const x = center?.x ?? Math.sin(angle) * distance;
+  const z = center?.z ?? Math.cos(angle) * distance;
   const height = radius * rng.range(0.45, 0.8);
   return placeProp({
     id: `salt-cone-${index}`,
@@ -206,23 +301,27 @@ function createSaltCone(index, rng, terrainConfig) {
     x,
     z,
     terrainConfig,
-    collisionShape: {
-      type: 'cylinder',
+    collisionShape: makeVisualMeshCollisionShape({
       radius,
-      halfHeight: height / 2
-    },
+      halfHeight: height / 2,
+      nearTriangleLimit: 64,
+      farTriangleLimit: 16
+    }),
     visual: { radius, height }
   });
 }
 
-function createBambooStick(index, rng, terrainConfig) {
-  const x = scaleWorld(rng.range(-78, 72));
-  const z = scaleWorld(rng.range(-4, 76));
+function createBambooStick(index, rng, terrainConfig, center = null) {
+  const x = center?.x ?? scaleWorld(rng.range(-78, 72));
+  const z = center?.z ?? scaleWorld(rng.range(-4, 76));
   const length = feet(rng.range(5, 14));
   const radius = inches(rng.range(0.25, 0.9));
   const tilt = rng.range(10, 30) * Math.PI / 180;
   const rotationY = rng.range(0, Math.PI * 2);
   const footprint = Math.max(radius * 2.5, Math.sin(tilt) * length * 0.5);
+  const visual: any = { length, radius, tilt };
+  const meshRadius = footprint + radius * 3.6;
+  visual.bodyRadius = meshRadius;
   return placeProp({
     id: `bamboo-stick-${index}`,
     kind: 'bamboo_stick',
@@ -231,21 +330,19 @@ function createBambooStick(index, rng, terrainConfig) {
     z,
     rotationY,
     terrainConfig,
-    collisionShape: {
-      type: 'box',
-      halfExtents: {
-        x: footprint,
-        y: Math.cos(tilt) * length * 0.5,
-        z: footprint
-      }
-    },
-    visual: { length, radius, tilt }
+    collisionShape: makeVisualMeshCollisionShape({
+      radius: meshRadius,
+      halfHeight: Math.cos(tilt) * length * 0.5,
+      nearTriangleLimit: 160,
+      farTriangleLimit: 48
+    }),
+    visual
   });
 }
 
-function createGravel(index, rng, terrainConfig) {
-  const x = scaleWorld(rng.range(10, 72));
-  const z = scaleWorld(rng.range(-58, -4));
+function createGravel(index, rng, terrainConfig, center = null) {
+  const x = center?.x ?? scaleWorld(rng.range(10, 72));
+  const z = center?.z ?? scaleWorld(rng.range(-58, -4));
   const radius = inches(rng.range(0.25, 0.85));
   return placeProp({
     id: `gravel-${index}`,
@@ -263,9 +360,9 @@ function createGravel(index, rng, terrainConfig) {
   });
 }
 
-function createRottingLog(index, rng, terrainConfig) {
-  const x = scaleWorld(rng.range(-54, 34));
-  const z = scaleWorld(rng.range(-2, 62));
+function createRottingLog(index, rng, terrainConfig, center = null) {
+  const x = center?.x ?? scaleWorld(rng.range(-54, 34));
+  const z = center?.z ?? scaleWorld(rng.range(-2, 62));
   const length = feet(rng.range(8, 24));
   const radius = feet(rng.range(0.45, 1.4));
   return placeProp({
@@ -276,22 +373,20 @@ function createRottingLog(index, rng, terrainConfig) {
     z,
     rotationY: rng.range(0, Math.PI * 2),
     terrainConfig,
-    collisionShape: {
-      type: 'box',
-      halfExtents: {
-        x: length / 2,
-        y: radius,
-        z: radius
-      }
-    },
+    collisionShape: makeVisualMeshCollisionShape({
+      radius: (length / 2) + radius * 1.25,
+      halfHeight: radius * 1.15,
+      nearTriangleLimit: 180,
+      farTriangleLimit: 48
+    }),
     interactionKind: 'rotting_log',
     visual: { length, radius }
   });
 }
 
-function createRock(index, rng, terrainConfig) {
-  const x = scaleWorld(rng.range(36, 84));
-  const z = scaleWorld(rng.range(-82, -24));
+function createRock(index, rng, terrainConfig, center = null) {
+  const x = center?.x ?? scaleWorld(rng.range(36, 84));
+  const z = center?.z ?? scaleWorld(rng.range(-82, -24));
   const radius = feet(rng.range(0.75, 3.8));
   return placeProp({
     id: `rock-${index}`,
@@ -401,15 +496,34 @@ function createMossCushion(index, rng, terrainConfig, center = null) {
   });
 }
 
-function createGroundCoverPatch(index, kind, rng, terrainConfig, center) {
-  const footprint = Array.isArray(center.footprint) && center.footprint.length >= 3
-    ? center.footprint.map((point) => ({
-      x: point.x - center.x,
-      z: point.z - center.z
-    }))
-    : null;
-  const bounds = footprint
-    ? footprint.reduce((accumulator, point) => ({
+function createGroundCoverFootprint(worldFootprint, center, terrainConfig, shapeHalfHeight, overlap = 0) {
+  if (!worldFootprint) {
+    return null;
+  }
+
+  const centerTerrainHeight = getTerrainHeight(center.x, center.z, terrainConfig);
+  return worldFootprint.map((point, index) => {
+    const dx = point.x - center.x;
+    const dz = point.z - center.z;
+    const distance = Math.hypot(dx, dz);
+    const wobble = 0.82 + (((index * 53) % 17) / 16) * 0.28;
+    const expandedX = distance > 0.0001
+      ? point.x + (dx / distance) * overlap * wobble
+      : point.x;
+    const expandedZ = distance > 0.0001
+      ? point.z + (dz / distance) * overlap * wobble
+      : point.z;
+    return {
+      x: expandedX - center.x,
+      z: expandedZ - center.z,
+      y: getTerrainHeight(expandedX, expandedZ, terrainConfig) + GROUND_COVER_EDGE_LIFT - centerTerrainHeight - shapeHalfHeight
+    };
+  });
+}
+
+function getLocalBounds(points) {
+  return points
+    ? points.reduce((accumulator, point) => ({
       minX: Math.min(accumulator.minX, point.x),
       maxX: Math.max(accumulator.maxX, point.x),
       minZ: Math.min(accumulator.minZ, point.z),
@@ -421,6 +535,19 @@ function createGroundCoverPatch(index, kind, rng, terrainConfig, center) {
       maxZ: -Infinity
     })
     : null;
+}
+
+function createGroundCoverPatch(index, kind, rng, terrainConfig, center) {
+  const worldFootprint = Array.isArray(center.footprint) && center.footprint.length >= 3
+    ? center.footprint
+    : null;
+  const footprint2d = worldFootprint
+    ? center.footprint.map((point) => ({
+      x: point.x - center.x,
+      z: point.z - center.z
+    }))
+    : null;
+  const bounds = getLocalBounds(footprint2d);
   const length = bounds ? bounds.maxX - bounds.minX : center.cellSize * rng.range(1.18, 1.48);
   const width = bounds ? bounds.maxZ - bounds.minZ : center.cellSize * rng.range(1.08, 1.36);
   const visualByKind = {
@@ -432,42 +559,65 @@ function createGroundCoverPatch(index, kind, rng, terrainConfig, center) {
       relief: inches(rng.range(2, 7)),
       scaleLength: inches(rng.range(8, 20)),
       scaleWidth: inches(rng.range(3, 8)),
-      scaleDensity: rng.range(1.3, 1.9),
-      maxPlates: rng.int(92, 140),
-      plateCoverage: rng.range(0.42, 0.62),
+      scaleDensity: rng.range(1.45, 2.1),
+      maxPlates: rng.int(360, 560),
+      plateCoverage: rng.range(1.25, 1.65),
       labelDistance: 48
     },
     moss_mat: {
       displayName: 'Moss Mat',
-      thickness: inches(rng.range(0.9, 3.4)),
-      color: rng.choice([0x3f7c43, 0x4d8f4f, 0x5f9a4a]),
-      roughness: rng.range(0.62, 0.95),
-      relief: inches(rng.range(1.4, 5.4)),
-      scaleLength: inches(rng.range(3, 10)),
-      scaleWidth: inches(rng.range(1.4, 5.5)),
-      scaleDensity: rng.range(0.72, 1.08),
-      maxPlates: rng.int(44, 72),
-      plateCoverage: rng.range(0.3, 0.46),
+      thickness: inches(rng.range(1.2, 4.2)),
+      color: rng.choice([0x2e5f35, 0x3f7c43, 0x569247]),
+      roughness: rng.range(0.66, 0.98),
+      relief: inches(rng.range(2.2, 7.2)),
+      scaleLength: inches(rng.range(7, 18)),
+      scaleWidth: inches(rng.range(4.6, 11)),
+      scaleDensity: rng.range(1.15, 1.6),
+      maxPlates: rng.int(120, 190),
+      plateCoverage: rng.range(1.05, 1.35),
       labelDistance: 48
     },
     dirt_stick_patch: {
       displayName: 'Dirt With Sticks',
-      thickness: inches(rng.range(0.3, 2)),
-      color: rng.choice([0x5a3924, 0x6a3f25, 0x4a3020]),
-      roughness: rng.range(0.55, 0.88),
-      relief: inches(rng.range(0.6, 3.2)),
-      scaleLength: inches(rng.range(2, 6)),
-      scaleWidth: inches(rng.range(0.8, 2.5)),
-      scaleDensity: rng.range(0.38, 0.58),
-      stickCount: rng.int(2, 5),
-      maxPlates: rng.int(22, 38),
-      plateCoverage: rng.range(0.14, 0.22),
+      thickness: inches(rng.range(0.7, 2.8)),
+      color: rng.choice([0x4a2e1c, 0x5a3924, 0x6a3f25]),
+      roughness: rng.range(0.68, 0.96),
+      relief: inches(rng.range(1.4, 4.8)),
+      scaleLength: inches(rng.range(3.4, 8.5)),
+      scaleWidth: inches(rng.range(1.8, 4.6)),
+      scaleDensity: rng.range(0.82, 1.18),
+      stickCount: rng.int(5, 9),
+      maxPlates: rng.int(76, 118),
+      plateCoverage: rng.range(0.72, 0.98),
       labelDistance: 48
     }
   };
   const visualConfig = visualByKind[kind] ?? visualByKind.dry_leaf_patch;
   const grainAngle = rng.range(0, Math.PI * 2);
   const shapeHalfHeight = (visualConfig.thickness + visualConfig.relief) / 2;
+  const collisionRelief = kind === 'moss_mat'
+    ? visualConfig.relief * 0.45
+    : kind === 'dirt_stick_patch'
+      ? visualConfig.relief * 0.62
+      : visualConfig.relief;
+  const collisionScaleLength = kind === 'moss_mat'
+    ? visualConfig.scaleLength * 0.72
+    : kind === 'dirt_stick_patch'
+      ? visualConfig.scaleLength * 0.68
+      : visualConfig.scaleLength;
+  const collisionScaleWidth = kind === 'moss_mat'
+    ? visualConfig.scaleWidth * 0.72
+    : kind === 'dirt_stick_patch'
+      ? visualConfig.scaleWidth * 0.7
+      : visualConfig.scaleWidth;
+  const footprint = createGroundCoverFootprint(worldFootprint, center, terrainConfig, shapeHalfHeight);
+  const visualOverlap = worldFootprint
+    ? GROUND_COVER_VISUAL_OVERLAP * (0.8 + hashUnit(index + kind.length * 101, 13) * 0.45)
+    : 0;
+  const visualFootprint = createGroundCoverFootprint(worldFootprint, center, terrainConfig, shapeHalfHeight, visualOverlap);
+  const visualBounds = getLocalBounds(visualFootprint);
+  const visualLength = visualBounds ? visualBounds.maxX - visualBounds.minX : length;
+  const visualWidth = visualBounds ? visualBounds.maxZ - visualBounds.minZ : width;
   return placeProp({
     id: `${kind.replaceAll('_', '-')}-${index}`,
     kind,
@@ -489,14 +639,15 @@ function createGroundCoverPatch(index, kind, rng, terrainConfig, center) {
           y: shapeHalfHeight,
           z: width / 2
         },
-      relief: visualConfig.relief,
+      relief: collisionRelief,
       grainAngle,
-      scaleLength: visualConfig.scaleLength,
-      scaleWidth: visualConfig.scaleWidth
+      scaleLength: collisionScaleLength,
+      scaleWidth: collisionScaleWidth,
+      edgeBlendInset: GROUND_COVER_EDGE_BLEND_INSET
     },
     visual: {
-      length,
-      width,
+      length: visualLength,
+      width: visualWidth,
       thickness: visualConfig.thickness,
       color: visualConfig.color,
       roughness: visualConfig.roughness,
@@ -507,7 +658,10 @@ function createGroundCoverPatch(index, kind, rng, terrainConfig, center) {
       scaleDensity: visualConfig.scaleDensity,
       maxPlates: visualConfig.maxPlates,
       plateCoverage: visualConfig.plateCoverage,
-      footprint,
+      footprint: visualFootprint ?? footprint,
+      collisionFootprint: footprint,
+      edgeBlendInset: GROUND_COVER_EDGE_BLEND_INSET,
+      visualOverlap,
       stickCount: visualConfig.stickCount ?? 0,
       labelDistance: visualConfig.labelDistance
     }
@@ -599,30 +753,47 @@ function getPolygonArea(points) {
   return Math.abs(area) / 2;
 }
 
-function createGroundCoverSites(rng, radius, count) {
-  const sites = [];
-  for (let index = 0; index < count; index += 1) {
+function getExplorerPatchworkAreaScale(worldBounds) {
+  const referenceRadius = EXPLORER_TERRAIN_FEATURE_RADIUS - scaleWorld(7);
+  return getWorldBoundsArea(worldBounds) / (Math.PI * referenceRadius * referenceRadius);
+}
+
+function randomPointInWorldBounds(rng, worldBounds, predicate = null) {
+  const radius = Math.max(1, worldBounds.radius ?? EXPLORER_WORLD_RADIUS);
+  for (let attempt = 0; attempt < 800; attempt += 1) {
     const angle = rng.range(0, Math.PI * 2);
     const distance = Math.sqrt(rng.next()) * radius;
-    sites.push({
+    const point = {
       x: Math.cos(angle) * distance,
       z: Math.sin(angle) * distance
-    });
+    };
+    if (isPointInsideWorldBounds(point.x, point.z, worldBounds) && (!predicate || predicate(point))) {
+      return point;
+    }
+  }
+
+  return randomPointInWorldBounds(rng, worldBounds);
+}
+
+function createGroundCoverSites(rng, worldBounds, count) {
+  const sites = [];
+  for (let index = 0; index < count; index += 1) {
+    sites.push(randomPointInWorldBounds(rng, worldBounds));
   }
 
   return sites;
 }
 
-function createForestFloorPatchwork(rng, terrainConfig) {
+function createForestFloorPatchwork(rng, terrainConfig, worldBounds) {
   const patches = [];
   const cellSize = scaleWorld(7.8);
-  const radius = EXPLORER_WORLD_RADIUS - scaleWorld(7);
-  const sites = createGroundCoverSites(rng, radius, 620);
-  const boundary = createDiskPolygon(radius, 56);
+  const siteCount = Math.round(620 * getExplorerPatchworkAreaScale(worldBounds));
+  const sites = createGroundCoverSites(rng, worldBounds, siteCount);
+  const boundary = getWorldBoundsBoundaryPoints(worldBounds);
 
   for (const [siteIndex, site] of sites.entries()) {
-    const { mountainWeight } = getExplorerTerrainRegionWeights(site.x, site.z, terrainConfig);
-    if (mountainWeight > 0.42) {
+    const { mountainWeight, beachWeight, waterWeight } = getExplorerTerrainRegionWeights(site.x, site.z, terrainConfig);
+    if (mountainWeight > 0.42 || beachWeight > 0.38 || waterWeight > 0) {
       continue;
     }
 
@@ -674,6 +845,11 @@ function createDewBead(index, rng, terrainConfig, center = null) {
       type: 'sphere',
       radius
     },
+    powerup: {
+      type: 'dew',
+      amount: Math.max(1, Number((radius * 1.8).toFixed(1))),
+      label: 'Dew'
+    },
     visual: {
       radius
     }
@@ -700,6 +876,11 @@ function createDewPool(index, rng, terrainConfig, center = null) {
       radius,
       halfHeight: height / 2
     },
+    powerup: {
+      type: 'dew',
+      amount: Math.max(2, Number((radius * 1.1).toFixed(1))),
+      label: 'Dew Pool'
+    },
     visual: {
       radius,
       height
@@ -722,17 +903,51 @@ function createMushroom(index, rng, terrainConfig, center = null) {
     z,
     rotationY: rng.range(0, Math.PI * 2),
     terrainConfig,
-    collisionShape: {
-      type: 'cylinder',
-      radius: capRadius,
-      halfHeight: height / 2
-    },
+    collisionShape: makeVisualMeshCollisionShape({
+      radius: capRadius * 1.06,
+      halfHeight: height / 2,
+      nearTriangleLimit: 420,
+      farTriangleLimit: 96
+    }),
     visual: {
       capRadius,
       stemRadius: capRadius * rng.range(0.22, 0.34),
       stemHeight,
       capThickness,
       color: rng.choice([0xb64d48, 0xc98248, 0xd8c86f, 0x7b5aa6])
+    }
+  });
+}
+
+function createSoftFood(index, rng, terrainConfig, center = null) {
+  const x = center?.x ?? scaleWorld(rng.range(-46, 48));
+  const z = center?.z ?? scaleWorld(rng.range(-8, 76));
+  const radius = inches(rng.range(1.2, 5.2));
+  const height = inches(rng.range(0.4, 1.6));
+  return placeProp({
+    id: `soft-food-${index}`,
+    kind: 'soft_food',
+    displayName: 'Soft Food',
+    x,
+    z,
+    rotationY: rng.range(0, Math.PI * 2),
+    terrainConfig,
+    blocking: false,
+    climbable: false,
+    collisionShape: {
+      type: 'cylinder',
+      radius,
+      halfHeight: height / 2
+    },
+    powerup: {
+      type: 'food',
+      amount: Math.max(35, Number((radius * 34).toFixed(1))),
+      label: 'Soft Food'
+    },
+    visual: {
+      radius,
+      height,
+      color: rng.choice([0x9f6b38, 0x7f5330, 0xb58a4a, 0x8f7a42])
     }
   });
 }
@@ -750,14 +965,12 @@ function createRootBranch(index, rng, terrainConfig, center = null) {
     z,
     rotationY: rng.range(0, Math.PI * 2),
     terrainConfig,
-    collisionShape: {
-      type: 'box',
-      halfExtents: {
-        x: length / 2,
-        y: radius,
-        z: radius
-      }
-    },
+    collisionShape: makeVisualMeshCollisionShape({
+      radius: (length / 2) + radius * 1.4,
+      halfHeight: radius * 1.5,
+      nearTriangleLimit: 96,
+      farTriangleLimit: 24
+    }),
     visual: {
       length,
       radius,
@@ -779,14 +992,12 @@ function createTwig(index, rng, terrainConfig, center = null) {
     z,
     rotationY: rng.range(0, Math.PI * 2),
     terrainConfig,
-    collisionShape: {
-      type: 'box',
-      halfExtents: {
-        x: length / 2,
-        y: radius,
-        z: radius
-      }
-    },
+    collisionShape: makeVisualMeshCollisionShape({
+      radius: (length / 2) + radius * 1.4,
+      halfHeight: radius * 1.5,
+      nearTriangleLimit: 80,
+      farTriangleLimit: 20
+    }),
     visual: {
       length,
       radius,
@@ -799,7 +1010,7 @@ function createSprout(index, rng, terrainConfig, center = null) {
   const x = center?.x ?? scaleWorld(rng.range(-44, 54));
   const z = center?.z ?? scaleWorld(rng.range(-8, 72));
   const height = inches(rng.range(1.2, 84));
-  const radius = inches(rng.range(0.04, 0.32));
+  const radius = inches(rng.range(0.09, 0.7));
   return placeProp({
     id: `sprout-${index}`,
     kind: 'sprout',
@@ -818,8 +1029,8 @@ function createSprout(index, rng, terrainConfig, center = null) {
     visual: {
       height,
       radius,
-      leafLength: inches(rng.range(0.7, 7.5)),
-      leafCount: rng.int(1, 3),
+      leafLength: inches(rng.range(1.4, 14)),
+      leafCount: rng.int(2, 5),
       color: rng.choice([0x4f8b3d, 0x5fa64d, 0x3f7d37])
     }
   });
@@ -830,28 +1041,33 @@ function createShrub(index, rng, terrainConfig, center = null) {
   const z = center?.z ?? scaleWorld(rng.range(-38, 84));
   const height = feet(rng.range(0.85, 7.5));
   const radius = feet(rng.range(0.55, 4.6));
-  const collisionRadius = Math.max(inches(1.1), radius * rng.range(0.18, 0.32));
+  const collisionRadius = Math.max(inches(1.1), radius * rng.range(0.52, 0.76));
+  const id = `shrub-${index}`;
+  const visual: any = {
+    height,
+    radius,
+    collisionRadius,
+    stemCount: rng.int(5, 9),
+    leafCount: rng.int(6, 12),
+    color: rng.choice([0x405f32, 0x4f6f39, 0x5b773d])
+  };
+  const meshRadius = radius * 1.12;
+  visual.bodyRadius = meshRadius;
   return placeProp({
-    id: `shrub-${index}`,
+    id,
     kind: 'shrub',
     displayName: 'Shrub',
     x,
     z,
     rotationY: rng.range(0, Math.PI * 2),
     terrainConfig,
-    collisionShape: {
-      type: 'cylinder',
-      radius: collisionRadius,
-      halfHeight: height / 2
-    },
-    visual: {
-      height,
-      radius,
-      collisionRadius,
-      stemCount: rng.int(5, 9),
-      leafCount: rng.int(2, 5),
-      color: rng.choice([0x405f32, 0x4f6f39, 0x5b773d])
-    }
+    collisionShape: makeVisualMeshCollisionShape({
+      radius: meshRadius,
+      halfHeight: height / 2,
+      nearTriangleLimit: 420,
+      farTriangleLimit: 96
+    }),
+    visual
   });
 }
 
@@ -863,30 +1079,32 @@ function createFallenBranch(index, rng, terrainConfig, center = null) {
   const sideSpan = length * rng.range(0.18, 0.36);
   const tilt = rng.range(10, 60) * Math.PI / 180;
   const horizontalLength = Math.cos(tilt) * length;
+  const id = `fallen-branch-${index}`;
+  const visual: any = {
+    length,
+    radius,
+    branchCount: rng.int(2, 5),
+    sideSpan,
+    tilt,
+    color: rng.choice([0x3f2a1c, 0x4a3020, 0x5b3923])
+  };
+  const meshRadius = Math.hypot(horizontalLength / 2, sideSpan * 0.62) + radius * 1.4;
+  visual.bodyRadius = meshRadius;
   return placeProp({
-    id: `fallen-branch-${index}`,
+    id,
     kind: 'fallen_branch',
     displayName: 'Fallen Branch',
     x,
     z,
     rotationY: rng.range(0, Math.PI * 2),
     terrainConfig,
-    collisionShape: {
-      type: 'box',
-      halfExtents: {
-        x: horizontalLength / 2,
-        y: radius * 1.8,
-        z: Math.max(radius * 2.4, sideSpan * 0.36)
-      }
-    },
-    visual: {
-      length,
-      radius,
-      branchCount: rng.int(2, 5),
-      sideSpan,
-      tilt,
-      color: rng.choice([0x3f2a1c, 0x4a3020, 0x5b3923])
-    }
+    collisionShape: makeVisualMeshCollisionShape({
+      radius: meshRadius,
+      halfHeight: Math.sin(tilt) * length * 0.5 + radius * 1.8,
+      nearTriangleLimit: 220,
+      farTriangleLimit: 64
+    }),
+    visual
   });
 }
 
@@ -932,11 +1150,12 @@ function createLichenTower(index, rng, terrainConfig, center = null) {
     z,
     rotationY: rng.range(0, Math.PI * 2),
     terrainConfig,
-    collisionShape: {
-      type: 'cylinder',
-      radius,
-      halfHeight: height / 2
-    },
+    collisionShape: makeVisualMeshCollisionShape({
+      radius: radius * 3.1,
+      halfHeight: height / 2,
+      nearTriangleLimit: 180,
+      farTriangleLimit: 48
+    }),
     visual: {
       radius,
       height,
@@ -959,19 +1178,50 @@ function createShellShard(index, rng, terrainConfig, center = null) {
     z,
     rotationY: rng.range(0, Math.PI * 2),
     terrainConfig,
-    collisionShape: {
-      type: 'box',
-      halfExtents: {
-        x: length / 2,
-        y: thickness / 2,
-        z: width / 2
-      }
+    collisionShape: makeVisualMeshCollisionShape({
+      radius: Math.hypot(length / 2, width / 2),
+      halfHeight: Math.max(thickness * 1.15, 0.02),
+      nearTriangleLimit: 96,
+      farTriangleLimit: 24
+    }),
+    powerup: {
+      type: 'calcium',
+      amount: Math.max(6, Number((length * 4.5).toFixed(1))),
+      label: 'Calcium'
     },
     visual: {
       length,
       width,
       thickness,
       color: rng.choice([0xd6c8a2, 0xbfa57d, 0xe2d6b4])
+    }
+  });
+}
+
+function createSharpGrit(index, rng, terrainConfig, center = null) {
+  const x = center?.x ?? scaleWorld(rng.range(18, 78));
+  const z = center?.z ?? scaleWorld(rng.range(-68, -12));
+  const radius = inches(rng.range(0.45, 1.7));
+  return placeProp({
+    id: `sharp-grit-${index}`,
+    kind: 'sharp_grit',
+    displayName: 'Sharp Grit',
+    x,
+    z,
+    rotationY: rng.range(0, Math.PI * 2),
+    terrainConfig,
+    collisionShape: {
+      type: 'sphere',
+      radius
+    },
+    powerup: {
+      type: 'grit',
+      amount: Math.max(1, Number((radius * 1.8).toFixed(1))),
+      label: 'Sharp Grit'
+    },
+    visual: {
+      radius,
+      color: rng.choice([0x9e8662, 0xb8a078, 0xc8bd98, 0x8f8b80])
     }
   });
 }
@@ -1034,9 +1284,11 @@ function createFixedSnailFeatures(rng, terrainConfig) {
     ...createCluster(16, createDewBead, rng, terrainConfig, scaleWorld(-12), scaleWorld(38), scaleWorld(10), 1000),
     ...createCluster(4, createDewPool, rng, terrainConfig, scaleWorld(-8), scaleWorld(36), scaleWorld(12), 1000),
     ...createCluster(15, createMushroom, rng, terrainConfig, scaleWorld(20), scaleWorld(18), scaleWorld(13), 1000),
+    ...createCluster(18, createSoftFood, rng, terrainConfig, scaleWorld(18), scaleWorld(20), scaleWorld(16), 1000),
     ...createCluster(13, createMossCushion, rng, terrainConfig, scaleWorld(-18), scaleWorld(8), scaleWorld(17), 1000),
     ...createCluster(10, createLichenTower, rng, terrainConfig, scaleWorld(42), scaleWorld(-18), scaleWorld(16), 1000),
     ...createCluster(11, createShellShard, rng, terrainConfig, scaleWorld(52), scaleWorld(-32), scaleWorld(18), 1000),
+    ...createCluster(14, createSharpGrit, rng, terrainConfig, scaleWorld(54), scaleWorld(-36), scaleWorld(22), 1000),
     ...createAntRoads(rng, terrainConfig)
   ];
 }
@@ -1049,33 +1301,89 @@ function createLandmarkProps(terrainConfig) {
   ));
 }
 
-function createFillerProps(seed, terrainConfig) {
+function scalePropCount(baseCount, areaScale) {
+  return Math.max(1, Math.round(baseCount * areaScale));
+}
+
+const DISTRIBUTION_FILTERS = Object.freeze({
+  forest: (weights) => weights.beachWeight < 0.24 && weights.waterWeight <= 0 && weights.mountainWeight < 0.32 && weights.gravelWeight < 0.58,
+  forestOrRoots: (weights) => weights.beachWeight < 0.32 && weights.waterWeight <= 0 && weights.mountainWeight < 0.34,
+  wet: (weights) => weights.beachWeight < 0.28 && weights.waterWeight <= 0 && weights.mountainWeight < 0.26 && weights.gravelWeight < 0.44,
+  gravel: (weights) => weights.beachWeight < 0.36 && weights.waterWeight <= 0 && (weights.gravelWeight > 0.18 || weights.mountainWeight > 0.12),
+  rocky: (weights) => weights.beachWeight < 0.38 && weights.waterWeight <= 0 && (weights.mountainWeight > 0.14 || weights.gravelWeight > 0.26),
+  mountain: (weights) => weights.beachWeight < 0.42 && weights.waterWeight <= 0 && (weights.mountainWeight > 0.2 || weights.gravelWeight > 0.36)
+});
+
+function createDistributedProps(baseCount, factory, rng, terrainConfig, worldBounds, areaScale, startIndex = 0, distribution = null) {
+  const predicate = distribution
+    ? (point) => distribution(getExplorerTerrainRegionWeights(point.x, point.z, terrainConfig))
+    : null;
+  return Array.from({ length: scalePropCount(baseCount, areaScale) }, (_, index) => (
+    factory(startIndex + index, rng, terrainConfig, randomPointInWorldBounds(rng, worldBounds, predicate))
+  ));
+}
+
+function createBirdCreatures(seed, terrainConfig, worldBounds) {
+  const rng = new SeededRandom(seed + 7301);
+  const birdRegion = (point) => {
+    const weights = getExplorerTerrainRegionWeights(point.x, point.z, terrainConfig);
+    return weights.waterWeight <= 0 &&
+      weights.beachWeight < 0.62 &&
+      weights.mountainWeight < 0.48;
+  };
+
+  return Array.from({ length: EXPLORER_BIRD_COUNT }, (_, index) => {
+    const point = randomPointInWorldBounds(rng, worldBounds, birdRegion);
+    const bodyLength = inches(rng.range(7, 14));
+    return {
+      id: `bird-${index}`,
+      kind: 'bird',
+      displayName: 'Predator Bird',
+      home: {
+        x: point.x,
+        z: point.z
+      },
+      phaseOffset: rng.range(0, Math.PI * 2),
+      cooldown: rng.range(1.5, 6.5),
+      patrolRadius: feet(rng.range(8, 22)),
+      patrolSpeed: rng.range(0.12, 0.28),
+      altitude: feet(rng.range(7, 17)),
+      bodyLength,
+      wingSpan: bodyLength * rng.range(1.7, 2.4)
+    };
+  });
+}
+
+function createFillerProps(seed, terrainConfig, worldBounds) {
   const rng = new SeededRandom(seed);
+  const areaScale = getExplorerPatchworkAreaScale(worldBounds);
   return [
-    ...createForestFloorPatchwork(rng, terrainConfig),
-    ...Array.from({ length: 9 }, (_, index) => createSaltCone(index, rng, terrainConfig)),
-    ...Array.from({ length: 24 }, (_, index) => createBambooStick(index, rng, terrainConfig)),
-    ...Array.from({ length: 120 }, (_, index) => createGravel(index, rng, terrainConfig)),
-    ...Array.from({ length: 12 }, (_, index) => createRottingLog(index, rng, terrainConfig)),
-    ...Array.from({ length: 22 }, (_, index) => createRock(index, rng, terrainConfig)),
-    ...Array.from({ length: 26 }, (_, index) => createForestRock(index, rng, terrainConfig)),
-    ...Array.from({ length: 54 }, (_, index) => createForestTree(index, rng, terrainConfig, 'deciduous')),
-    ...Array.from({ length: 48 }, (_, index) => createForestTree(index, rng, terrainConfig, 'conifer')),
-    ...Array.from({ length: 50 }, (_, index) => createMossCushion(index, rng, terrainConfig)),
-    ...Array.from({ length: 48 }, (_, index) => createDewBead(index, rng, terrainConfig)),
-    ...Array.from({ length: 6 }, (_, index) => createDewPool(index, rng, terrainConfig)),
-    ...Array.from({ length: 38 }, (_, index) => createMushroom(index, rng, terrainConfig)),
-    ...Array.from({ length: 24 }, (_, index) => createLichenTower(index, rng, terrainConfig)),
-    ...Array.from({ length: 18 }, (_, index) => createShellShard(index, rng, terrainConfig)),
-    ...Array.from({ length: 45 }, (_, index) => createRootBranch(index, rng, terrainConfig)),
-    ...Array.from({ length: 58 }, (_, index) => createFallenBranch(index, rng, terrainConfig)),
-    ...Array.from({ length: 80 }, (_, index) => createTwig(index, rng, terrainConfig)),
-    ...Array.from({ length: 260 }, (_, index) => createSprout(index, rng, terrainConfig)),
-    ...Array.from({ length: 82 }, (_, index) => createShrub(index, rng, terrainConfig)),
-    ...Array.from({ length: 80 }, (_, index) => createTalusRock(index, rng, terrainConfig)),
-    ...Array.from({ length: 34 }, (_, index) => createRockCluster(index, rng, terrainConfig)),
+    ...createForestFloorPatchwork(rng, terrainConfig, worldBounds),
+    ...createDistributedProps(9, createSaltCone, rng, terrainConfig, worldBounds, areaScale),
+    ...createDistributedProps(24, createBambooStick, rng, terrainConfig, worldBounds, areaScale, 0, DISTRIBUTION_FILTERS.forestOrRoots),
+    ...createDistributedProps(120, createGravel, rng, terrainConfig, worldBounds, areaScale, 0, DISTRIBUTION_FILTERS.gravel),
+    ...createDistributedProps(12, createRottingLog, rng, terrainConfig, worldBounds, areaScale, 0, DISTRIBUTION_FILTERS.forest),
+    ...createDistributedProps(22, createRock, rng, terrainConfig, worldBounds, areaScale, 0, DISTRIBUTION_FILTERS.rocky),
+    ...createDistributedProps(26, createForestRock, rng, terrainConfig, worldBounds, areaScale, 0, DISTRIBUTION_FILTERS.forestOrRoots),
+    ...createDistributedProps(54, (index, propRng, config, point) => createForestTree(index, propRng, config, 'deciduous', point), rng, terrainConfig, worldBounds, areaScale, 0, DISTRIBUTION_FILTERS.forest),
+    ...createDistributedProps(48, (index, propRng, config, point) => createForestTree(index, propRng, config, 'conifer', point), rng, terrainConfig, worldBounds, areaScale, 0, DISTRIBUTION_FILTERS.forest),
+    ...createDistributedProps(50, createMossCushion, rng, terrainConfig, worldBounds, areaScale, 0, DISTRIBUTION_FILTERS.wet),
+    ...createDistributedProps(48, createDewBead, rng, terrainConfig, worldBounds, areaScale, 0, DISTRIBUTION_FILTERS.wet),
+    ...createDistributedProps(6, createDewPool, rng, terrainConfig, worldBounds, areaScale, 0, DISTRIBUTION_FILTERS.wet),
+    ...createDistributedProps(55, createSoftFood, rng, terrainConfig, worldBounds, areaScale, 0, DISTRIBUTION_FILTERS.forest),
+    ...createDistributedProps(38, createMushroom, rng, terrainConfig, worldBounds, areaScale, 0, DISTRIBUTION_FILTERS.forest),
+    ...createDistributedProps(24, createLichenTower, rng, terrainConfig, worldBounds, areaScale, 0, DISTRIBUTION_FILTERS.rocky),
+    ...createDistributedProps(18, createShellShard, rng, terrainConfig, worldBounds, areaScale, 0, DISTRIBUTION_FILTERS.rocky),
+    ...createDistributedProps(42, createSharpGrit, rng, terrainConfig, worldBounds, areaScale, 0, DISTRIBUTION_FILTERS.gravel),
+    ...createDistributedProps(45, createRootBranch, rng, terrainConfig, worldBounds, areaScale, 0, DISTRIBUTION_FILTERS.forestOrRoots),
+    ...createDistributedProps(58, createFallenBranch, rng, terrainConfig, worldBounds, areaScale, 0, DISTRIBUTION_FILTERS.forestOrRoots),
+    ...createDistributedProps(80, createTwig, rng, terrainConfig, worldBounds, areaScale, 0, DISTRIBUTION_FILTERS.forestOrRoots),
+    ...createDistributedProps(260, createSprout, rng, terrainConfig, worldBounds, areaScale, 0, DISTRIBUTION_FILTERS.forest),
+    ...createDistributedProps(82, createShrub, rng, terrainConfig, worldBounds, areaScale, 0, DISTRIBUTION_FILTERS.forest),
+    ...createDistributedProps(80, createTalusRock, rng, terrainConfig, worldBounds, areaScale, 0, DISTRIBUTION_FILTERS.mountain),
+    ...createDistributedProps(34, createRockCluster, rng, terrainConfig, worldBounds, areaScale, 0, DISTRIBUTION_FILTERS.mountain),
     ...createFixedSnailFeatures(rng, terrainConfig)
-  ].filter((prop) => Math.hypot(prop.position.x, prop.position.z) < EXPLORER_WORLD_RADIUS - clamp(prop.bodyRadius, 0, scaleWorld(8)));
+  ].filter((prop) => isPointInsideWorldBounds(prop.position.x, prop.position.z, worldBounds));
 }
 
 export const EXPLORER_FEATURE_SYMBOLS = Object.freeze({
@@ -1084,6 +1392,8 @@ export const EXPLORER_FEATURE_SYMBOLS = Object.freeze({
   leafLitter: ',',
   rootDirt: ':',
   gravelField: '░',
+  beach: '∴',
+  water: '≈',
   gravel: '•',
   saltCone: '○',
   bambooStick: '│',
@@ -1096,6 +1406,7 @@ export const EXPLORER_FEATURE_SYMBOLS = Object.freeze({
   mossMat: '▚',
   dewBead: '◌',
   dewPool: '≋',
+  softFood: '◍',
   mushroom: '♠',
   dryLeafPatch: '▒',
   dirtStickPatch: ';',
@@ -1107,10 +1418,12 @@ export const EXPLORER_FEATURE_SYMBOLS = Object.freeze({
   antTrail: '=',
   lichenTower: '╎',
   shellShard: '△',
+  sharpGrit: '✦',
   mountain: '▲',
   giantTree: '♣',
   deciduousTree: '♣',
   coniferTree: '♤',
+  birdHome: 'V',
   playerStart: 'S',
   boss: 'B'
 });
@@ -1123,6 +1436,8 @@ const FEATURE_LEGEND = Object.freeze({
   leafLitter: Object.freeze({ symbol: EXPLORER_FEATURE_SYMBOLS.leafLitter, label: 'brown leaf-litter ground' }),
   rootDirt: Object.freeze({ symbol: EXPLORER_FEATURE_SYMBOLS.rootDirt, label: 'exposed root dirt' }),
   gravelField: Object.freeze({ symbol: EXPLORER_FEATURE_SYMBOLS.gravelField, label: 'gravel field' }),
+  beach: Object.freeze({ symbol: EXPLORER_FEATURE_SYMBOLS.beach, label: 'speckled beach sand' }),
+  water: Object.freeze({ symbol: EXPLORER_FEATURE_SYMBOLS.water, label: 'shallow water' }),
   gravel: Object.freeze({ symbol: EXPLORER_FEATURE_SYMBOLS.gravel, label: 'snail-scale gravel chunk' }),
   saltCone: Object.freeze({ symbol: EXPLORER_FEATURE_SYMBOLS.saltCone, label: 'salt pile' }),
   bambooStick: Object.freeze({ symbol: EXPLORER_FEATURE_SYMBOLS.bambooStick, label: 'leaning stick' }),
@@ -1135,6 +1450,7 @@ const FEATURE_LEGEND = Object.freeze({
   mossMat: Object.freeze({ symbol: EXPLORER_FEATURE_SYMBOLS.mossMat, label: 'flat moss carpet' }),
   dewBead: Object.freeze({ symbol: EXPLORER_FEATURE_SYMBOLS.dewBead, label: 'climbable dew bead' }),
   dewPool: Object.freeze({ symbol: EXPLORER_FEATURE_SYMBOLS.dewPool, label: 'flat dew pool' }),
+  softFood: Object.freeze({ symbol: EXPLORER_FEATURE_SYMBOLS.softFood, label: 'soft edible rot' }),
   mushroom: Object.freeze({ symbol: EXPLORER_FEATURE_SYMBOLS.mushroom, label: 'mushroom canopy' }),
   dryLeafPatch: Object.freeze({ symbol: EXPLORER_FEATURE_SYMBOLS.dryLeafPatch, label: 'rough dry-leaf carpet patch' }),
   dirtStickPatch: Object.freeze({ symbol: EXPLORER_FEATURE_SYMBOLS.dirtStickPatch, label: 'dirt patch with sticks' }),
@@ -1146,10 +1462,12 @@ const FEATURE_LEGEND = Object.freeze({
   antTrail: Object.freeze({ symbol: EXPLORER_FEATURE_SYMBOLS.antTrail, label: 'ant road' }),
   lichenTower: Object.freeze({ symbol: EXPLORER_FEATURE_SYMBOLS.lichenTower, label: 'lichen tower' }),
   shellShard: Object.freeze({ symbol: EXPLORER_FEATURE_SYMBOLS.shellShard, label: 'old shell shard' }),
+  sharpGrit: Object.freeze({ symbol: EXPLORER_FEATURE_SYMBOLS.sharpGrit, label: 'sharp grit' }),
   mountain: Object.freeze({ symbol: EXPLORER_FEATURE_SYMBOLS.mountain, label: 'rocky mountain or spire' }),
   giantTree: Object.freeze({ symbol: EXPLORER_FEATURE_SYMBOLS.giantTree, label: 'giant tree landmark' }),
   deciduousTree: Object.freeze({ symbol: EXPLORER_FEATURE_SYMBOLS.deciduousTree, label: 'deciduous tree' }),
   coniferTree: Object.freeze({ symbol: EXPLORER_FEATURE_SYMBOLS.coniferTree, label: 'conifer tree' }),
+  birdHome: Object.freeze({ symbol: EXPLORER_FEATURE_SYMBOLS.birdHome, label: 'predator bird patrol home' }),
   playerStart: Object.freeze({ symbol: EXPLORER_FEATURE_SYMBOLS.playerStart, label: 'player start' }),
   boss: Object.freeze({ symbol: EXPLORER_FEATURE_SYMBOLS.boss, label: 'boss start' })
 });
@@ -1160,6 +1478,8 @@ const FEATURE_PRIORITY = Object.freeze({
   leafLitter: 2,
   rootDirt: 2,
   gravelField: 3,
+  beach: 3,
+  water: 1,
   gravel: 4,
   bambooStick: 5,
   saltCone: 6,
@@ -1172,6 +1492,7 @@ const FEATURE_PRIORITY = Object.freeze({
   mossMat: 8,
   dewPool: 8,
   dewBead: 11,
+  softFood: 10,
   dryLeafPatch: 9,
   dirtStickPatch: 9,
   rootBranch: 9,
@@ -1179,13 +1500,15 @@ const FEATURE_PRIORITY = Object.freeze({
   fallenBranch: 9,
   sprout: 9,
   shrub: 10,
-  antTrail: 9,
+  antTrail: 12,
   mushroom: 10,
   lichenTower: 10,
   shellShard: 10,
+  sharpGrit: 10,
   deciduousTree: 11,
   coniferTree: 11,
   mountain: 11,
+  birdHome: 12,
   giantTree: 12,
   boss: 13,
   playerStart: 14
@@ -1209,6 +1532,7 @@ const PROP_FEATURE_KEYS = Object.freeze({
   moss_mat: 'mossMat',
   dew_bead: 'dewBead',
   dew_pool: 'dewPool',
+  soft_food: 'softFood',
   mushroom: 'mushroom',
   dry_leaf_patch: 'dryLeafPatch',
   dirt_stick_patch: 'dirtStickPatch',
@@ -1219,15 +1543,65 @@ const PROP_FEATURE_KEYS = Object.freeze({
   shrub: 'shrub',
   ant_trail: 'antTrail',
   lichen_tower: 'lichenTower',
-  shell_shard: 'shellShard'
+  shell_shard: 'shellShard',
+  sharp_grit: 'sharpGrit'
 });
 
-function getExplorerBackgroundFeature(x, z, terrainConfig, radius) {
-  if (Math.hypot(x, z) > radius) {
+function getFiniteNumber(value: any, fallback: number) {
+  const numericValue = Number(value);
+  return Number.isFinite(numericValue) ? numericValue : fallback;
+}
+
+function getExplorerMapClip(world: any, options: any = {}) {
+  const requestedShape = options.shape ?? options.mapShape ?? options.clipShape;
+  const worldBounds = world.worldBounds ?? {
+    shape: 'circle',
+    radius: EXPLORER_TERRAIN_FEATURE_RADIUS
+  };
+  const radius = Math.max(1, getFiniteNumber(options.radius, worldBounds.radius ?? EXPLORER_WORLD_RADIUS));
+  const centerX = getFiniteNumber(options.centerX, 0);
+  const centerZ = getFiniteNumber(options.centerZ, 0);
+  const hexRadius = Math.max(1, getFiniteNumber(options.hexRadius, radius));
+  const hexRotation = getFiniteNumber(options.hexRotation, 0);
+  const bounds = requestedShape === 'circle'
+    ? { shape: 'circle', radius, centerX, centerZ }
+    : requestedShape === 'hex'
+      ? { shape: 'hex', radius, centerX, centerZ, hexRadius, hexRotation }
+      : worldBounds;
+  const gridRadius = getWorldBoundsOuterRadius(bounds);
+
+  return {
+    shape: bounds.shape ?? 'circle',
+    radius: bounds.radius ?? radius,
+    centerX,
+    centerZ,
+    hexRadius: bounds.hexRadius ?? hexRadius,
+    hexRotation: bounds.hexRotation ?? hexRotation,
+    tiles: Array.isArray(bounds.tiles) ? bounds.tiles : [],
+    bounds,
+    gridRadius
+  };
+}
+
+function isPointInsideExplorerMapClip(x, z, clip) {
+  return isPointInsideWorldBounds(x, z, clip.bounds);
+}
+
+function getExplorerBackgroundFeature(x, z, terrainConfig, clip) {
+  if (!isPointInsideExplorerMapClip(x, z, clip)) {
     return 'outside';
   }
 
-  const { mountainWeight, leafLitterWeight, rootDirtWeight, gravelWeight } = getExplorerTerrainRegionWeights(x, z, terrainConfig);
+  const coast = getExplorerCoastWeights(x, z, terrainConfig);
+  const { mountainWeight, leafLitterWeight, rootDirtWeight, gravelWeight, beachWeight, waterWeight } = getExplorerTerrainRegionWeights(x, z, terrainConfig);
+  if (coast.signedDistanceToLandEdge < 0 && waterWeight > 0.08) {
+    return 'water';
+  }
+
+  if (beachWeight > 0.38) {
+    return 'beach';
+  }
+
   if (mountainWeight > 0.25) {
     return 'mountain';
   }
@@ -1321,7 +1695,7 @@ function createElevationLegend(minHeight, maxHeight) {
   };
 }
 
-export function createExplorerTerrainConfig(seed = EXPLORER_DEFAULT_SEED) {
+export function createExplorerTerrainConfig(seed = EXPLORER_DEFAULT_SEED, worldBounds = createExplorerWorldBounds()) {
   return normalizeTerrainConfig({
     preset: EXPLORER_TERRAIN_PRESET,
     centerHeight: 0,
@@ -1330,18 +1704,59 @@ export function createExplorerTerrainConfig(seed = EXPLORER_DEFAULT_SEED) {
     explorerSeed: normalizeSeed(seed) % 999999 || EXPLORER_DEFAULT_SEED,
     visualSize: EXPLORER_WORLD_RADIUS * 2.2,
     visualSegments: 180,
-    worldRadius: EXPLORER_WORLD_RADIUS
+    worldRadius: EXPLORER_TERRAIN_FEATURE_RADIUS,
+    shoreline: {
+      landBounds: worldBounds.landBounds,
+      playBounds: {
+        shape: worldBounds.shape,
+        radius: worldBounds.radius,
+        boundary: worldBounds.boundary
+      },
+      beachWidth: EXPLORER_BEACH_WIDTH,
+      waterLevel: -0.55,
+      waterDepth: 1.65,
+      waterBlend: scaleWorld(5.5)
+    }
   });
+}
+
+export function createExplorerWorldBounds() {
+  const tiles = EXPLORER_HEX_TILES.map((tile) => ({ ...tile }));
+  const landBounds = {
+    shape: 'hex_cluster',
+    radius: EXPLORER_LAND_RADIUS,
+    hexRadius: EXPLORER_HEX_TILE_RADIUS,
+    tiles
+  };
+  const landBoundary = getWorldBoundsBoundaryPoints(landBounds);
+  const waterBoundary = getScaledBoundary(landBoundary, EXPLORER_WATER_MARGIN);
+
+  return {
+    shape: 'coastal_hex_cluster',
+    radius: getWorldBoundsOuterRadius({ shape: 'polygon', boundary: waterBoundary }),
+    hexRadius: EXPLORER_HEX_TILE_RADIUS,
+    waterMargin: EXPLORER_WATER_MARGIN,
+    beachWidth: EXPLORER_BEACH_WIDTH,
+    tiles,
+    landBounds: {
+      ...landBounds,
+      boundary: landBoundary
+    },
+    boundary: waterBoundary
+  };
 }
 
 export function createExplorerWorld(seed = EXPLORER_DEFAULT_SEED) {
   const normalizedSeed = normalizeSeed(seed);
-  const terrainConfig = createExplorerTerrainConfig(normalizedSeed);
+  const worldBounds = createExplorerWorldBounds();
+  const terrainConfig = createExplorerTerrainConfig(normalizedSeed, worldBounds);
   const landmarks = FIXED_LANDMARKS.map((landmark) => ({ ...landmark }));
+  const propBounds = worldBounds.landBounds ?? worldBounds;
   const props = [
     ...createLandmarkProps(terrainConfig),
-    ...createFillerProps(normalizedSeed, terrainConfig)
+    ...createFillerProps(normalizedSeed, terrainConfig, propBounds)
   ];
+  const creatures = createBirdCreatures(normalizedSeed, terrainConfig, propBounds);
   const bossStart = {
     x: scaleWorld(64),
     z: scaleWorld(-52),
@@ -1352,9 +1767,7 @@ export function createExplorerWorld(seed = EXPLORER_DEFAULT_SEED) {
     worldgenVersion: EXPLORER_WORLDGEN_VERSION,
     seed: normalizedSeed,
     terrainConfig,
-    worldBounds: {
-      radius: EXPLORER_WORLD_RADIUS
-    },
+    worldBounds,
     playerStart: { ...EXPLORER_PLAYER_START },
     bossParticipant: {
       slot: EXPLORER_BOSS_SLOT,
@@ -1368,6 +1781,7 @@ export function createExplorerWorld(seed = EXPLORER_DEFAULT_SEED) {
       displayName: 'Rocky Crown Snail'
     },
     landmarks,
+    creatures,
     props
   };
 }
@@ -1386,10 +1800,8 @@ export function createExplorerMapGrids(worldOrSeed: any = EXPLORER_DEFAULT_SEED,
   const world = isExplorerWorld(worldOrSeed)
     ? worldOrSeed
     : createExplorerWorld(worldOrSeed);
-  const radius = Number.isFinite(options.radius)
-    ? Math.max(1, options.radius)
-    : world.worldBounds.radius;
-  const grid = getExplorerGridGeometry(radius, options.cellSize ?? EXPLORER_MAP_DEFAULT_CELL_SIZE);
+  const clip = getExplorerMapClip(world, options);
+  const grid = getExplorerGridGeometry(clip.gridRadius, options.cellSize ?? EXPLORER_MAP_DEFAULT_CELL_SIZE);
   const featureKeys = [];
   const priorities = [];
   const heightRows = [];
@@ -1403,7 +1815,7 @@ export function createExplorerMapGrids(worldOrSeed: any = EXPLORER_DEFAULT_SEED,
 
     for (let col = 0; col < grid.width; col += 1) {
       const x = grid.bounds.minX + (col * grid.cellSize);
-      const backgroundFeature = getExplorerBackgroundFeature(x, z, world.terrainConfig, radius);
+      const backgroundFeature = getExplorerBackgroundFeature(x, z, world.terrainConfig, clip);
       const insideWorld = backgroundFeature !== 'outside';
       const height = insideWorld ? getTerrainHeight(x, z, world.terrainConfig) : null;
 
@@ -1426,15 +1838,37 @@ export function createExplorerMapGrids(worldOrSeed: any = EXPLORER_DEFAULT_SEED,
       continue;
     }
 
+    if (!isPointInsideExplorerMapClip(prop.position.x, prop.position.z, clip)) {
+      continue;
+    }
+
     const { row, col } = getGridCellForWorldPosition(prop.position, grid);
     setGridFeature(featureKeys, priorities, row, col, featureKey);
   }
 
-  const playerCell = getGridCellForWorldPosition(world.playerStart, grid);
-  setGridFeature(featureKeys, priorities, playerCell.row, playerCell.col, 'playerStart');
+  for (const creature of world.creatures ?? []) {
+    if (creature.kind !== 'bird') {
+      continue;
+    }
 
-  const bossCell = getGridCellForWorldPosition(world.bossParticipant.position, grid);
-  setGridFeature(featureKeys, priorities, bossCell.row, bossCell.col, 'boss');
+    const position = creature.home ?? creature.position;
+    if (!position || !isPointInsideExplorerMapClip(position.x, position.z, clip)) {
+      continue;
+    }
+
+    const { row, col } = getGridCellForWorldPosition(position, grid);
+    setGridFeature(featureKeys, priorities, row, col, 'birdHome');
+  }
+
+  if (isPointInsideExplorerMapClip(world.playerStart.x, world.playerStart.z, clip)) {
+    const playerCell = getGridCellForWorldPosition(world.playerStart, grid);
+    setGridFeature(featureKeys, priorities, playerCell.row, playerCell.col, 'playerStart');
+  }
+
+  if (isPointInsideExplorerMapClip(world.bossParticipant.position.x, world.bossParticipant.position.z, clip)) {
+    const bossCell = getGridCellForWorldPosition(world.bossParticipant.position, grid);
+    setGridFeature(featureKeys, priorities, bossCell.row, bossCell.col, 'boss');
+  }
 
   const minHeight = finiteHeights.length > 0 ? Math.min(...finiteHeights) : 0;
   const maxHeight = finiteHeights.length > 0 ? Math.max(...finiteHeights) : 0;
@@ -1448,6 +1882,19 @@ export function createExplorerMapGrids(worldOrSeed: any = EXPLORER_DEFAULT_SEED,
   return {
     worldgenVersion: world.worldgenVersion ?? 1,
     seed: world.seed,
+    shape: clip.shape,
+    clip: {
+      shape: clip.shape,
+      radius: Number(clip.radius.toFixed(3)),
+      centerX: Number(clip.centerX.toFixed(3)),
+      centerZ: Number(clip.centerZ.toFixed(3)),
+      hexRadius: Number(clip.hexRadius.toFixed(3)),
+      hexRotation: Number(clip.hexRotation.toFixed(6)),
+      hexRotationDegrees: Number(((clip.hexRotation * 180) / Math.PI).toFixed(3)),
+      beachWidth: Number((clip.bounds.beachWidth ?? 0).toFixed(3)),
+      waterMargin: Number((clip.bounds.waterMargin ?? 0).toFixed(3)),
+      tileCount: clip.tiles.length
+    },
     cellSize: grid.cellSize,
     width: grid.width,
     height: grid.height,

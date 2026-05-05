@@ -8,7 +8,11 @@ import {
 } from '../src/game/SinglePlayerSession.js';
 import { Game } from '../src/game/Game.js';
 import { DEFAULT_TUNING_CONFIG } from '../src/sim/Tuning.js';
-import { EXPLORER_TERRAIN_PRESET } from '../src/world/Terrain.js';
+import {
+  ARENA_CALCIUM_CROWN_STAGE,
+  ARENA_DEW_RUSH_STAGE,
+  EXPLORER_TERRAIN_PRESET
+} from '../src/world/Terrain.js';
 
 class MemoryStorage {
   declare store: any;
@@ -32,6 +36,10 @@ class MemoryStorage {
 test('arena exposes only stage and encounter options', () => {
   const session = new SinglePlayerSession({ storage: new MemoryStorage() });
   const schemaIds = session.getTuningSchema().map((entry) => entry.id);
+  const stageOptions = session.getTuningSchema()
+    .find((entry) => entry.id === 'stagePreset')
+    .options
+    .map((option) => option.value);
   const snapshot = session.getSnapshot();
   const player = snapshot.players.find((state) => state.slot === 1);
   const bot = snapshot.players.find((state) => state.slot === 2);
@@ -42,6 +50,8 @@ test('arena exposes only stage and encounter options', () => {
   assert(!schemaIds.includes('botCount'));
   assert.equal(snapshot.players.length, 2);
   assert.equal(snapshot.terrain.preset, 'plane');
+  assert(stageOptions.includes(ARENA_DEW_RUSH_STAGE));
+  assert(!stageOptions.includes(EXPLORER_TERRAIN_PRESET));
   assert.equal(player.maxHealth, DEFAULT_TUNING_CONFIG.playerMaxHealth);
   assert.equal(bot.maxHealth, DEFAULT_TUNING_CONFIG.botMaxHealth);
 });
@@ -65,19 +75,21 @@ test('arena stage and encounter options rebuild the match', () => {
   assert.equal(session.getTestPanelState().entityLabel, 'enemies');
 });
 
-test('arena can use the generated forest-floor map as a stage', () => {
+test('arena can use a small designed event stage', () => {
   const session = new SinglePlayerSession({
     storage: new MemoryStorage(),
     options: {
-      stagePreset: EXPLORER_TERRAIN_PRESET,
+      stagePreset: ARENA_CALCIUM_CROWN_STAGE,
       encounterPreset: 'one_strong'
     }
   });
   const snapshot = session.getSnapshot();
 
-  assert.equal(snapshot.terrain.preset, EXPLORER_TERRAIN_PRESET);
-  assert(snapshot.terrain.worldRadius > 100);
+  assert.equal(snapshot.terrain.preset, ARENA_CALCIUM_CROWN_STAGE);
+  assert(snapshot.terrain.worldRadius < 40);
   assert(snapshot.worldProps.length > 0);
+  assert(snapshot.worldProps.some((prop) => prop.id === 'calcium-crown-center'));
+  assert(snapshot.worldProps.some((prop) => prop.powerup?.type === 'calcium'));
 });
 
 test('arena options persist separately from test mode tuning', () => {

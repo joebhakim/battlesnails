@@ -4,7 +4,7 @@ BattleSnails is a deliberately jarring third-person arena game built with Three.
 
 The project currently supports five modes:
 - `Arena`: configurable local combat against one or more enemy presets, with persisted stage and encounter options
-- `Adventure`: a roughly `2000 x 2000` snail-scale mossland expedition map with fixed landmarks, dense micro-props, and one optional boss landmark
+- `The Hunt`: a roughly `2000 x 2000` seven-hex snail-scale mossland map with fixed landmarks, dense micro-props, beach/water edges, and configurable NPC snail count/strength
 - `LAN Multiplayer`: two human players in Arena 1v1, Adventure co-op PvE, or Adventure PvP formats
 - `Test Mode`: a debug-key tuning lab with staged sliders, configurable bot count, and an explicit apply step
 - `Simulator`: a debug-key balance harness that batch-runs a simulated humanlike player against the bot
@@ -47,7 +47,7 @@ The browser client handles rendering, input, HUD, music, simulator reports, and 
    http://<host-ip>:5173
    ```
 
-5. Choose `Arena`, `Adventure`, or `LAN Multiplayer` from the start menu. Press the backtick key to reveal `Test Mode` and `Simulator`.
+5. Choose `Arena`, `The Hunt`, or `LAN Multiplayer` from the start menu. Press the backtick key to reveal `Test Mode` and `Simulator`.
 
 If you want to run the WebSocket server separately, use:
 
@@ -59,12 +59,12 @@ npm run mp:server
 
 The static browser client is Netlify-ready. Production deploys use `npm run build` and publish the generated `dist` directory, as configured in `netlify.toml`.
 
-Netlify serves Arena, Adventure, debug modes, and the browser client. The LAN multiplayer WebSocket server is still a separate Node process and needs a separate host before online multiplayer can work from the deployed site.
+Netlify serves Arena, The Hunt, debug modes, and the browser client. The LAN multiplayer WebSocket server is still a separate Node process and needs a separate host before online multiplayer can work from the deployed site.
 
 ## Modes And Rules
 
-- `Arena`: one human player vs a simple encounter preset chosen from the start menu. The generated forest-floor map is now one of the stage choices.
-- `Adventure`: one human player in a roughly `2000 x 2000` bounded mossland map with static terrain props, fixed landmark trees, a rocky boss landmark, and comical log nibbling.
+- `Arena`: one human player vs a simple encounter preset chosen from the start menu. Stages include the conic-section heightfields plus small, extreme designed event arenas.
+- `The Hunt`: one human player in the current seven-hex mossland/beach map. Setup is intentionally narrow: choose NPC snail count and a `1..9` strength scale.
 - `LAN Multiplayer`: two human players in Arena 1v1, Adventure co-op PvE, or Adventure PvP.
 - `Test Mode`: hidden behind the backtick key; one human player plus `0..40` local bots, staged tuning controls, local browser persistence for the last-used lab settings, and switchable terrain presets.
 - `Simulator`: hidden behind the backtick key; an automated browser-visible balance runner. It runs an average-but-skilled simulated humanlike player across selected stage/enemy-mode searches, reports aggregate and per-scenario metrics, replays a representative match, and uses the same duel knobs for HP, movement, combat, stalk, and bot behavior.
@@ -84,7 +84,7 @@ Netlify serves Arena, Adventure, debug modes, and the browser client. The LAN mu
 - Outside lock-on, backward and pure side movement backpedal or strafe without rotating the body; forward-diagonal movement turns.
 - `Space`: jump.
 - Hold `Shift`: enable lock-on framing and target-facing behavior while held.
-- `E` in Adventure: nibble a nearby rotting log.
+- `E` in The Hunt: nibble a nearby rotting log.
 - Click the arena: capture the mouse with pointer lock.
 - With pointer lock and no stalk button held, move the mouse horizontally to turn the snail in free mode.
 - `Esc`: release pointer lock.
@@ -103,7 +103,7 @@ On-screen HUD:
 - Bottom left: left stalk top-down plane widget showing target point vs current point.
 - Bottom right: right stalk top-down plane widget showing target point vs current point.
 - Arena: stage and enemy setup options appear before the match starts.
-- Adventure: no setup panel yet; the map is a deterministic worldgen v3 mossland expedition.
+- The Hunt: choose NPC snail count and strength before entering the deterministic seven-hex mossland expedition.
 - Test Mode and Simulator: hidden until the backtick key is pressed, then right-side tuning panels expose terrain, HP, movement, trail, combat, stalk, bot-AI tuning, and simulator search scope.
 
 ## Gameplay Flow
@@ -120,13 +120,14 @@ Arena win condition:
 - Pick a stage and enemy setup from the start menu before the match begins.
 - The current Arena options are saved locally in the browser and remain separate from Test Mode settings.
 
-Adventure flow:
-- The map is large and bounded rather than an infinite world.
+The Hunt flow:
+- The map is a bounded seven-hex explorer cluster: one central hex plus six adjacent hex tiles sharing one continuous terrain and prop process.
+- The explorer cluster now has a cheap coastal edge: a wide procedural speckled-sand beach band inside the land boundary, shallow transparent water outside it, and water support so snails float instead of falling to the sea floor.
 - Massive trees and the rocky mountain landmark stay fixed so the world can be learned.
 - Worldgen v3 aims for snail-scale concerns: rough climbable dry-leaf carpet polygons, thick moss carpet polygons, dirt-with-sticks patches, exposed root branches, twigs, young plants, wet dew beads and pools, mushrooms, rotting logs, lichen towers, old shell shards, ant roads, salt piles, gravel, high mountain talus, dense deciduous/conifer tree clusters, and giant tree/mountain landmarks.
 - Prop queries use a spatial grid broadphase so the denser forest-floor clutter does not force every collision pass to scan the whole explorer map.
-- Adventure props are climbable analytic surfaces; walking into a mushroom, log, rock, salt pile, dew bead, raised leaf/moss/dirt polygon, slender tree trunk, or vertical landmark tree automatically attaches and crawls without a separate button.
-- The generated world can be exported as sparse Unicode grids for feature symbols and elevation buckets via `createExplorerMapGrids` or `npm run map:explorer -- <seed> <cellSize>`.
+- The Hunt props are climbable analytic surfaces; walking into a mushroom, log, rock, salt pile, dew bead, raised leaf/moss/dirt polygon, slender tree trunk, or vertical landmark tree automatically attaches and crawls without a separate button.
+- The generated world can be exported as sparse Unicode grids for feature symbols and elevation buckets via `createExplorerMapGrids` or `npm run map:explorer -- <seed> <cellSize>`. For tile previews, pass `--shape hex --hex-radius <units> --hex-rotation-deg <degrees> --output <path>` to clip the printed map to a candidate hex.
 - Press `E` near a rotting log to nibble it; this is cosmetic and gives no resource, health, score, or progression.
 - The Rocky Crown boss is optional; defeating it does not end exploration.
 
@@ -152,8 +153,8 @@ LAN multiplayer win condition:
 ### Terrain
 
 - The shipped default arena is a flat `plane`.
-- Arena can swap the map to `plane`, `hyperboloid_bowl`, `sphere_dome`, `sphere_bowl`, `cone`, `paraboloid_bowl`, `saddle`, `ripple_bowl`, or the generated forest-floor map.
-- Adventure uses the same generated forest-floor terrain and prop generator as its full expedition map.
+- Arena can swap the map to `plane`, `hyperboloid_bowl`, `sphere_dome`, `sphere_bowl`, `cone`, `paraboloid_bowl`, `saddle`, `ripple_bowl`, or the designed event stages: `Dew Rush`, `Salt Bowl`, `Shell Derby`, `Feast Frenzy`, `High Leaf`, `Bird Panic`, and `Calcium Crown`.
+- The Hunt uses the generated forest-floor terrain and prop generator as its full expedition map.
 - Terrain remains heightfield-based in every mode: the surface is always `y = f(x, z)`.
 - Snails stay upright while moving over the surface.
 - Snails use a cheap blob drop shadow for vertical readability, especially while jumping, falling, or climbing props.
@@ -182,9 +183,9 @@ LAN multiplayer win condition:
 
 - Hits are evaluated from actual stalk movement, not from a canned attack animation or strike window.
 - The simulation combines eye velocity with body movement to measure normal impact quality.
-- Damage is bash-only: tangent sliding can bounce or slide, but it does not remove HP.
+- Damage has two channels: bash damage from normal impulse, and lower scrape damage from tangential damping while the eye slides across a target.
 - Each stalk can deal damage if its strongest eye contact exceeds the threshold; stronger hits can remove more HP.
-- Contact hysteresis prevents a held collision from re-arming bash damage until it separates or substantially renews its impulse.
+- Contact hysteresis prevents a held collision from re-arming bash damage until it separates or substantially renews its impulse. Scrape does not re-arm bash.
 
 ### Wet Trails
 
@@ -274,16 +275,54 @@ Print the explorer Unicode feature and elevation maps:
 npm run map:explorer -- 137 50
 ```
 
+Open a single generated asset in the browser Asset Studio:
+
+```text
+http://localhost:5173/?asset-studio=1&asset=dry_leaf_patch&index=0&lod=near&view=three-quarter
+```
+
+Capture repeatable visual and collision/support screenshots of one generated asset through the same Three.js prop renderer used by gameplay:
+
+```bash
+npm run asset:shot -- --asset dry_leaf_patch --index 0 --lod near
+```
+
+By default this writes two images under `asset_studio/`: `*-visual.png` and `*-collision.png`. Use this as the main prop-iteration loop when changing generated forest-floor assets:
+
+```bash
+npm run asset:shot -- --asset dry_leaf_patch --index 0 --lod near --collision-only --output asset_studio/dry-leaf-collision.png
+npm run asset:shot -- --asset moss_mat --index 0 --lod near --collision-only --output asset_studio/moss-collision.png
+npm run asset:shot -- --asset dirt_stick_patch --index 0 --lod near --collision-only --output asset_studio/dirt-stick-collision.png
+```
+
+For ordinary primitive props, the collision image shows the collision primitive. For v5 `visual_mesh` props such as mushrooms, salt cones, shell shards, shrubs, trees, bamboo, logs, and branches, the collision image shows a decimated triangle collision mesh extracted from the same `createPropMesh` rendered geometry used by gameplay. For rough ground-cover props such as `dry_leaf_patch`, `moss_mat`, and `dirt_stick_patch`, the overlay shows the sampled support surface that the snail rides in the simulation, not a literal render mesh triangle-by-triangle collision model. That support surface is generated from the same footprint, relief, grain, scale, and edge-blend data used by gameplay, so it is the right debugging view for bumpy-road movement. Use `--lod near|far`, `--view three-quarter|top|side`, `--seed`, `--index`, `--id`, `--labels`, `--headful`, `--single`, `--visual-only`, `--collision-only`, and `--output` to compare detail meshes, far simplified meshes, collision/support surfaces, and generated prop variants.
+
+Capture every generated asset kind as visual/collision pairs and contact sheets:
+
+```bash
+npm run asset:suite -- --output-dir asset_studio/review-v5 --seed 137 --width 960 --height 540
+```
+
+Then measure the rough screen-space overlap between visual silhouettes and cyan collision overlays:
+
+```bash
+npm run asset:jaccard -- --dir asset_studio/review-v5 --output asset_studio/review-v5/collision-jaccard.json
+```
+
+The Jaccard metric is a smoke-test for collision/visual drift, not a physical truth source. It is useful for chunky isolated assets and noisy for very thin or heavily occluded assets.
+
 Run the headless Arena performance profile:
 
 ```bash
-npm run perf:arena -- --bots 40 --seconds 8 --warmup 1
+npm run perf:arena -- --bots 40
 ```
+
+By default this runs a deterministic `15s` mixed-input soak: random movement, target navigation, lock-on, free turning, stalk swinging, reach-wheel pulses, and jump pulses. It also validates finite player/stalk/event/trail state while it runs, so this is the quick headless sanity check for movement and physics bugs. Use `--input idle` for the old idle-human profile, or `--input walk` for a simple forward-walk profile.
 
 For CI, add thresholds so regressions fail the command:
 
 ```bash
-npm run perf:arena -- --bots 40 --seconds 8 --warmup 1 --max-local-frame-p95-ms 16 --max-sim-step-p95-ms 8
+npm run perf:arena -- --bots 40 --max-local-frame-p95-ms 16 --max-sim-step-p95-ms 8
 ```
 
 This profiler does not measure WebGL draw time. It measures deterministic authoritative Arena simulation, snapshot export/stringify cost, and Three.js presentation actor sync without a browser.
@@ -423,10 +462,10 @@ The current debug mode is text-only. It does not add scene helpers, wireframes, 
 
 ### Shared authoritative simulation
 
-- Arena, Adventure, and LAN multiplayer use the same movement, jump, stalk physics, trail, damage, and win logic.
+- Arena, The Hunt, and LAN multiplayer use the same movement, jump, stalk physics, trail, damage, and win logic.
 - The browser client is primarily a renderer and input source.
 - LAN clients do not author world state.
-- Terrain is part of authoritative snapshot state. Arena and LAN can use the generated forest-floor map; Adventure uses it as the full expedition map.
+- Terrain is part of authoritative snapshot state. Arena uses conic-section and designed event stages; The Hunt uses the generated forest-floor map as its full expedition map.
 
 ### Bot behavior
 

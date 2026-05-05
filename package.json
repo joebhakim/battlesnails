@@ -14,6 +14,9 @@
     "perf:arena": "node --import tsx scripts/profile-arena.ts",
     "perf:browser": "node --import tsx scripts/profile-browser-arena.ts",
     "perf:browser-arena": "node --import tsx scripts/profile-browser-arena.ts",
+    "asset:shot": "node --import tsx scripts/screenshot-asset-studio.ts",
+    "asset:suite": "node --import tsx scripts/screenshot-asset-suite.ts",
+    "asset:jaccard": "node --import tsx scripts/measure-asset-collision-jaccard.ts",
     "probe:controls": "node --import tsx scripts/probe-controls.ts",
     "map:explorer": "node --import tsx scripts/print-explorer-map.ts"
   },

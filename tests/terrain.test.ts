@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import { MatchSimulation } from '../src/sim/MatchSimulation.js';
 import {
   ALL_TERRAIN_PRESET_OPTIONS,
+  ARENA_DEW_RUSH_STAGE,
   ARENA_TERRAIN_PRESET_OPTIONS,
   DEFAULT_TERRAIN_CONFIG,
   EXPLORER_TERRAIN_PRESET,
@@ -12,7 +13,11 @@ import {
   getTerrainConfigKey,
   normalizeTerrainConfig
 } from '../src/world/Terrain.js';
-import { createExplorerWorld } from '../src/world/ExplorerWorld.js';
+import {
+  EXPLORER_TERRAIN_FEATURE_RADIUS,
+  EXPLORER_WORLD_RADIUS,
+  createExplorerWorld
+} from '../src/world/ExplorerWorld.js';
 import {
   BODY_CAPSULE_VISUAL_RADIUS,
   DEFAULT_ABOVE_GROUND_HEIGHT,
@@ -46,12 +51,14 @@ test('all shipped terrain presets produce finite heights across the arena', () =
   }
 });
 
-test('explorer mossland is valid and available to arena stage choices', () => {
+test('explorer mossland is valid but reserved for The Hunt', () => {
   const terrain = normalizeTerrainConfig({ preset: EXPLORER_TERRAIN_PRESET });
 
   assert.equal(terrain.preset, EXPLORER_TERRAIN_PRESET);
   assert.equal(TERRAIN_PRESET_OPTIONS.some((option) => option.value === EXPLORER_TERRAIN_PRESET), false);
-  assert.equal(ARENA_TERRAIN_PRESET_OPTIONS.some((option) => option.value === EXPLORER_TERRAIN_PRESET), true);
+  assert.equal(ARENA_TERRAIN_PRESET_OPTIONS.some((option) => option.value === EXPLORER_TERRAIN_PRESET), false);
+  assert.equal(ARENA_TERRAIN_PRESET_OPTIONS.some((option) => option.value === ARENA_DEW_RUSH_STAGE), true);
+  assert.equal(ALL_TERRAIN_PRESET_OPTIONS.some((option) => option.value === EXPLORER_TERRAIN_PRESET), true);
 });
 
 test('default terrain is a flat plane', () => {
@@ -169,8 +176,8 @@ test('explorer terrain key changes with seed and uses a large visual map', () =>
   const second = createExplorerWorld(91).terrainConfig;
 
   assert.notEqual(getTerrainConfigKey(first), getTerrainConfigKey(second));
-  assert.equal(first.worldRadius, 1000);
-  assert.equal(first.visualSize, 2200);
+  assert.equal(first.worldRadius, EXPLORER_TERRAIN_FEATURE_RADIUS);
+  assert.equal(first.visualSize, EXPLORER_WORLD_RADIUS * 2.2);
   assert(first.visualSize > DEFAULT_TERRAIN_CONFIG.visualSize);
   assert(first.worldRadius > DEFAULT_TERRAIN_CONFIG.worldRadius);
 });

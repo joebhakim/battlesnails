@@ -3,6 +3,7 @@ import * as THREE from 'three';
 import {
   DEFAULT_TERRAIN_CONFIG,
   createTerrainGeometry,
+  createWaterGeometry,
   getTerrainConfigKey,
   normalizeTerrainConfig,
   TERRAIN_VISUAL_SIZE
@@ -14,10 +15,14 @@ export class Scene {
   declare groundMaterial: any;
   declare scene: any;
   declare terrainKey: any;
+  declare water: any;
+  declare waterMaterial: any;
   constructor() {
     this.scene = new THREE.Scene();
     this.ground = null;
     this.groundMaterial = null;
+    this.water = null;
+    this.waterMaterial = null;
     this.terrainConfig = normalizeTerrainConfig(DEFAULT_TERRAIN_CONFIG);
     this.terrainKey = getTerrainConfigKey(this.terrainConfig);
   }
@@ -51,6 +56,26 @@ export class Scene {
     this.ground.rotation.x = -Math.PI / 2;
     this.ground.receiveShadow = false;
     this.scene.add(this.ground);
+
+    this.waterMaterial = new THREE.MeshStandardMaterial({
+      color: 0x4ca5bd,
+      roughness: 0.25,
+      metalness: 0,
+      transparent: true,
+      opacity: 0.38,
+      depthWrite: false
+    });
+    this.water = new THREE.Mesh(
+      createWaterGeometry(
+        this.terrainConfig,
+        this.terrainConfig.visualSize ?? TERRAIN_VISUAL_SIZE,
+        Math.max(36, Math.floor((this.terrainConfig.visualSegments ?? 120) * 0.45))
+      ),
+      this.waterMaterial
+    );
+    this.water.rotation.x = -Math.PI / 2;
+    this.water.renderOrder = 2;
+    this.scene.add(this.water);
   }
 
   setTerrainConfig(nextTerrainConfig = DEFAULT_TERRAIN_CONFIG) {
@@ -69,6 +94,16 @@ export class Scene {
     );
     this.ground.geometry.dispose();
     this.ground.geometry = nextGeometry;
+    if (this.water) {
+      const nextWaterGeometry = createWaterGeometry(
+        normalized,
+        normalized.visualSize ?? TERRAIN_VISUAL_SIZE,
+        Math.max(36, Math.floor((normalized.visualSegments ?? 120) * 0.45))
+      );
+      this.water.geometry.dispose();
+      this.water.geometry = nextWaterGeometry;
+      this.water.visible = nextWaterGeometry.attributes.position.count > 0;
+    }
     this.terrainConfig = normalized;
     this.terrainKey = nextKey;
   }

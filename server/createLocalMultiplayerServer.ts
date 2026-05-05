@@ -227,7 +227,8 @@ export function createLocalMultiplayerServer(options: LocalMultiplayerServerOpti
         ],
         terrainConfig: environment?.terrainConfig,
         arenaRadius: environment?.arenaRadius,
-        worldProps: environment?.worldProps
+        worldProps: environment?.worldProps,
+        creatures: environment?.creatures
       };
     }
 
@@ -266,7 +267,8 @@ export function createLocalMultiplayerServer(options: LocalMultiplayerServerOpti
       ],
       terrainConfig: world.terrainConfig,
       arenaRadius: world.worldBounds.radius,
-      worldProps: world.props
+      worldProps: world.props,
+      creatures: world.creatures
     };
   }
 
@@ -279,7 +281,8 @@ export function createLocalMultiplayerServer(options: LocalMultiplayerServerOpti
       players: participants,
       terrainConfig: matchConfig.terrainConfig,
       arenaRadius: matchConfig.arenaRadius,
-      worldProps: matchConfig.worldProps
+      worldProps: matchConfig.worldProps,
+      creatures: matchConfig.creatures
     });
 
     room.phase = 'running';

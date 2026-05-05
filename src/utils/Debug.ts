@@ -26,6 +26,7 @@ export class Debug {
   declare previousOpponentHealth: any;
   declare previousPointerLock: any;
   declare previousSessionState: any;
+  declare resourceButtons: any;
   declare seenDamageEventQueue: any;
   declare seenDamageEvents: any;
   declare sessionState: any;
@@ -61,6 +62,7 @@ export class Debug {
     this.eventLog = document.getElementById('event-log');
     this.debugUpdateBtn = document.getElementById('debug-update');
     this.autoUpdateCheckbox = document.getElementById('auto-update');
+    this.resourceButtons = Array.from(document.querySelectorAll('.debug-resource-button'));
 
     this.setupEventListeners();
   }
@@ -77,6 +79,14 @@ export class Debug {
     this.autoUpdateCheckbox.addEventListener('change', (event) => {
       this.autoUpdate = event.target.checked;
     });
+
+    for (const button of this.resourceButtons) {
+      button.addEventListener('click', () => {
+        const type = button.dataset.resourceType;
+        const amount = Number(button.dataset.resourceAmount);
+        this.game.addDebugResource(type, Number.isFinite(amount) ? amount : 1);
+      });
+    }
   }
 
   toggleDebugMode() {
@@ -202,8 +212,17 @@ export class Debug {
       }
 
       this.rememberDamageEvent(eventId);
+      const bashDamage = Number(event.bashDamage ?? 0);
+      const scrapeDamage = Number(event.scrapeDamage ?? 0);
+      const damageParts = [];
+      if (bashDamage > 0) {
+        damageParts.push(`bash ${this.formatDamage(bashDamage)}`);
+      }
+      if (scrapeDamage > 0) {
+        damageParts.push(`scrape ${this.formatDamage(scrapeDamage)}`);
+      }
       this.addEvent(
-        `Damage ${this.formatDamage(event.amount)} ${event.side}: bash ${this.formatDamage(event.bashDamage)}`
+        `Damage ${this.formatDamage(event.amount)} ${event.side}: ${damageParts.join(' + ') || event.measurement}`
       );
     }
 

@@ -32,6 +32,7 @@ test('mergeMultiplayerSnapshot preserves static metadata and appends trail delta
     trailCellSize: 1,
     trailCells: [{ x: 0, z: 0 }],
     worldProps: [{ id: 'static-prop' }],
+    creatures: [{ id: 'bird-0', phase: 'patrol' }],
     events: [],
     players: [
       {
@@ -47,6 +48,7 @@ test('mergeMultiplayerSnapshot preserves static metadata and appends trail delta
     tick: 2,
     events: [{ type: 'damage', amount: 1 }],
     trailCellsDelta: [{ x: 0, z: 0 }, { x: 1, z: 0 }],
+    creatures: [{ id: 'bird-0', phase: 'swoop' }],
     players: [
       {
         slot: 1,
@@ -61,6 +63,7 @@ test('mergeMultiplayerSnapshot preserves static metadata and appends trail delta
   assert.equal(merged.tick, 2);
   assert.deepEqual(merged.terrain, start.terrain);
   assert.deepEqual(merged.worldProps, start.worldProps);
+  assert.equal(merged.creatures[0].phase, 'swoop');
   assert.equal(merged.players[0].profileName, 'human');
   assert.equal(merged.players[0].maxHealth, 600);
   assert.equal(merged.players[0].position.x, 2);

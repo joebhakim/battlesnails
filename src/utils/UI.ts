@@ -166,6 +166,8 @@ export class UI {
   declare simulatorTuningStatus: any;
   declare singlePlayerSetup: any;
   declare singlePlayerSetupControls: any;
+  declare nearbyItems: any;
+  declare nearbyItemsList: any;
   declare app: any;
   declare appliedTestValues: any;
   declare enemyHealthBarFill: any;
@@ -186,6 +188,12 @@ export class UI {
   declare playerHealthBarFill: any;
   declare playerHealthValue: any;
   declare playerLabel: any;
+  declare statCalcium: any;
+  declare statDamage: any;
+  declare statDew: any;
+  declare statFood: any;
+  declare statGrit: any;
+  declare statSpeed: any;
   declare simulatorCopyJsonButton: any;
   declare simulatorMatchCountInput: any;
   declare simulatorMetrics: any;
@@ -222,6 +230,11 @@ export class UI {
   declare testResetDefaultsButton: any;
   declare testStatus: any;
   declare tpsValue: any;
+  declare trialHud: any;
+  declare trialObjective: any;
+  declare trialPhase: any;
+  declare trialTime: any;
+  declare trialTitle: any;
   constructor() {
     this.app = document.getElementById('app');
     this.playerLabel = document.getElementById('player-label');
@@ -232,6 +245,19 @@ export class UI {
     this.enemyHealthValue = document.getElementById('enemy-health-value');
     this.fpsValue = document.getElementById('fps-value');
     this.tpsValue = document.getElementById('tps-value');
+    this.statDew = document.getElementById('stat-dew');
+    this.statFood = document.getElementById('stat-food');
+    this.statCalcium = document.getElementById('stat-calcium');
+    this.statGrit = document.getElementById('stat-grit');
+    this.statSpeed = document.getElementById('stat-speed');
+    this.statDamage = document.getElementById('stat-damage');
+    this.trialHud = document.getElementById('trial-hud');
+    this.trialPhase = document.getElementById('trial-phase');
+    this.trialTitle = document.getElementById('trial-title');
+    this.trialTime = document.getElementById('trial-time');
+    this.trialObjective = document.getElementById('trial-objective');
+    this.nearbyItems = document.getElementById('nearby-items');
+    this.nearbyItemsList = document.getElementById('nearby-items-list');
     this.instructions = document.getElementById('controls-hint');
     this.startMenu = document.getElementById('start-menu');
     this.startMenuTitle = this.startMenu.querySelector('h1');
@@ -329,6 +355,75 @@ export class UI {
     }
   }
 
+  formatSmallNumber(value) {
+    const numericValue = Number(value);
+    if (!Number.isFinite(numericValue)) {
+      return '0';
+    }
+
+    return Math.abs(numericValue - Math.round(numericValue)) < 0.05
+      ? `${Math.round(numericValue)}`
+      : numericValue.toFixed(1);
+  }
+
+  updateSnailStats(stats: any = null) {
+    const safeStats = stats ?? {};
+    this.statDew.textContent = this.formatSmallNumber(safeStats.dew);
+    this.statFood.textContent = this.formatSmallNumber(safeStats.food);
+    this.statCalcium.textContent = this.formatSmallNumber(safeStats.calcium);
+    this.statGrit.textContent = this.formatSmallNumber(safeStats.grit);
+    this.statSpeed.textContent = `${(Number(safeStats.speedMultiplier) || 1).toFixed(2)}x`;
+    this.statDamage.textContent = `${(Number(safeStats.damageMultiplier) || 1).toFixed(2)}x`;
+  }
+
+  formatClock(seconds) {
+    const safeSeconds = Math.max(0, Math.ceil(Number(seconds) || 0));
+    const minutes = Math.floor(safeSeconds / 60);
+    const remainder = safeSeconds % 60;
+    return `${minutes}:${`${remainder}`.padStart(2, '0')}`;
+  }
+
+  updateTrialHud(trialState: any = null) {
+    if (!trialState) {
+      this.trialHud?.classList.add('is-empty');
+      this.trialPhase.textContent = 'The Hunt';
+      this.trialTitle.textContent = 'Wet Window';
+      this.trialTime.textContent = '--';
+      this.trialObjective.textContent = 'Gather dew, food, calcium, and grit.';
+      return;
+    }
+
+    this.trialHud?.classList.remove('is-empty');
+    this.trialPhase.textContent = trialState.phase === 'trial' ? 'Dawn Trial' : 'Forage';
+    this.trialTitle.textContent = trialState.title ?? 'Wet Window';
+    this.trialTime.textContent = this.formatClock(trialState.timeRemaining);
+    this.trialObjective.textContent = trialState.objective ?? '';
+  }
+
+  updateNearbyItems(items: any[] = []) {
+    if (!this.nearbyItemsList) {
+      return;
+    }
+
+    if (!items.length) {
+      this.nearbyItems?.classList.add('is-empty');
+      this.nearbyItemsList.textContent = 'No coveted things nearby';
+      return;
+    }
+
+    this.nearbyItems?.classList.remove('is-empty');
+    this.nearbyItemsList.replaceChildren(...items.slice(0, 3).map((item) => {
+      const row = document.createElement('div');
+      row.className = `nearby-item nearby-item--${item.type ?? 'unknown'}`;
+      const name = document.createElement('span');
+      name.textContent = item.label ?? item.kind ?? 'Item';
+      const distance = document.createElement('strong');
+      distance.textContent = `${Math.round(item.distance)}u`;
+      row.append(name, distance);
+      return row;
+    }));
+  }
+
   formatHealthValue(value) {
     if (!Number.isFinite(value)) {
       return '0';
@@ -392,8 +487,8 @@ export class UI {
   showModeSelect() {
     this.startMenuTitle.textContent = 'Choose A Mode';
     this.startMenuCopy.textContent = this.developerModesVisible
-      ? 'Arena, Adventure, LAN Multiplayer, Test Mode, or Simulator. Debug modes are currently unlocked.'
-      : 'Arena is the configurable one-on-one/survival stage mode. Adventure is the forest-floor expedition. LAN supports arena duels and generated adventure formats. Press ` for debug modes.';
+      ? 'Arena, The Hunt, LAN Multiplayer, Test Mode, or Simulator. Debug modes are currently unlocked.'
+      : 'Arena is the configurable stage mode. The Hunt is the current forest-floor expedition. Adventure will come back later. Press ` for debug modes.';
     this.modeActions.classList.remove('hidden');
     this.singlePlayerSetup.classList.add('hidden');
   }
@@ -430,6 +525,7 @@ export class UI {
 
   setDeveloperModesVisible(visible) {
     this.developerModesVisible = Boolean(visible);
+    this.app?.classList.toggle('developer-modes-visible', this.developerModesVisible);
     this.startTestModeButton?.classList.toggle('hidden', !this.developerModesVisible);
     this.startSimulatorButton?.classList.toggle('hidden', !this.developerModesVisible);
     if (this.startMenu?.classList.contains('visible') && this.singlePlayerSetup?.classList.contains('hidden')) {

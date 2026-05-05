@@ -120,6 +120,7 @@ export class SnailActor {
   declare stalkPitchMin: any;
   declare stalkSegmentCount: any;
   declare stalkSegmentLength: any;
+  declare stalkRenderFidelity: any;
   declare stalkYawLimit: any;
   declare stalks: any;
   declare tiltRoot: any;
@@ -146,6 +147,7 @@ export class SnailActor {
     this.stalkPitchMin = config.stalkPitchMin ?? -0.7;
     this.stalkPitchMax = config.stalkPitchMax ?? 0.8;
     this.stalkSegmentCount = config.stalkSegmentCount ?? STALK_SEGMENT_COUNT;
+    this.stalkRenderFidelity = 'full';
     this.stalkLength = config.stalkLength ?? STALK_TOTAL_LENGTH;
     this.stalkSegmentLength = this.stalkLength / this.stalkSegmentCount;
     this.stalkSegmentRadius = config.stalkSegmentRadius ?? STALK_SEGMENT_RADIUS;
@@ -272,14 +274,12 @@ export class SnailActor {
     );
     segmentGeometry.translate(0, 0.5, 0);
 
-    const segments: THREE.Mesh[] = [];
-    for (let index = 0; index < this.stalkSegmentCount; index += 1) {
-      const segment = new THREE.Mesh(segmentGeometry, stalkMaterial);
-      segment.castShadow = false;
-      segment.receiveShadow = false;
-      segments.push(segment);
-      group.add(segment);
-    }
+    const segmentInstances = new THREE.InstancedMesh(segmentGeometry, stalkMaterial, this.stalkSegmentCount);
+    segmentInstances.name = `${side}-stalk-segments`;
+    segmentInstances.castShadow = false;
+    segmentInstances.receiveShadow = false;
+    segmentInstances.count = this.stalkSegmentCount;
+    group.add(segmentInstances);
 
     const eye = new THREE.Mesh(
       new THREE.SphereGeometry(this.stalkSegmentRadius * 1.35, 16, 16),
@@ -306,7 +306,9 @@ export class SnailActor {
     return {
       side,
       group,
-      segments,
+      segments: Array.from({ length: this.stalkSegmentCount }, () => null),
+      segmentInstances,
+      segmentMatrixObject: new THREE.Object3D(),
       eye,
       pupil,
       tipAnchor,
@@ -355,7 +357,12 @@ export class SnailActor {
     const burstMeshes = [
       this.body,
       this.shell,
-      ...(Object.values(this.stalks) as any[]).flatMap((stalk) => [stalk.eye, stalk.pupil, ...stalk.segments])
+      ...(Object.values(this.stalks) as any[]).flatMap((stalk) => [
+        stalk.segmentInstances,
+        stalk.eye,
+        stalk.pupil,
+        ...stalk.segments
+      ].filter(Boolean))
     ];
 
     this.deathBurstPieces = burstMeshes.map((mesh) => ({
@@ -467,27 +474,55 @@ export class SnailActor {
     this.mesh.updateMatrixWorld(true);
     const inverseWorld = this.mesh.matrixWorld.clone().invert();
 
-    for (let index = 0; index < stalk.segments.length; index += 1) {
-      const segment = stalk.segments[index];
-      const startLocal = stalk.nodes[index]?.clone().applyMatrix4(inverseWorld);
-      const endLocal = stalk.nodes[index + 1]?.clone().applyMatrix4(inverseWorld);
+    if (stalk.segmentInstances) {
+      let visibleCount = 0;
+      for (let index = 0; index < this.stalkSegmentCount; index += 1) {
+        const startLocal = stalk.nodes[index]?.clone().applyMatrix4(inverseWorld);
+        const endLocal = stalk.nodes[index + 1]?.clone().applyMatrix4(inverseWorld);
 
-      if (!startLocal || !endLocal) {
-        segment.visible = false;
-        continue;
+        if (!startLocal || !endLocal) {
+          continue;
+        }
+
+        const direction = endLocal.clone().sub(startLocal);
+        const length = direction.length();
+        if (length === 0) {
+          continue;
+        }
+
+        stalk.segmentMatrixObject.position.copy(startLocal);
+        stalk.segmentMatrixObject.quaternion.setFromUnitVectors(LOCAL_UP, direction.normalize());
+        stalk.segmentMatrixObject.scale.set(1, length, 1);
+        stalk.segmentMatrixObject.updateMatrix();
+        stalk.segmentInstances.setMatrixAt(visibleCount, stalk.segmentMatrixObject.matrix);
+        visibleCount += 1;
       }
 
-      const direction = endLocal.clone().sub(startLocal);
-      const length = direction.length();
-      segment.visible = length > 0;
+      stalk.segmentInstances.count = visibleCount;
+      stalk.segmentInstances.instanceMatrix.needsUpdate = true;
+    } else {
+      for (let index = 0; index < stalk.segments.length; index += 1) {
+        const segment = stalk.segments[index];
+        const startLocal = stalk.nodes[index]?.clone().applyMatrix4(inverseWorld);
+        const endLocal = stalk.nodes[index + 1]?.clone().applyMatrix4(inverseWorld);
 
-      if (length === 0) {
-        continue;
+        if (!startLocal || !endLocal) {
+          segment.visible = false;
+          continue;
+        }
+
+        const direction = endLocal.clone().sub(startLocal);
+        const length = direction.length();
+        segment.visible = length > 0;
+
+        if (length === 0) {
+          continue;
+        }
+
+        segment.position.copy(startLocal);
+        segment.quaternion.setFromUnitVectors(LOCAL_UP, direction.normalize());
+        segment.scale.set(1, length, 1);
       }
-
-      segment.position.copy(startLocal);
-      segment.quaternion.setFromUnitVectors(LOCAL_UP, direction.normalize());
-      segment.scale.set(1, length, 1);
     }
 
     const tipNode = stalk.nodes[stalk.nodes.length - 1];
@@ -725,7 +760,7 @@ export class SnailActor {
     this.controlIntensity = 0;
   }
 
-  applyMatchState(state, delta = 0) {
+  applyMatchState(state, delta = 0, options: any = {}) {
     if (!state) {
       this.resetDeathBurst();
       this.mesh.visible = false;
@@ -753,6 +788,8 @@ export class SnailActor {
       this.hasReceivedMatchState = true;
       return;
     }
+
+    this.setStalkRenderFidelity(options.stalkRenderFidelity ?? 'full');
 
     this.health = state.health;
     this.maxHealth = state.maxHealth;
@@ -822,7 +859,8 @@ export class SnailActor {
       this.applySyntheticStalkState(state, delta);
     }
 
-    if (!this.deathBurst.active) {
+    const shouldRenderStalks = this.stalkRenderFidelity !== 'hidden';
+    if (shouldRenderStalks && !this.deathBurst.active) {
       this.renderStalks();
     }
 
@@ -834,7 +872,9 @@ export class SnailActor {
     this.updateShellColor();
     this.updateDeathBurst(delta);
     this.updateMotionState(delta);
-    this.updateStalkVisualState();
+    if (shouldRenderStalks) {
+      this.updateStalkVisualState();
+    }
     this.mesh.userData.hasAppliedMatchState = true;
     this.hasReceivedMatchState = true;
   }
@@ -844,6 +884,14 @@ export class SnailActor {
       this.resetDeathBurst();
     }
     this.mesh.visible = visible;
+  }
+
+  setStalkRenderFidelity(fidelity = 'full') {
+    this.stalkRenderFidelity = fidelity;
+    const visible = fidelity !== 'hidden';
+    for (const stalk of (Object.values(this.stalks) as any[])) {
+      stalk.group.visible = visible;
+    }
   }
 
   applySupportNormal(supportNormal = LOCAL_UP) {

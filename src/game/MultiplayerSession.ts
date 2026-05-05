@@ -42,6 +42,7 @@ export function mergeMultiplayerSnapshot(previous: any, update: any, { replace =
     trailCellSize: update.trailCellSize ?? base?.trailCellSize,
     trailCells,
     worldProps: update.worldProps ?? base?.worldProps ?? [],
+    creatures: update.creatures ?? base?.creatures ?? [],
     events: update.events ?? [],
     players
   };

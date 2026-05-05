@@ -1,9 +1,31 @@
 import * as THREE from 'three';
 
+import {
+  getDistanceToWorldBoundsBoundary,
+  isPointInsideWorldBounds
+} from './WorldBounds.js';
+
 export const TERRAIN_VISUAL_SIZE = 60;
 export const TERRAIN_VISUAL_SEGMENTS = 120;
 export const EXPLORER_TERRAIN_PRESET = 'explorer_mossland';
 export const EXPLORER_REFERENCE_WORLD_RADIUS = 100;
+export const ARENA_DEW_RUSH_STAGE = 'arena_dew_rush';
+export const ARENA_SALT_BOWL_STAGE = 'arena_salt_bowl';
+export const ARENA_SHELL_DERBY_STAGE = 'arena_shell_derby';
+export const ARENA_FEAST_FRENZY_STAGE = 'arena_feast_frenzy';
+export const ARENA_HIGH_LEAF_STAGE = 'arena_high_leaf';
+export const ARENA_BIRD_PANIC_STAGE = 'arena_bird_panic';
+export const ARENA_CALCIUM_CROWN_STAGE = 'arena_calcium_crown';
+
+export const ARENA_EVENT_STAGE_PRESETS = Object.freeze([
+  ARENA_DEW_RUSH_STAGE,
+  ARENA_SALT_BOWL_STAGE,
+  ARENA_SHELL_DERBY_STAGE,
+  ARENA_FEAST_FRENZY_STAGE,
+  ARENA_HIGH_LEAF_STAGE,
+  ARENA_BIRD_PANIC_STAGE,
+  ARENA_CALCIUM_CROWN_STAGE
+]);
 
 export type TerrainPreset =
   | 'plane'
@@ -14,6 +36,13 @@ export type TerrainPreset =
   | 'paraboloid_bowl'
   | 'saddle'
   | 'ripple_bowl'
+  | typeof ARENA_DEW_RUSH_STAGE
+  | typeof ARENA_SALT_BOWL_STAGE
+  | typeof ARENA_SHELL_DERBY_STAGE
+  | typeof ARENA_FEAST_FRENZY_STAGE
+  | typeof ARENA_HIGH_LEAF_STAGE
+  | typeof ARENA_BIRD_PANIC_STAGE
+  | typeof ARENA_CALCIUM_CROWN_STAGE
   | typeof EXPLORER_TERRAIN_PRESET;
 
 export interface TerrainConfig {
@@ -27,6 +56,7 @@ export interface TerrainConfig {
   visualSize: number;
   visualSegments: number;
   worldRadius: number;
+  shoreline?: any;
 }
 
 export interface TerrainPresetOption {
@@ -49,12 +79,26 @@ export const EXPLORER_TERRAIN_PRESET_OPTIONS: readonly TerrainPresetOption[] = O
   { value: EXPLORER_TERRAIN_PRESET, label: 'Generated Forest Floor' }
 ]);
 
-export const ALL_TERRAIN_PRESET_OPTIONS: readonly TerrainPresetOption[] = Object.freeze([
-  ...TERRAIN_PRESET_OPTIONS,
-  ...EXPLORER_TERRAIN_PRESET_OPTIONS
+export const ARENA_EVENT_TERRAIN_PRESET_OPTIONS: readonly TerrainPresetOption[] = Object.freeze([
+  { value: ARENA_DEW_RUSH_STAGE, label: 'Dew Rush' },
+  { value: ARENA_SALT_BOWL_STAGE, label: 'Salt Bowl' },
+  { value: ARENA_SHELL_DERBY_STAGE, label: 'Shell Derby' },
+  { value: ARENA_FEAST_FRENZY_STAGE, label: 'Feast Frenzy' },
+  { value: ARENA_HIGH_LEAF_STAGE, label: 'High Leaf' },
+  { value: ARENA_BIRD_PANIC_STAGE, label: 'Bird Panic' },
+  { value: ARENA_CALCIUM_CROWN_STAGE, label: 'Calcium Crown' }
 ]);
 
-export const ARENA_TERRAIN_PRESET_OPTIONS: readonly TerrainPresetOption[] = ALL_TERRAIN_PRESET_OPTIONS;
+export const ALL_TERRAIN_PRESET_OPTIONS: readonly TerrainPresetOption[] = Object.freeze([
+  ...TERRAIN_PRESET_OPTIONS,
+  ...EXPLORER_TERRAIN_PRESET_OPTIONS,
+  ...ARENA_EVENT_TERRAIN_PRESET_OPTIONS
+]);
+
+export const ARENA_TERRAIN_PRESET_OPTIONS: readonly TerrainPresetOption[] = Object.freeze([
+  ...TERRAIN_PRESET_OPTIONS,
+  ...ARENA_EVENT_TERRAIN_PRESET_OPTIONS
+]);
 
 const VALID_TERRAIN_PRESETS = new Set(ALL_TERRAIN_PRESET_OPTIONS.map((entry) => entry.value));
 
@@ -68,7 +112,8 @@ export const DEFAULT_TERRAIN_CONFIG: Readonly<TerrainConfig> = Object.freeze({
   explorerSeed: 1,
   visualSize: TERRAIN_VISUAL_SIZE,
   visualSegments: TERRAIN_VISUAL_SEGMENTS,
-  worldRadius: 22
+  worldRadius: 22,
+  shoreline: null
 });
 
 function clamp(value: number, min: number, max: number): number {
@@ -86,6 +131,10 @@ function normalizeNumber(value: unknown, fallback: number, min: number, max: num
 
 function getNormalizedRadius(x: number, z: number, scale: number): number {
   return Math.hypot(x, z) / Math.max(0.0001, scale);
+}
+
+export function isArenaEventTerrainPreset(preset: unknown): preset is TerrainPreset {
+  return ARENA_EVENT_STAGE_PRESETS.includes(preset as any);
 }
 
 function getClampedSphereRadius(normalizedRadius: number): number {
@@ -159,8 +208,80 @@ function getExplorerScale(terrainConfig: Readonly<TerrainConfig>): number {
   );
 }
 
+function normalizeShorelineConfig(rawShoreline: any) {
+  if (!rawShoreline || typeof rawShoreline !== 'object') {
+    return null;
+  }
+
+  return {
+    ...rawShoreline,
+    beachWidth: normalizeNumber(rawShoreline.beachWidth, 0, 0, 4000),
+    waterLevel: normalizeNumber(rawShoreline.waterLevel, -0.55, -40, 40),
+    waterDepth: normalizeNumber(rawShoreline.waterDepth, 1.2, 0.05, 80),
+    waterBlend: normalizeNumber(rawShoreline.waterBlend, 70, 1, 800)
+  };
+}
+
+function getShorelineKey(shoreline: any) {
+  if (!shoreline) {
+    return 'none';
+  }
+
+  const landBounds = shoreline.landBounds ?? {};
+  const playBounds = shoreline.playBounds ?? {};
+  return [
+    shoreline.beachWidth,
+    shoreline.waterLevel,
+    shoreline.waterDepth,
+    shoreline.waterBlend,
+    landBounds.shape,
+    landBounds.radius,
+    landBounds.hexRadius,
+    landBounds.tiles?.length ?? 0,
+    playBounds.shape,
+    playBounds.radius
+  ].join(':');
+}
+
+export function getExplorerCoastWeights(x: number, z: number, terrainConfig: Readonly<TerrainConfig> = DEFAULT_TERRAIN_CONFIG) {
+  const shoreline = terrainConfig.shoreline;
+  if (!shoreline?.landBounds) {
+    return {
+      beachWeight: 0,
+      waterWeight: 0,
+      signedDistanceToLandEdge: Infinity,
+      waterLevel: terrainConfig.centerHeight - 0.55,
+      waterDepth: 1.2
+    };
+  }
+
+  const insideLand = isPointInsideWorldBounds(x, z, shoreline.landBounds);
+  const edgeDistance = getDistanceToWorldBoundsBoundary(x, z, shoreline.landBounds);
+  const signedDistanceToLandEdge = insideLand ? edgeDistance : -edgeDistance;
+  const beachWidth = Math.max(0.0001, shoreline.beachWidth ?? 1);
+  const waterBlend = Math.max(0.0001, shoreline.waterBlend ?? 70);
+  const insideBeach = insideLand
+    ? 1 - smoothstep(0, beachWidth, edgeDistance)
+    : 0;
+  const surfSand = insideLand
+    ? 0
+    : 1 - smoothstep(0, waterBlend, edgeDistance);
+  const waterWeight = insideLand
+    ? 0
+    : smoothstep(0, waterBlend, edgeDistance);
+
+  return {
+    beachWeight: clamp(Math.max(insideBeach, surfSand * 0.45), 0, 1),
+    waterWeight: clamp(waterWeight, 0, 1),
+    signedDistanceToLandEdge,
+    waterLevel: shoreline.waterLevel ?? terrainConfig.centerHeight - 0.55,
+    waterDepth: shoreline.waterDepth ?? 1.2
+  };
+}
+
 export function getExplorerTerrainRegionWeights(x: number, z: number, terrainConfig: Readonly<TerrainConfig> = DEFAULT_TERRAIN_CONFIG) {
   const scale = getExplorerScale(terrainConfig);
+  const coast = getExplorerCoastWeights(x, z, terrainConfig);
   const mountainWeight = getRegionWeight(x, z, 56 * scale, -58 * scale, 22 * scale, 30 * scale);
   const leafLitterWeight = Math.max(
     getRegionWeight(x, z, -58 * scale, -52 * scale, 38 * scale, 36 * scale),
@@ -193,6 +314,8 @@ export function getExplorerTerrainRegionWeights(x: number, z: number, terrainCon
     rootDirtWeight,
     gravelWeight,
     mossWeight,
+    beachWeight: coast.beachWeight,
+    waterWeight: coast.waterWeight,
     // Kept as a compatibility alias for older callers; explorer v3 treats this as leaf litter, not sand.
     desertWeight: leafLitterWeight
   };
@@ -232,30 +355,63 @@ function getExplorerMosslandHeight(x: number, z: number, terrainConfig: Readonly
     rootHeight * rootBlend
   );
 
-  return terrainConfig.centerHeight +
+  const landHeight = terrainConfig.centerHeight +
     blendedLowland +
     (gravelHeight * gravelWeight) +
     (rockyHeight * mountainWeight);
+  const coast = getExplorerCoastWeights(x, z, terrainConfig);
+  const sandNoise = fbm2((x + (23 * scale)) / (3.2 * scale), (z - (17 * scale)) / (3.2 * scale), seed + 733, 2, 0.58);
+  const sandHeight = terrainConfig.centerHeight - (amplitude * 0.04) + (sandNoise * amplitude * 0.025);
+  const beachHeight = THREE.MathUtils.lerp(landHeight, sandHeight, coast.beachWeight);
+  const waterFloorHeight = coast.waterLevel - coast.waterDepth;
+
+  return THREE.MathUtils.lerp(beachHeight, waterFloorHeight, coast.waterWeight);
 }
 
 export function getTerrainColor(x: number, z: number, terrainConfig: Readonly<TerrainConfig> = DEFAULT_TERRAIN_CONFIG): THREE.Color {
+  if (isArenaEventTerrainPreset(terrainConfig.preset)) {
+    switch (terrainConfig.preset) {
+      case ARENA_DEW_RUSH_STAGE:
+        return new THREE.Color(0x315f4c);
+      case ARENA_SALT_BOWL_STAGE:
+        return new THREE.Color(0x8f8a74);
+      case ARENA_SHELL_DERBY_STAGE:
+        return new THREE.Color(0x5e7047);
+      case ARENA_FEAST_FRENZY_STAGE:
+        return new THREE.Color(0x6a4a2d);
+      case ARENA_HIGH_LEAF_STAGE:
+        return new THREE.Color(0x4f7b3c);
+      case ARENA_BIRD_PANIC_STAGE:
+        return new THREE.Color(0x344c31);
+      case ARENA_CALCIUM_CROWN_STAGE:
+        return new THREE.Color(0x686c58);
+      default:
+        break;
+    }
+  }
+
   if (terrainConfig.preset !== EXPLORER_TERRAIN_PRESET) {
     return new THREE.Color(0x6e9f55);
   }
 
   const seed = terrainConfig.explorerSeed;
-  const { scale, mountainWeight, leafLitterWeight, rootDirtWeight, gravelWeight } = getExplorerTerrainRegionWeights(x, z, terrainConfig);
+  const { scale, mountainWeight, leafLitterWeight, rootDirtWeight, gravelWeight, beachWeight, waterWeight } = getExplorerTerrainRegionWeights(x, z, terrainConfig);
   const mossSpeckle = fbm2(x / (5.5 * scale), z / (5.5 * scale), seed + 509, 2, 0.5) * 0.08;
   const leafSpeckle = fbm2(x / (3.8 * scale), z / (3.8 * scale), seed + 619, 2, 0.55) * 0.06;
+  const sandSpeckle = fbm2(x / (1.9 * scale), z / (1.9 * scale), seed + 823, 2, 0.62) * 0.12;
   const moss = new THREE.Color(0x4f7f4c).offsetHSL(0, 0, mossSpeckle);
   const leafLitter = new THREE.Color(0x755733).offsetHSL(0, 0, leafSpeckle);
   const rootDirt = new THREE.Color(0x6a3f25);
   const gravel = new THREE.Color(0x7d7767);
   const rock = new THREE.Color(0x5f6260);
+  const sand = new THREE.Color(0xc8b574).offsetHSL(0.015, 0.04, sandSpeckle);
+  const waterFloor = new THREE.Color(0x357f92);
   const color = moss.clone().lerp(leafLitter, leafLitterWeight * 0.92);
   color.lerp(rootDirt, rootDirtWeight * 0.86);
   color.lerp(gravel, gravelWeight * 0.7);
   color.lerp(rock, mountainWeight * 0.9);
+  color.lerp(sand, beachWeight);
+  color.lerp(waterFloor, waterWeight * 0.88);
   return color;
 }
 
@@ -272,9 +428,10 @@ export function normalizeTerrainConfig(rawConfig: Partial<TerrainConfig> = {}): 
     rippleAmplitude: normalizeNumber(rawConfig.rippleAmplitude, DEFAULT_TERRAIN_CONFIG.rippleAmplitude, 0, 40),
     rippleFrequency: normalizeNumber(rawConfig.rippleFrequency, DEFAULT_TERRAIN_CONFIG.rippleFrequency, 0.1, 20),
     explorerSeed: Math.floor(normalizeNumber(rawConfig.explorerSeed, DEFAULT_TERRAIN_CONFIG.explorerSeed, 1, 999999)),
-    visualSize: normalizeNumber(rawConfig.visualSize, DEFAULT_TERRAIN_CONFIG.visualSize, TERRAIN_VISUAL_SIZE, 4000),
+    visualSize: normalizeNumber(rawConfig.visualSize, DEFAULT_TERRAIN_CONFIG.visualSize, TERRAIN_VISUAL_SIZE, 8000),
     visualSegments: Math.floor(normalizeNumber(rawConfig.visualSegments, DEFAULT_TERRAIN_CONFIG.visualSegments, 20, 360)),
-    worldRadius: normalizeNumber(rawConfig.worldRadius, DEFAULT_TERRAIN_CONFIG.worldRadius, 10, 2000)
+    worldRadius: normalizeNumber(rawConfig.worldRadius, DEFAULT_TERRAIN_CONFIG.worldRadius, 10, 2000),
+    shoreline: normalizeShorelineConfig(rawConfig.shoreline)
   };
 }
 
@@ -290,8 +447,24 @@ export function getTerrainConfigKey(terrainConfig: Readonly<TerrainConfig> = DEF
     normalized.explorerSeed,
     normalized.visualSize,
     normalized.visualSegments,
-    normalized.worldRadius
+    normalized.worldRadius,
+    getShorelineKey(normalized.shoreline)
   ].join('|');
+}
+
+export function getTerrainWaterInfo(x: number, z: number, terrainConfig: Readonly<TerrainConfig> = DEFAULT_TERRAIN_CONFIG) {
+  if (terrainConfig.preset !== EXPLORER_TERRAIN_PRESET) {
+    return {
+      waterWeight: 0,
+      surfaceHeight: null
+    };
+  }
+
+  const coast = getExplorerCoastWeights(x, z, terrainConfig);
+  return {
+    waterWeight: coast.waterWeight,
+    surfaceHeight: coast.waterWeight > 0.05 ? coast.waterLevel : null
+  };
 }
 
 export function getTerrainHeight(x: number, z: number, terrainConfig: Readonly<TerrainConfig> = DEFAULT_TERRAIN_CONFIG): number {
@@ -303,6 +476,13 @@ export function getTerrainHeight(x: number, z: number, terrainConfig: Readonly<T
 
   switch (terrainConfig.preset) {
     case 'plane':
+    case ARENA_DEW_RUSH_STAGE:
+    case ARENA_SALT_BOWL_STAGE:
+    case ARENA_SHELL_DERBY_STAGE:
+    case ARENA_FEAST_FRENZY_STAGE:
+    case ARENA_HIGH_LEAF_STAGE:
+    case ARENA_BIRD_PANIC_STAGE:
+    case ARENA_CALCIUM_CROWN_STAGE:
       return centerHeight;
     case 'sphere_dome':
       return centerHeight + (
@@ -359,6 +539,48 @@ export function createTerrainGeometry(
 
   positions.needsUpdate = true;
   geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+  geometry.computeVertexNormals();
+  return geometry;
+}
+
+export function createWaterGeometry(
+  terrainConfig: Readonly<TerrainConfig> = DEFAULT_TERRAIN_CONFIG,
+  size = TERRAIN_VISUAL_SIZE,
+  segments = 72
+) {
+  const geometry = new THREE.BufferGeometry();
+  const positions: number[] = [];
+  const halfSize = size / 2;
+  const safeSegments = Math.max(4, Math.floor(segments));
+  const step = size / safeSegments;
+
+  for (let row = 0; row < safeSegments; row += 1) {
+    const z0 = -halfSize + row * step;
+    const z1 = z0 + step;
+    const centerZ = (z0 + z1) / 2;
+
+    for (let col = 0; col < safeSegments; col += 1) {
+      const x0 = -halfSize + col * step;
+      const x1 = x0 + step;
+      const centerX = (x0 + x1) / 2;
+      const water = getTerrainWaterInfo(centerX, centerZ, terrainConfig);
+      if (water.waterWeight <= 0.08 || water.surfaceHeight === null) {
+        continue;
+      }
+
+      const y = water.surfaceHeight + 0.035;
+      positions.push(
+        x0, -z0, y,
+        x1, -z0, y,
+        x1, -z1, y,
+        x0, -z0, y,
+        x1, -z1, y,
+        x0, -z1, y
+      );
+    }
+  }
+
+  geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
   geometry.computeVertexNormals();
   return geometry;
 }
