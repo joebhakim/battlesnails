@@ -1,5 +1,19 @@
 import { defineConfig, type Plugin } from 'vite';
+import { readFileSync } from 'node:fs';
 import { resolve } from 'path';
+
+function readHttpsConfigFromEnv() {
+  const keyPath = process.env.BATTLESNAILS_HTTPS_KEY ?? process.env.SSL_KEY_FILE;
+  const certPath = process.env.BATTLESNAILS_HTTPS_CERT ?? process.env.SSL_CRT_FILE;
+  if (!keyPath || !certPath) {
+    return null;
+  }
+
+  return {
+    key: readFileSync(keyPath),
+    cert: readFileSync(certPath)
+  };
+}
 
 function createLocalMultiplayerDevPlugin(): Plugin {
   let localServer: any = null;
@@ -14,16 +28,19 @@ function createLocalMultiplayerDevPlugin(): Plugin {
       }
 
       const { createLocalMultiplayerServer } = await import('./server/createLocalMultiplayerServer.js');
+      const tls = readHttpsConfigFromEnv();
       localServer = createLocalMultiplayerServer({
         port: 2567,
-        host: '0.0.0.0'
+        host: '0.0.0.0',
+        tls
       });
 
       try {
         await localServer.start();
         startedByPlugin = true;
+        const protocol = tls ? 'wss' : 'ws';
         viteServer.config.logger.info(
-          'BattleSnails multiplayer server listening on ws://localhost:2567 and your LAN IP on port 2567',
+          `BattleSnails multiplayer server listening on ${protocol}://localhost:2567 and your LAN IP on port 2567`,
           { clear: false }
         );
       } catch (error: any) {
@@ -58,14 +75,18 @@ function createLocalMultiplayerDevPlugin(): Plugin {
   };
 }
 
+const httpsConfig = readHttpsConfigFromEnv();
+
 export default defineConfig({
   plugins: [createLocalMultiplayerDevPlugin()],
   server: {
     host: '0.0.0.0',
-    open: true
+    open: true,
+    https: httpsConfig ?? undefined
   },
   preview: {
-    host: '0.0.0.0'
+    host: '0.0.0.0',
+    https: httpsConfig ?? undefined
   },
   resolve: {
     alias: {

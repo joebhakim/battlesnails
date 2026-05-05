@@ -4,6 +4,7 @@ dist/
 dist-ssr/
 asset_studio/
 map_candidates/
+.certs/
 *.local
 
 # Editor directories and files

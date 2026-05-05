@@ -55,6 +55,18 @@ If you want to run the WebSocket server separately, use:
 npm run mp:server
 ```
 
+For microphone/mobile testing, run the page and WebSocket server over HTTPS/WSS with a local certificate:
+
+```bash
+BATTLESNAILS_HTTPS_KEY=.certs/battlesnails-dev.key BATTLESNAILS_HTTPS_CERT=.certs/battlesnails-dev.crt npm run dev
+```
+
+The standalone multiplayer server uses the same env vars:
+
+```bash
+BATTLESNAILS_HTTPS_KEY=.certs/battlesnails-dev.key BATTLESNAILS_HTTPS_CERT=.certs/battlesnails-dev.crt npm run mp:server
+```
+
 ## Deployment
 
 The static browser client is Netlify-ready. Production deploys use `npm run build` and publish the generated `dist` directory, as configured in `netlify.toml`.
@@ -206,6 +218,7 @@ The visible online test mode is authoritative and intentionally simple.
 - The browser connects to a WebSocket server on port `2567`.
 - In `npm run dev`, Vite auto-starts the multiplayer server and binds both HTTP and WebSocket services to `0.0.0.0` for same-network access. Residential-IP testing additionally needs router port forwarding.
 - `npm run mp:server` starts the same server manually.
+- If `BATTLESNAILS_HTTPS_KEY` and `BATTLESNAILS_HTTPS_CERT` point to local certificate files, Vite serves HTTPS and the multiplayer server serves WSS. Browser microphone APIs generally need this secure-context path on phones.
 - There is one fixed two-player room.
 - The first client becomes player `1`.
 - The second client becomes player `2`.

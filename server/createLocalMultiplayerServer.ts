@@ -1,4 +1,5 @@
 import { createMinimalWebSocketServer, type MinimalWebSocketConnection } from './MinimalWebSocketServer.js';
+import type { ServerOptions as HttpsServerOptions } from 'node:https';
 import { MatchSimulation, MATCH_TICK_DURATION } from '../src/sim/MatchSimulation.js';
 import { createBufferedInput, createIdleInput, normalizePlayerInput } from '../src/protocol/InputProtocol.js';
 import { createTrailCellKey } from '../src/protocol/SnapshotProtocol.js';
@@ -22,6 +23,7 @@ interface LocalMultiplayerServerOptions {
   tickDuration?: number;
   npcCount?: number;
   snapshotRate?: number;
+  tls?: HttpsServerOptions | null;
 }
 
 function clampNpcCount(value: unknown): number {
@@ -50,10 +52,17 @@ export function createLocalMultiplayerServer(options: LocalMultiplayerServerOpti
   const snapshotRate = clampSnapshotRate(options.snapshotRate ?? process.env.NETWORK_SNAPSHOT_RATE ?? DEFAULT_NETWORK_SNAPSHOT_RATE);
   const simulationRate = 1 / tickDuration;
   const snapshotEveryTicks = Math.max(1, Math.round(simulationRate / snapshotRate));
-  const { server, onConnection } = createMinimalWebSocketServer((request, response) => {
-    response.writeHead(200, { 'content-type': 'application/json' });
-    response.end(JSON.stringify({ ok: true, mode: 'online-test-multiplayer' }));
-  });
+  const { server, onConnection } = createMinimalWebSocketServer(
+    (request, response) => {
+      response.writeHead(200, { 'content-type': 'application/json' });
+      response.end(JSON.stringify({
+        ok: true,
+        mode: 'online-test-multiplayer',
+        secure: Boolean(options.tls)
+      }));
+    },
+    { tls: options.tls ?? null }
+  );
 
   const room: {
     clients: Map<number, MinimalWebSocketConnection>;

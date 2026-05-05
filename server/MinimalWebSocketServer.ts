@@ -1,10 +1,14 @@
 import { createHash } from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import http from 'node:http';
+import https from 'node:https';
 
 const WEBSOCKET_GUID = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11';
 
 type RequestHandler = (request: http.IncomingMessage, response: http.ServerResponse) => void;
+type MinimalWebSocketServerOptions = {
+  tls?: https.ServerOptions | null;
+};
 
 function encodeFrame(opcode: number, payloadBuffer: any = Buffer.alloc(0)) {
   const payloadLength = payloadBuffer.length;
@@ -40,6 +44,7 @@ export class MinimalWebSocketConnection extends EventEmitter {
     this.socket = socket;
     this.buffer = Buffer.alloc(0);
     this.closed = false;
+    this.on('error', () => {});
 
     this.socket.on('data', (chunk) => {
       this.buffer = Buffer.concat([this.buffer, chunk]);
@@ -154,8 +159,11 @@ export class MinimalWebSocketConnection extends EventEmitter {
   }
 }
 
-export function createMinimalWebSocketServer(requestHandler: RequestHandler | null = null) {
-  const server = http.createServer((request, response) => {
+export function createMinimalWebSocketServer(
+  requestHandler: RequestHandler | null = null,
+  options: MinimalWebSocketServerOptions = {}
+) {
+  const requestListener = (request: http.IncomingMessage, response: http.ServerResponse) => {
     if (requestHandler) {
       requestHandler(request, response);
       return;
@@ -163,7 +171,10 @@ export function createMinimalWebSocketServer(requestHandler: RequestHandler | nu
 
     response.writeHead(200, { 'content-type': 'application/json' });
     response.end(JSON.stringify({ ok: true }));
-  });
+  };
+  const server = options.tls
+    ? https.createServer(options.tls, requestListener)
+    : http.createServer(requestListener);
 
   const eventBus = new EventEmitter();
   server.on('upgrade', (request, socket) => {
