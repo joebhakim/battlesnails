@@ -1,12 +1,17 @@
 import { ARENA_TERRAIN_PRESET_OPTIONS, DEFAULT_TERRAIN_CONFIG } from '../world/Terrain.js';
 
 export const MULTIPLAYER_MATCH_MODE = Object.freeze({
+  ONLINE_TEST_PLANE: 'online_test_plane',
   ARENA_PVP: 'arena_pvp',
   ADVENTURE_COOP: 'adventure_coop',
   ADVENTURE_PVP: 'adventure_pvp'
 });
 
 export const MULTIPLAYER_MATCH_MODE_OPTIONS = Object.freeze([
+  Object.freeze({
+    value: MULTIPLAYER_MATCH_MODE.ONLINE_TEST_PLANE,
+    label: 'Online Test Plane'
+  }),
   Object.freeze({
     value: MULTIPLAYER_MATCH_MODE.ARENA_PVP,
     label: 'Arena 1v1'
@@ -22,7 +27,7 @@ export const MULTIPLAYER_MATCH_MODE_OPTIONS = Object.freeze([
 ]);
 
 export const DEFAULT_MULTIPLAYER_OPTIONS = Object.freeze({
-  matchMode: MULTIPLAYER_MATCH_MODE.ARENA_PVP,
+  matchMode: MULTIPLAYER_MATCH_MODE.ONLINE_TEST_PLANE,
   stagePreset: DEFAULT_TERRAIN_CONFIG.preset
 });
 
@@ -33,7 +38,7 @@ export const MULTIPLAYER_OPTIONS_SCHEMA = Object.freeze([
   Object.freeze({
     id: 'matchMode',
     label: 'Format',
-    section: 'LAN',
+    section: 'Online',
     defaultValue: DEFAULT_MULTIPLAYER_OPTIONS.matchMode,
     structural: true,
     kind: 'choice',
@@ -42,7 +47,7 @@ export const MULTIPLAYER_OPTIONS_SCHEMA = Object.freeze([
   Object.freeze({
     id: 'stagePreset',
     label: 'Arena Stage',
-    section: 'LAN',
+    section: 'Online',
     defaultValue: DEFAULT_MULTIPLAYER_OPTIONS.stagePreset,
     structural: true,
     kind: 'choice',
@@ -51,14 +56,25 @@ export const MULTIPLAYER_OPTIONS_SCHEMA = Object.freeze([
 ]);
 
 export function normalizeMultiplayerOptions(rawOptions: any = {}) {
-  return {
-    matchMode: VALID_MATCH_MODES.has(rawOptions.matchMode)
-      ? rawOptions.matchMode
-      : DEFAULT_MULTIPLAYER_OPTIONS.matchMode,
-    stagePreset: VALID_STAGE_PRESETS.has(rawOptions.stagePreset)
+  const matchMode = VALID_MATCH_MODES.has(rawOptions.matchMode)
+    ? rawOptions.matchMode
+    : DEFAULT_MULTIPLAYER_OPTIONS.matchMode;
+  const stagePreset = matchMode === MULTIPLAYER_MATCH_MODE.ONLINE_TEST_PLANE
+    ? DEFAULT_TERRAIN_CONFIG.preset
+    : VALID_STAGE_PRESETS.has(rawOptions.stagePreset)
       ? rawOptions.stagePreset
-      : DEFAULT_MULTIPLAYER_OPTIONS.stagePreset
+      : DEFAULT_MULTIPLAYER_OPTIONS.stagePreset;
+
+  return {
+    matchMode,
+    stagePreset
   };
+}
+
+export function isArenaMultiplayerMode(options: any = {}) {
+  const normalized = normalizeMultiplayerOptions(options);
+  return normalized.matchMode === MULTIPLAYER_MATCH_MODE.ONLINE_TEST_PLANE ||
+    normalized.matchMode === MULTIPLAYER_MATCH_MODE.ARENA_PVP;
 }
 
 export function isAdventureMultiplayerMode(options: any = {}) {

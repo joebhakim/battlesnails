@@ -61,7 +61,7 @@ class TestClient {
   }
 }
 
-test('multiplayer server auto-pairs two clients into an arena 1v1 by default', async () => {
+test('multiplayer server auto-pairs two clients into an online plane room by default', async () => {
   const server = createLocalMultiplayerServer({ port: 0 });
   await server.start();
   const port = server.getPort();
@@ -82,7 +82,10 @@ test('multiplayer server auto-pairs two clients into an arena 1v1 by default', a
 
   assert.equal(welcomeA.slot, 1);
   assert.equal(welcomeB.slot, 2);
-  assert.equal(welcomeA.options.matchMode, MULTIPLAYER_MATCH_MODE.ARENA_PVP);
+  assert.equal(welcomeA.options.matchMode, MULTIPLAYER_MATCH_MODE.ONLINE_TEST_PLANE);
+  assert.equal(welcomeA.options.stagePreset, 'plane');
+  assert.equal(matchStartA.options.matchMode, MULTIPLAYER_MATCH_MODE.ONLINE_TEST_PLANE);
+  assert.equal(matchStartA.options.stagePreset, 'plane');
   assert.equal(matchStartA.snapshot.phase, 'running');
   assert.equal(matchStartB.snapshot.players.length, 2);
   assert.equal('stalks' in matchStartA.snapshot.players[0], false);
@@ -100,6 +103,41 @@ test('multiplayer server auto-pairs two clients into an arena 1v1 by default', a
   assert.equal(dynamicSnapshot.snapshot.players[0].profileName, undefined);
   assert.equal('stalks' in dynamicSnapshot.snapshot.players[0], false);
   assert.equal(typeof dynamicSnapshot.snapshot.players[0].position.x, 'number');
+
+  clientA.close();
+  clientB.close();
+  await server.stop();
+});
+
+test('online multiplayer plane room ignores stage overrides', async () => {
+  const server = createLocalMultiplayerServer({ port: 0 });
+  await server.start();
+  const port = server.getPort();
+  const url = `ws://127.0.0.1:${port}`;
+
+  const clientA = new TestClient(url);
+  const clientB = new TestClient(url);
+  await clientA.open();
+  await clientB.open();
+
+  clientA.send({
+    type: 'join',
+    options: {
+      matchMode: MULTIPLAYER_MATCH_MODE.ONLINE_TEST_PLANE,
+      stagePreset: 'sphere_dome'
+    }
+  });
+  clientB.send({ type: 'join' });
+
+  const welcomeA = await clientA.nextMessageOfType('welcome');
+  const matchStartA = await clientA.nextMessageOfType('match_start');
+
+  assert.equal(welcomeA.options.matchMode, MULTIPLAYER_MATCH_MODE.ONLINE_TEST_PLANE);
+  assert.equal(welcomeA.options.stagePreset, 'plane');
+  assert.equal(matchStartA.options.stagePreset, 'plane');
+  assert.equal(matchStartA.snapshot.terrain?.preset, 'plane');
+  assert.equal(matchStartA.snapshot.worldProps.length, 0);
+  assert.equal(matchStartA.snapshot.creatures.length, 0);
 
   clientA.close();
   clientB.close();

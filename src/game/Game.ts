@@ -36,7 +36,6 @@ import { DEFAULT_BOT_MAX_HEALTH, DEFAULT_MAX_HEALTH } from '../sim/MatchSimulati
 import { DEFAULT_TERRAIN_CONFIG } from '../world/Terrain.js';
 import {
   DEFAULT_MULTIPLAYER_OPTIONS,
-  MULTIPLAYER_OPTIONS_SCHEMA,
   normalizeMultiplayerOptions
 } from '../sim/MultiplayerOptions.js';
 import { getPowerupForProp } from '../sim/SnailPowerups.js';
@@ -754,11 +753,11 @@ export class Game {
 
   showMultiplayerSetup() {
     this.ui.showModeSetup({
-      title: 'LAN Multiplayer',
-      copy: 'Choose an arena duel or a generated forest-floor adventure format for two LAN players.',
-      schema: MULTIPLAYER_OPTIONS_SCHEMA,
+      title: 'Online Multiplayer',
+      copy: 'Join the two-snail flat-plane test room.',
+      schema: [],
       values: DEFAULT_MULTIPLAYER_OPTIONS,
-      startLabel: 'Join LAN',
+      startLabel: 'Join Online',
       onStart: this.startMultiplayerSession.bind(this)
     });
   }

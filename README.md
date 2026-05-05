@@ -5,11 +5,11 @@ BattleSnails is a deliberately jarring third-person arena game built with Three.
 The project currently supports five modes:
 - `Arena`: configurable local combat against one or more enemy presets, with persisted stage and encounter options
 - `The Hunt`: the named `Moss Atoll` explorer map, with seven continuous forest hexes wrapped by a twelve-hex beach ring, shallow water, fixed landmarks, dense micro-props, and configurable NPC snail count/strength
-- `LAN Multiplayer`: two human players in Arena 1v1, Adventure co-op PvE, or Adventure PvP formats
+- `Online Multiplayer`: a deliberately simple two-human flat-plane test room backed by the authoritative WebSocket server
 - `Test Mode`: a debug-key tuning lab with staged sliders, configurable bot count, and an explicit apply step
 - `Simulator`: a debug-key balance harness that batch-runs a simulated humanlike player against the bot
 
-The browser client handles rendering, input, HUD, music, simulator reports, and debug tools. The actual match rules live in a shared authoritative simulation used by local modes and the LAN server.
+The browser client handles rendering, input, HUD, music, simulator reports, and debug tools. The actual match rules live in a shared authoritative simulation used by local modes and the multiplayer server.
 
 ## Table Of Contents
 
@@ -18,7 +18,7 @@ The browser client handles rendering, input, HUD, music, simulator reports, and 
 - [Controls](#controls)
 - [Gameplay Flow](#gameplay-flow)
 - [Arena And Combat](#arena-and-combat)
-- [LAN Multiplayer](#lan-multiplayer)
+- [Online Multiplayer](#online-multiplayer)
 - [Development](#development)
 - [Deployment](#deployment)
 - [Architecture](#architecture)
@@ -39,15 +39,15 @@ The browser client handles rendering, input, HUD, music, simulator reports, and 
    npm run dev
    ```
 
-3. Open the Vite URL in your browser. In dev mode the app is served on your LAN and the multiplayer server is auto-started on port `2567`.
+3. Open the Vite URL in your browser. In dev mode the app is served on all local interfaces and the multiplayer server is auto-started on port `2567`.
 
-4. For LAN play, open the same URL on a second machine on the same network, for example:
+4. For same-network play, open the same URL on a second machine on the same network, for example:
 
    ```text
    http://<host-ip>:5173
    ```
 
-5. Choose `Arena`, `The Hunt`, or `LAN Multiplayer` from the start menu. Press the backtick key to reveal `Test Mode` and `Simulator`.
+5. Choose `Arena`, `The Hunt`, or `Online Multiplayer` from the start menu. Press the backtick key to reveal `Test Mode` and `Simulator`.
 
 If you want to run the WebSocket server separately, use:
 
@@ -59,13 +59,13 @@ npm run mp:server
 
 The static browser client is Netlify-ready. Production deploys use `npm run build` and publish the generated `dist` directory, as configured in `netlify.toml`.
 
-Netlify serves Arena, The Hunt, debug modes, and the browser client. The LAN multiplayer WebSocket server is still a separate Node process and needs a separate host before online multiplayer can work from the deployed site.
+Netlify serves Arena, The Hunt, debug modes, and the browser client. The multiplayer WebSocket server is still a separate Node process and needs a separate host before online multiplayer can work from the deployed site.
 
 ## Modes And Rules
 
 - `Arena`: one human player vs a simple encounter preset chosen from the start menu. Stages include the conic-section heightfields plus small, extreme designed event arenas.
 - `The Hunt`: one human player on the `Moss Atoll` forest/beach map. Setup is intentionally narrow: choose NPC snail count and a `1..9` strength scale.
-- `LAN Multiplayer`: two human players in Arena 1v1, Adventure co-op PvE, or Adventure PvP.
+- `Online Multiplayer`: two human players in the flat `Online Test Plane` room. Older arena/adventure room formats still exist in server options for development, but the visible multiplayer path is intentionally boring while we test real network behavior.
 - `Test Mode`: hidden behind the backtick key; one human player plus `0..40` local bots, staged tuning controls, local browser persistence for the last-used lab settings, and switchable terrain presets.
 - `Simulator`: hidden behind the backtick key; an automated browser-visible balance runner. It runs an average-but-skilled simulated humanlike player across selected stage/enemy-mode searches, reports aggregate and per-scenario metrics, replays a representative match, and uses the same duel knobs for HP, movement, combat, stalk, and bot behavior.
 - Human players have `600 HP` by default.
@@ -144,9 +144,10 @@ Simulator flow:
 - After the batch completes, the arena shows a representative visual match.
 - The panel reports overall and per-scenario win rate, duration, damage, hit events, trail usage, remaining HP, and can copy the report as JSON.
 
-LAN multiplayer win condition:
-- Arena 1v1 and Adventure PvP end when only one human player remains alive.
-- Adventure co-op PvE continues while at least one human and one enemy are alive.
+Online multiplayer win condition:
+- The visible `Online Test Plane` room ends when only one human player remains alive.
+- Older Arena 1v1 and Adventure PvP server formats end when only one human player remains alive.
+- Older Adventure co-op PvE continues while at least one human and one enemy are alive.
 
 ## Arena And Combat
 
@@ -198,25 +199,25 @@ LAN multiplayer win condition:
 - When an NPC dies, its body rapidly swells and its pieces burst outward in random directions for about five seconds.
 - The effect is intentionally rough and janky rather than polished.
 
-## LAN Multiplayer
+## Online Multiplayer
 
-The LAN mode is authoritative and intentionally simple.
+The visible online test mode is authoritative and intentionally simple.
 
 - The browser connects to a WebSocket server on port `2567`.
-- In `npm run dev`, Vite auto-starts the multiplayer server and binds both HTTP and WebSocket services to `0.0.0.0` for LAN access.
+- In `npm run dev`, Vite auto-starts the multiplayer server and binds both HTTP and WebSocket services to `0.0.0.0` for same-network access. Residential-IP testing additionally needs router port forwarding.
 - `npm run mp:server` starts the same server manually.
 - There is one fixed two-player room.
 - The first client becomes player `1`.
 - The second client becomes player `2`.
 - A third client is rejected as room full.
-- Arena 1v1 starts with only the two human players.
-- Adventure co-op PvE and Adventure PvP use the generated forest-floor world with a boss enemy.
+- The default and visible room is `Online Test Plane`: two human players, flat plane terrain, no world props, no creatures, no generated Hunt world.
+- Arena 1v1 and Adventure co-op/PvP server options still exist as development paths, but they are not exposed in the current start-menu flow.
 - The online target is `30 Hz` server-to-client dynamic snapshots while the authoritative simulation keeps running at `60 Hz`.
 - `NETWORK_SNAPSHOT_RATE` can override the server-to-client snapshot rate for experiments, clamped to `10..60` Hz and defaulting to `30` Hz.
 - Clients send inputs only.
 - The server owns movement, jumps, rope simulation, hits, health, trails, and win state.
-- LAN match start sends static terrain/prop/player metadata once; regular snapshots send dynamic state plus trail-cell deltas.
-- LAN snapshots omit authoritative stalk rope nodes; clients draw remote stalks as procedural visuals from compact player state.
+- Match start sends static terrain/prop/player metadata once; regular snapshots send dynamic state plus trail-cell deltas.
+- Network snapshots omit authoritative stalk rope nodes; clients draw remote stalks as procedural visuals from compact player state.
 - If one player disconnects, the other is returned to a waiting state and the next join starts a fresh match.
 
 ## Development
@@ -404,7 +405,7 @@ Prefer `--headful` for matching the FPS you see while playing. Headless Chromium
 <details>
 <summary>Shared simulation and world state</summary>
 
-- `src/protocol/InputProtocol.ts`: shared input defaults and normalization used by browser sessions, bots, simulator tooling, and the LAN server.
+- `src/protocol/InputProtocol.ts`: shared input defaults and normalization used by browser sessions, bots, simulator tooling, and the multiplayer server.
 - `src/protocol/SnapshotProtocol.ts`: custom network snapshot merge and trail-delta helpers. This is the home for future quantized network payloads.
 - `src/sim/MatchSimulation.ts`: authoritative match orchestrator for player state, movement, jump, rope control, collisions, wet trails, health, and victory.
 - `src/sim/SnapshotSerialization.ts`: sim-owned full and network snapshot DTO construction.
@@ -434,8 +435,8 @@ Prefer `--headful` for matching the FPS you see while playing. Headless Chromium
 
 - `src/game/SinglePlayerSession.ts`: runs the shared simulation locally against a simple enemy preset.
 - `src/game/SimulatorSession.ts`: runs visual humanlike-vs-bot balance batches and exposes simulator reports.
-- `src/game/MultiplayerSession.ts`: connects to the LAN server, sends local input, and renders authoritative snapshots.
-- `src/network/LocalMultiplayerClient.ts`: minimal browser WebSocket client for the fixed LAN room.
+- `src/game/MultiplayerSession.ts`: connects to the multiplayer server, sends local input, and renders authoritative snapshots.
+- `src/network/LocalMultiplayerClient.ts`: minimal browser WebSocket client for the fixed two-player room.
 - `server/`: Node-side authoritative multiplayer runtime and minimal WebSocket server implementation.
 
 </details>
@@ -476,9 +477,9 @@ The current debug mode is text-only. It does not add scene helpers, wireframes, 
 
 ### Shared authoritative simulation
 
-- Arena, The Hunt, and LAN multiplayer use the same movement, jump, stalk physics, trail, damage, and win logic.
+- Arena, The Hunt, and online multiplayer use the same movement, jump, stalk physics, trail, damage, and win logic.
 - The browser client is primarily a renderer and input source.
-- LAN clients do not author world state.
+- Multiplayer clients do not author world state.
 - Terrain is part of authoritative snapshot state. Arena uses conic-section and designed event stages; The Hunt uses the generated forest-floor map as its full expedition map.
 
 ### Bot behavior

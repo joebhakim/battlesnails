@@ -63,6 +63,7 @@ export function evaluateMatchEndState({ mode, players }: any) {
 
   if (
     mode === 'multiplayer' ||
+    mode === 'multiplayer_online_test_plane' ||
     mode === 'multiplayer_arena_pvp' ||
     mode === 'multiplayer_adventure_pvp'
   ) {

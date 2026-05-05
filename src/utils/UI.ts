@@ -487,7 +487,7 @@ export class UI {
   showModeSelect() {
     this.startMenuTitle.textContent = 'Choose A Mode';
     this.startMenuCopy.textContent = this.developerModesVisible
-      ? 'Arena, The Hunt, LAN Multiplayer, Test Mode, or Simulator. Debug modes are currently unlocked.'
+      ? 'Arena, The Hunt, Online Multiplayer, Test Mode, or Simulator. Debug modes are currently unlocked.'
       : 'Arena is the configurable stage mode. The Hunt is the current forest-floor expedition. Adventure will come back later. Press ` for debug modes.';
     this.modeActions.classList.remove('hidden');
     this.singlePlayerSetup.classList.add('hidden');

@@ -5,6 +5,7 @@ import { createTrailCellKey } from '../src/protocol/SnapshotProtocol.js';
 import { BotController } from '../src/sim/BotController.js';
 import { createArenaEnvironment } from '../src/sim/ArenaEnvironment.js';
 import {
+  isArenaMultiplayerMode,
   MULTIPLAYER_MATCH_MODE,
   normalizeMultiplayerOptions
 } from '../src/sim/MultiplayerOptions.js';
@@ -51,7 +52,7 @@ export function createLocalMultiplayerServer(options: LocalMultiplayerServerOpti
   const snapshotEveryTicks = Math.max(1, Math.round(simulationRate / snapshotRate));
   const { server, onConnection } = createMinimalWebSocketServer((request, response) => {
     response.writeHead(200, { 'content-type': 'application/json' });
-    response.end(JSON.stringify({ ok: true, mode: 'lan-multiplayer' }));
+    response.end(JSON.stringify({ ok: true, mode: 'online-test-multiplayer' }));
   });
 
   const room: {
@@ -198,11 +199,13 @@ export function createLocalMultiplayerServer(options: LocalMultiplayerServerOpti
   function createMatchConfig() {
     const normalizedOptions = normalizeMultiplayerOptions(roomOptions);
 
-    if (normalizedOptions.matchMode === MULTIPLAYER_MATCH_MODE.ARENA_PVP) {
+    if (isArenaMultiplayerMode(normalizedOptions)) {
       const environment = createArenaEnvironment(normalizedOptions);
       return {
         options: normalizedOptions,
-        mode: 'multiplayer_arena_pvp',
+        mode: normalizedOptions.matchMode === MULTIPLAYER_MATCH_MODE.ONLINE_TEST_PLANE
+          ? 'multiplayer_online_test_plane'
+          : 'multiplayer_arena_pvp',
         players: [
           { slot: 1, profile: 'human', connected: true },
           { slot: 2, profile: 'human', connected: true }
@@ -380,7 +383,7 @@ export function createLocalMultiplayerServer(options: LocalMultiplayerServerOpti
             connection.sendJson({
               type: 'error',
               code: 'room_full',
-              message: 'The LAN room is already full.'
+              message: 'The online test room is already full.'
             });
             connection.close(1000, 'Room full');
             return;
