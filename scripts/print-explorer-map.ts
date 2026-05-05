@@ -127,7 +127,7 @@ function renderUsage() {
 
 function renderExplorerMap(grids) {
   const lines = [
-    `Explorer worldgen v${grids.worldgenVersion} seed ${grids.seed}`,
+    `Explorer ${grids.mapName ?? 'world'} worldgen v${grids.worldgenVersion} seed ${grids.seed}`,
     `shape ${grids.shape}, cellSize ${grids.cellSize}, ${grids.width} x ${grids.height}`
   ];
 
@@ -141,7 +141,7 @@ function renderExplorerMap(grids) {
     );
   } else if (grids.clip?.shape === 'coastal_hex_cluster') {
     lines.push(
-      `hexRadius ${grids.clip.hexRadius}, tiles ${grids.clip.tileCount}, outerRadius ${grids.clip.radius}, beachWidth ${grids.clip.beachWidth}, waterMargin ${grids.clip.waterMargin}`
+      `hexRadius ${grids.clip.hexRadius}, forestTiles ${grids.clip.forestTileCount ?? 0}, beachTiles ${grids.clip.beachTileCount ?? 0}, tiles ${grids.clip.tileCount}, outerRadius ${grids.clip.radius}, beachWidth ${grids.clip.beachWidth}, waterMargin ${grids.clip.waterMargin}`
     );
   } else {
     lines.push(`radius ${grids.clip?.radius ?? grids.radius}`);

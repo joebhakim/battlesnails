@@ -216,6 +216,7 @@ function normalizeShorelineConfig(rawShoreline: any) {
   return {
     ...rawShoreline,
     beachWidth: normalizeNumber(rawShoreline.beachWidth, 0, 0, 4000),
+    forestBeachBlend: normalizeNumber(rawShoreline.forestBeachBlend, 80, 0, 1000),
     waterLevel: normalizeNumber(rawShoreline.waterLevel, -0.55, -40, 40),
     waterDepth: normalizeNumber(rawShoreline.waterDepth, 1.2, 0.05, 80),
     waterBlend: normalizeNumber(rawShoreline.waterBlend, 70, 1, 800)
@@ -234,10 +235,13 @@ function getShorelineKey(shoreline: any) {
     shoreline.waterLevel,
     shoreline.waterDepth,
     shoreline.waterBlend,
+    shoreline.forestBeachBlend,
     landBounds.shape,
     landBounds.radius,
     landBounds.hexRadius,
     landBounds.tiles?.length ?? 0,
+    shoreline.forestBounds?.tiles?.length ?? 0,
+    shoreline.beachBounds?.tiles?.length ?? 0,
     playBounds.shape,
     playBounds.radius
   ].join(':');
@@ -260,7 +264,20 @@ export function getExplorerCoastWeights(x: number, z: number, terrainConfig: Rea
   const signedDistanceToLandEdge = insideLand ? edgeDistance : -edgeDistance;
   const beachWidth = Math.max(0.0001, shoreline.beachWidth ?? 1);
   const waterBlend = Math.max(0.0001, shoreline.waterBlend ?? 70);
-  const insideBeach = insideLand
+  const forestBounds = shoreline.forestBounds;
+  const insideForest = forestBounds
+    ? isPointInsideWorldBounds(x, z, forestBounds)
+    : false;
+  const forestEdgeDistance = forestBounds
+    ? getDistanceToWorldBoundsBoundary(x, z, forestBounds)
+    : Infinity;
+  const forestBeachBlend = Math.max(0.0001, shoreline.forestBeachBlend ?? Math.min(80, beachWidth * 0.12));
+  const ringBeach = forestBounds
+    ? insideLand && !insideForest
+      ? smoothstep(0, forestBeachBlend, forestEdgeDistance)
+      : 0
+    : 0;
+  const edgeBeach = !forestBounds && insideLand
     ? 1 - smoothstep(0, beachWidth, edgeDistance)
     : 0;
   const surfSand = insideLand
@@ -271,7 +288,7 @@ export function getExplorerCoastWeights(x: number, z: number, terrainConfig: Rea
     : smoothstep(0, waterBlend, edgeDistance);
 
   return {
-    beachWeight: clamp(Math.max(insideBeach, surfSand * 0.45), 0, 1),
+    beachWeight: clamp(Math.max(ringBeach, edgeBeach, surfSand * 0.45), 0, 1),
     waterWeight: clamp(waterWeight, 0, 1),
     signedDistanceToLandEdge,
     waterLevel: shoreline.waterLevel ?? terrainConfig.centerHeight - 0.55,
@@ -316,7 +333,7 @@ export function getExplorerTerrainRegionWeights(x: number, z: number, terrainCon
     mossWeight,
     beachWeight: coast.beachWeight,
     waterWeight: coast.waterWeight,
-    // Kept as a compatibility alias for older callers; explorer v3 treats this as leaf litter, not sand.
+    // Kept as a compatibility alias for older callers; explorer terrain treats this as leaf litter, not sand.
     desertWeight: leafLitterWeight
   };
 }

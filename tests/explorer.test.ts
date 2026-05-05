@@ -10,10 +10,11 @@ import {
 } from '../src/game/ExplorerSession.js';
 import { MatchSimulation, MATCH_TICK_DURATION } from '../src/sim/MatchSimulation.js';
 import { DEFAULT_TUNING_CONFIG } from '../src/sim/Tuning.js';
-import { getExplorerTerrainRegionWeights, getTerrainWaterInfo } from '../src/world/Terrain.js';
+import { getExplorerTerrainRegionWeights, getTerrainHeight, getTerrainWaterInfo } from '../src/world/Terrain.js';
 import {
   EXPLORER_BIRD_COUNT,
   EXPLORER_BEACH_WIDTH,
+  EXPLORER_MAP_NAME,
   EXPLORER_MAP_DEFAULT_CELL_SIZE,
   EXPLORER_TERRAIN_FEATURE_RADIUS,
   EXPLORER_WATER_MARGIN,
@@ -219,7 +220,7 @@ test('explorer generated coveted props carry powerup metadata', () => {
   assert.equal(grit.powerup.type, 'grit');
 });
 
-test('explorer v8 scale makes landmarks enormous while floor clutter stays dense', () => {
+test('explorer v9 scale makes landmarks enormous while floor clutter stays dense', () => {
   const world = createExplorerWorld(12);
   const elderTree = world.landmarks.find((landmark) => landmark.id === 'elder-tree');
   const gravel = world.props.filter((prop) => prop.kind === 'gravel');
@@ -247,6 +248,7 @@ test('explorer v8 scale makes landmarks enormous while floor clutter stays dense
   ));
 
   assert.equal(world.worldgenVersion, EXPLORER_WORLDGEN_VERSION);
+  assert.equal(world.mapName, EXPLORER_MAP_NAME);
   assert.equal(world.creatures.length, EXPLORER_BIRD_COUNT);
   assert(world.creatures.every((creature) => creature.kind === 'bird'));
   assert(world.creatures.every((creature) => Number.isFinite(creature.home.x) && Number.isFinite(creature.home.z)));
@@ -254,6 +256,9 @@ test('explorer v8 scale makes landmarks enormous while floor clutter stays dense
   assert.equal(world.worldBounds.radius, EXPLORER_WORLD_RADIUS);
   assert.equal(world.worldBounds.shape, 'coastal_hex_cluster');
   assert.equal(world.worldBounds.landBounds.shape, 'hex_cluster');
+  assert.equal(world.worldBounds.forestTiles.length, 7);
+  assert.equal(world.worldBounds.beachTiles.length, 12);
+  assert.equal(world.worldBounds.tiles.length, 19);
   assert.equal(world.worldBounds.beachWidth, EXPLORER_BEACH_WIDTH);
   assert.equal(world.worldBounds.waterMargin, EXPLORER_WATER_MARGIN);
   assert.equal(elderTree.x, -240);
@@ -513,14 +518,17 @@ test('explorer map grids expose sparse machine-readable feature and elevation ro
 
   assert.equal(grids.cellSize, EXPLORER_MAP_DEFAULT_CELL_SIZE);
   assert.equal(grids.worldgenVersion, EXPLORER_WORLDGEN_VERSION);
+  assert.equal(grids.mapName, EXPLORER_MAP_NAME);
   assert.equal(grids.shape, 'coastal_hex_cluster');
-  assert.equal(grids.clip.tileCount, 7);
-  assert.equal(grids.width, 47);
-  assert.equal(grids.height, 47);
-  assert.equal(grids.featureRows.length, 47);
-  assert.equal(grids.elevationRows.length, 47);
-  assert(grids.featureRows.every((row) => Array.from(row).length === 47));
-  assert(grids.elevationRows.every((row) => Array.from(row).length === 47));
+  assert.equal(grids.clip.forestTileCount, 7);
+  assert.equal(grids.clip.beachTileCount, 12);
+  assert.equal(grids.clip.tileCount, 19);
+  assert(grids.width > 47);
+  assert.equal(grids.height, grids.width);
+  assert.equal(grids.featureRows.length, grids.height);
+  assert.equal(grids.elevationRows.length, grids.height);
+  assert(grids.featureRows.every((row) => Array.from(row).length === grids.width));
+  assert(grids.elevationRows.every((row) => Array.from(row).length === grids.width));
   assert.equal(grids.legend.features.playerStart.symbol, 'S');
   assert.equal(grids.legend.features.boss.symbol, 'B');
   assert.match(grids.featureGrid, /S/);
@@ -550,7 +558,7 @@ test('explorer map grids expose sparse machine-readable feature and elevation ro
   assert.match(grids.featureGrid, /≈/);
   assert.match(grids.featureGrid, /V/);
   assert(grids.maxHeight > grids.minHeight);
-  assert.equal(grids.heightRows.length, 47);
+  assert.equal(grids.heightRows.length, grids.height);
 });
 
 test('explorer shoreline water gives snails a cheap floating support surface', () => {
@@ -581,6 +589,41 @@ test('explorer shoreline water gives snails a cheap floating support surface', (
   assert.equal(player.grounded, true);
   assert.equal(player.supportKind, 'water');
   assert(player.position.y > water.surfaceHeight);
+});
+
+test('moss atoll keeps seven forest hexes inside a twelve-hex beach ring', () => {
+  const world = createExplorerWorld(12);
+  const forestTiles = world.worldBounds.forestTiles;
+  const beachTiles = world.worldBounds.beachTiles;
+
+  assert.equal(world.mapName, EXPLORER_MAP_NAME);
+  assert.equal(forestTiles.length, 7);
+  assert.equal(beachTiles.length, 12);
+  assert.equal(world.worldBounds.tiles.length, 19);
+
+  for (const tile of forestTiles) {
+    const weights = getExplorerTerrainRegionWeights(tile.x, tile.z, world.terrainConfig);
+    assert(weights.beachWeight < 0.02, `forest tile ${tile.id} should not be beach`);
+    assert.equal(weights.waterWeight, 0);
+  }
+
+  for (const tile of beachTiles) {
+    const weights = getExplorerTerrainRegionWeights(tile.x, tile.z, world.terrainConfig);
+    assert(weights.beachWeight > 0.7, `beach tile ${tile.id} should be sand`);
+    assert.equal(weights.waterWeight, 0);
+  }
+
+  const forestTile = forestTiles.find((tile) => tile.q === 1 && tile.r === 0);
+  const beachTile = beachTiles.find((tile) => tile.q === 2 && tile.r === 0);
+  const midX = (forestTile.x + beachTile.x) / 2;
+  const midZ = (forestTile.z + beachTile.z) / 2;
+  const dx = beachTile.x - forestTile.x;
+  const dz = beachTile.z - forestTile.z;
+  const length = Math.hypot(dx, dz);
+  const insideHeight = getTerrainHeight(midX - (dx / length), midZ - (dz / length), world.terrainConfig);
+  const outsideHeight = getTerrainHeight(midX + (dx / length), midZ + (dz / length), world.terrainConfig);
+
+  assert(Math.abs(outsideHeight - insideHeight) < 1.5);
 });
 
 test('explorer map grids can preview a regular hex clip without changing default world bounds', () => {

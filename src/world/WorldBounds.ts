@@ -33,6 +33,32 @@ export function createHexRingOneTiles(radius: number) {
   return HEX_RING_ONE_COORDS.map((coord) => createHexTile(coord.q, coord.r, radius));
 }
 
+export function getHexDistance(q: number, r: number) {
+  return Math.max(Math.abs(q), Math.abs(r), Math.abs(-q - r));
+}
+
+export function createHexRingTiles(radius: number, ringCount: number) {
+  const safeRingCount = Math.max(0, Math.floor(ringCount));
+  if (safeRingCount === 1) {
+    return createHexRingOneTiles(radius);
+  }
+
+  const tiles = [];
+  for (let q = -safeRingCount; q <= safeRingCount; q += 1) {
+    for (let r = -safeRingCount; r <= safeRingCount; r += 1) {
+      if (getHexDistance(q, r) <= safeRingCount) {
+        tiles.push(createHexTile(q, r, radius));
+      }
+    }
+  }
+
+  return tiles.sort((left, right) => (
+    getHexDistance(left.q, left.r) - getHexDistance(right.q, right.r) ||
+    left.q - right.q ||
+    left.r - right.r
+  ));
+}
+
 export function getRegularHexVertices(center: any, radius: number, rotation = 0) {
   return Array.from({ length: 6 }, (_, index) => {
     const angle = rotation + (index / 6) * Math.PI * 2;

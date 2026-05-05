@@ -9,7 +9,8 @@ import {
   normalizeTerrainConfig
 } from './Terrain.js';
 import {
-  createHexRingOneTiles,
+  createHexRingTiles,
+  getHexDistance,
   getScaledBoundary,
   getWorldBoundsArea,
   getWorldBoundsBoundaryPoints,
@@ -19,17 +20,30 @@ import {
 import { SeededRandom, normalizeSeed } from '../sim/SeededRandom.js';
 
 export const EXPLORER_WORLD_SCALE = 10;
+export const EXPLORER_MAP_NAME = 'Moss Atoll';
 export const EXPLORER_TERRAIN_FEATURE_RADIUS = EXPLORER_REFERENCE_WORLD_RADIUS * EXPLORER_WORLD_SCALE;
 export const EXPLORER_HEX_TILE_RADIUS = EXPLORER_TERRAIN_FEATURE_RADIUS * 0.72;
-export const EXPLORER_BEACH_WIDTH = EXPLORER_HEX_TILE_RADIUS * Math.sqrt(3) * 0.7;
+export const EXPLORER_BEACH_WIDTH = EXPLORER_HEX_TILE_RADIUS * Math.sqrt(3);
+export const EXPLORER_FOREST_BEACH_BLEND = EXPLORER_TERRAIN_FEATURE_RADIUS * 0.08;
 export const EXPLORER_WATER_MARGIN = EXPLORER_HEX_TILE_RADIUS * 0.45;
-export const EXPLORER_HEX_TILES = Object.freeze(createHexRingOneTiles(EXPLORER_HEX_TILE_RADIUS));
+export const EXPLORER_FOREST_HEX_TILES = Object.freeze(createHexRingTiles(EXPLORER_HEX_TILE_RADIUS, 1));
+export const EXPLORER_HEX_TILES = Object.freeze(createHexRingTiles(EXPLORER_HEX_TILE_RADIUS, 2));
+export const EXPLORER_BEACH_HEX_TILES = Object.freeze(
+  EXPLORER_HEX_TILES.filter((tile) => getHexDistance(tile.q, tile.r) === 2)
+);
+const EXPLORER_FOREST_BOUNDS_TEMPLATE = Object.freeze({
+  shape: 'hex_cluster',
+  hexRadius: EXPLORER_HEX_TILE_RADIUS,
+  tiles: EXPLORER_FOREST_HEX_TILES
+});
 const EXPLORER_LAND_BOUNDS_TEMPLATE = Object.freeze({
   shape: 'hex_cluster',
   hexRadius: EXPLORER_HEX_TILE_RADIUS,
   tiles: EXPLORER_HEX_TILES
 });
+const EXPLORER_FOREST_BOUNDARY = Object.freeze(getWorldBoundsBoundaryPoints(EXPLORER_FOREST_BOUNDS_TEMPLATE));
 const EXPLORER_LAND_BOUNDARY = Object.freeze(getWorldBoundsBoundaryPoints(EXPLORER_LAND_BOUNDS_TEMPLATE));
+export const EXPLORER_FOREST_RADIUS = getWorldBoundsOuterRadius(EXPLORER_FOREST_BOUNDS_TEMPLATE);
 export const EXPLORER_LAND_RADIUS = getWorldBoundsOuterRadius(EXPLORER_LAND_BOUNDS_TEMPLATE);
 export const EXPLORER_WORLD_RADIUS = getWorldBoundsOuterRadius({
   shape: 'coastal_hex_cluster',
@@ -37,7 +51,7 @@ export const EXPLORER_WORLD_RADIUS = getWorldBoundsOuterRadius({
 });
 export const EXPLORER_MAP_DEFAULT_CELL_SIZE = 100;
 export const EXPLORER_DEFAULT_SEED = 137;
-export const EXPLORER_WORLDGEN_VERSION = 8;
+export const EXPLORER_WORLDGEN_VERSION = 9;
 export const EXPLORER_BIRD_COUNT = 8;
 export const EXPLORER_PLAYER_START = Object.freeze({ x: 0, z: 12 * EXPLORER_WORLD_SCALE, rotationY: Math.PI });
 export const EXPLORER_BOSS_SLOT = 2;
@@ -608,6 +622,16 @@ function createGroundCoverPatch(index, kind, rng, terrainConfig, center) {
   const visualConfig = visualByKind[kind] ?? visualByKind.dry_leaf_patch;
   const grainAngle = rng.range(0, Math.PI * 2);
   const shapeHalfHeight = (visualConfig.thickness + visualConfig.relief) / 2;
+  const centerTerrainHeight = getTerrainHeight(center.x, center.z, terrainConfig);
+  const maximumFootprintTerrainOffset = worldFootprint
+    ? worldFootprint.reduce((maximum, point) => (
+      Math.max(maximum, getTerrainHeight(point.x, point.z, terrainConfig) - centerTerrainHeight)
+    ), 0)
+    : 0;
+  const minimumSurfaceOffset = Math.min(
+    Math.max(0, maximumFootprintTerrainOffset + GROUND_COVER_EDGE_LIFT + inches(0.35)),
+    visualConfig.thickness + visualConfig.relief + inches(3)
+  );
   const collisionRelief = kind === 'moss_mat'
     ? visualConfig.relief * 0.45
     : kind === 'dirt_stick_patch'
@@ -659,6 +683,7 @@ function createGroundCoverPatch(index, kind, rng, terrainConfig, center) {
           z: width / 2
         },
       relief: collisionRelief,
+      minSurfaceOffset: minimumSurfaceOffset,
       grainAngle,
       scaleLength: collisionScaleLength,
       scaleWidth: collisionScaleWidth,
@@ -1601,12 +1626,15 @@ function getExplorerMapClip(world: any, options: any = {}) {
 
   return {
     shape: bounds.shape ?? 'circle',
+    mapName: world.mapName ?? bounds.mapName ?? EXPLORER_MAP_NAME,
     radius: bounds.radius ?? radius,
     centerX,
     centerZ,
     hexRadius: bounds.hexRadius ?? hexRadius,
     hexRotation: bounds.hexRotation ?? hexRotation,
     tiles: Array.isArray(bounds.tiles) ? bounds.tiles : [],
+    forestTiles: Array.isArray(bounds.forestTiles) ? bounds.forestTiles : [],
+    beachTiles: Array.isArray(bounds.beachTiles) ? bounds.beachTiles : [],
     bounds,
     gridRadius
   };
@@ -1735,6 +1763,9 @@ export function createExplorerTerrainConfig(seed = EXPLORER_DEFAULT_SEED, worldB
     visualSegments: 180,
     worldRadius: EXPLORER_TERRAIN_FEATURE_RADIUS,
     shoreline: {
+      mapName: EXPLORER_MAP_NAME,
+      forestBounds: worldBounds.forestBounds,
+      beachBounds: worldBounds.beachBounds,
       landBounds: worldBounds.landBounds,
       playBounds: {
         shape: worldBounds.shape,
@@ -1742,6 +1773,7 @@ export function createExplorerTerrainConfig(seed = EXPLORER_DEFAULT_SEED, worldB
         boundary: worldBounds.boundary
       },
       beachWidth: EXPLORER_BEACH_WIDTH,
+      forestBeachBlend: EXPLORER_FOREST_BEACH_BLEND,
       waterLevel: -0.55,
       waterDepth: 1.65,
       waterBlend: scaleWorld(5.5)
@@ -1750,7 +1782,22 @@ export function createExplorerTerrainConfig(seed = EXPLORER_DEFAULT_SEED, worldB
 }
 
 export function createExplorerWorldBounds() {
+  const forestTiles = EXPLORER_FOREST_HEX_TILES.map((tile) => ({ ...tile }));
+  const beachTiles = EXPLORER_BEACH_HEX_TILES.map((tile) => ({ ...tile }));
   const tiles = EXPLORER_HEX_TILES.map((tile) => ({ ...tile }));
+  const forestBounds = {
+    shape: 'hex_cluster',
+    radius: EXPLORER_FOREST_RADIUS,
+    hexRadius: EXPLORER_HEX_TILE_RADIUS,
+    tiles: forestTiles,
+    boundary: EXPLORER_FOREST_BOUNDARY.map((point) => ({ ...point }))
+  };
+  const beachBounds = {
+    shape: 'hex_cluster',
+    radius: EXPLORER_LAND_RADIUS,
+    hexRadius: EXPLORER_HEX_TILE_RADIUS,
+    tiles: beachTiles
+  };
   const landBounds = {
     shape: 'hex_cluster',
     radius: EXPLORER_LAND_RADIUS,
@@ -1762,11 +1809,17 @@ export function createExplorerWorldBounds() {
 
   return {
     shape: 'coastal_hex_cluster',
+    mapName: EXPLORER_MAP_NAME,
     radius: getWorldBoundsOuterRadius({ shape: 'polygon', boundary: waterBoundary }),
     hexRadius: EXPLORER_HEX_TILE_RADIUS,
     waterMargin: EXPLORER_WATER_MARGIN,
     beachWidth: EXPLORER_BEACH_WIDTH,
+    forestBeachBlend: EXPLORER_FOREST_BEACH_BLEND,
     tiles,
+    forestTiles,
+    beachTiles,
+    forestBounds,
+    beachBounds,
     landBounds: {
       ...landBounds,
       boundary: landBoundary
@@ -1794,6 +1847,7 @@ export function createExplorerWorld(seed = EXPLORER_DEFAULT_SEED) {
 
   return {
     worldgenVersion: EXPLORER_WORLDGEN_VERSION,
+    mapName: EXPLORER_MAP_NAME,
     seed: normalizedSeed,
     terrainConfig,
     worldBounds,
@@ -1910,6 +1964,7 @@ export function createExplorerMapGrids(worldOrSeed: any = EXPLORER_DEFAULT_SEED,
 
   return {
     worldgenVersion: world.worldgenVersion ?? 1,
+    mapName: world.mapName ?? clip.mapName,
     seed: world.seed,
     shape: clip.shape,
     clip: {
@@ -1922,7 +1977,9 @@ export function createExplorerMapGrids(worldOrSeed: any = EXPLORER_DEFAULT_SEED,
       hexRotationDegrees: Number(((clip.hexRotation * 180) / Math.PI).toFixed(3)),
       beachWidth: Number((clip.bounds.beachWidth ?? 0).toFixed(3)),
       waterMargin: Number((clip.bounds.waterMargin ?? 0).toFixed(3)),
-      tileCount: clip.tiles.length
+      tileCount: clip.tiles.length,
+      forestTileCount: clip.forestTiles.length,
+      beachTileCount: clip.beachTiles.length
     },
     cellSize: grid.cellSize,
     width: grid.width,

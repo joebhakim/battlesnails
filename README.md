@@ -4,7 +4,7 @@ BattleSnails is a deliberately jarring third-person arena game built with Three.
 
 The project currently supports five modes:
 - `Arena`: configurable local combat against one or more enemy presets, with persisted stage and encounter options
-- `The Hunt`: a roughly `2000 x 2000` seven-hex snail-scale mossland map with fixed landmarks, dense micro-props, beach/water edges, and configurable NPC snail count/strength
+- `The Hunt`: the named `Moss Atoll` explorer map, with seven continuous forest hexes wrapped by a twelve-hex beach ring, shallow water, fixed landmarks, dense micro-props, and configurable NPC snail count/strength
 - `LAN Multiplayer`: two human players in Arena 1v1, Adventure co-op PvE, or Adventure PvP formats
 - `Test Mode`: a debug-key tuning lab with staged sliders, configurable bot count, and an explicit apply step
 - `Simulator`: a debug-key balance harness that batch-runs a simulated humanlike player against the bot
@@ -64,7 +64,7 @@ Netlify serves Arena, The Hunt, debug modes, and the browser client. The LAN mul
 ## Modes And Rules
 
 - `Arena`: one human player vs a simple encounter preset chosen from the start menu. Stages include the conic-section heightfields plus small, extreme designed event arenas.
-- `The Hunt`: one human player in the current seven-hex mossland/beach map. Setup is intentionally narrow: choose NPC snail count and a `1..9` strength scale.
+- `The Hunt`: one human player on the `Moss Atoll` forest/beach map. Setup is intentionally narrow: choose NPC snail count and a `1..9` strength scale.
 - `LAN Multiplayer`: two human players in Arena 1v1, Adventure co-op PvE, or Adventure PvP.
 - `Test Mode`: hidden behind the backtick key; one human player plus `0..40` local bots, staged tuning controls, local browser persistence for the last-used lab settings, and switchable terrain presets.
 - `Simulator`: hidden behind the backtick key; an automated browser-visible balance runner. It runs an average-but-skilled simulated humanlike player across selected stage/enemy-mode searches, reports aggregate and per-scenario metrics, replays a representative match, and uses the same duel knobs for HP, movement, combat, stalk, and bot behavior.
@@ -103,7 +103,7 @@ On-screen HUD:
 - Bottom left: left stalk top-down plane widget showing target point vs current point.
 - Bottom right: right stalk top-down plane widget showing target point vs current point.
 - Arena: stage and enemy setup options appear before the match starts.
-- The Hunt: choose NPC snail count and strength before entering the deterministic seven-hex mossland expedition.
+- The Hunt: choose NPC snail count and strength before entering the deterministic `Moss Atoll` expedition.
 - Test Mode and Simulator: hidden until the backtick key is pressed, then right-side tuning panels expose terrain, HP, movement, trail, combat, stalk, bot-AI tuning, and simulator search scope.
 
 ## Gameplay Flow
@@ -121,10 +121,10 @@ Arena win condition:
 - The current Arena options are saved locally in the browser and remain separate from Test Mode settings.
 
 The Hunt flow:
-- The map is a bounded seven-hex explorer cluster: one central hex plus six adjacent hex tiles sharing one continuous terrain and prop process.
-- The explorer cluster now has a cheap coastal edge: a wide procedural speckled-sand beach band inside the land boundary, shallow transparent water outside it, and water support so snails float instead of falling to the sea floor.
+- The map is `Moss Atoll`: seven contiguous forest hexes sharing one continuous terrain and prop process, outlined by a twelve-hex beach ring and shallow transparent water.
+- Forest, beach, and water are masks over global coordinate-space terrain/noise fields rather than independently generated tile chunks, so height and density waves continue across tile boundaries.
 - Massive trees and the rocky mountain landmark stay fixed so the world can be learned.
-- Worldgen v3 aims for snail-scale concerns: rough climbable dry-leaf carpet polygons, thick moss carpet polygons, dirt-with-sticks patches, exposed root branches, twigs, young plants, wet dew beads and pools, mushrooms, rotting logs, lichen towers, old shell shards, ant roads, salt piles, gravel, high mountain talus, dense deciduous/conifer tree clusters, and giant tree/mountain landmarks.
+- Current worldgen aims for snail-scale concerns: rough climbable dry-leaf carpet polygons, thick moss carpet polygons, dirt-with-sticks patches, exposed root branches, twigs, young plants, wet dew beads and pools, mushrooms, rotting logs, lichen towers, old shell shards, ant roads, salt piles, gravel, high mountain talus, dense deciduous/conifer tree clusters, and giant tree/mountain landmarks.
 - Prop queries use a spatial grid broadphase so the denser forest-floor clutter does not force every collision pass to scan the whole explorer map.
 - The Hunt props are climbable analytic surfaces; walking into a mushroom, log, rock, salt pile, dew bead, raised leaf/moss/dirt polygon, slender tree trunk, or vertical landmark tree automatically attaches and crawls without a separate button.
 - The generated world can be exported as sparse Unicode grids for feature symbols and elevation buckets via `createExplorerMapGrids` or `npm run map:explorer -- <seed> <cellSize>`. For tile previews, pass `--shape hex --hex-radius <units> --hex-rotation-deg <degrees> --output <path>` to clip the printed map to a candidate hex.

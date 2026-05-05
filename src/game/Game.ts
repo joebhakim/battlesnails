@@ -744,7 +744,7 @@ export class Game {
   showHuntSetup() {
     this.ui.showModeSetup({
       title: 'The Hunt',
-      copy: 'Choose how many wild snails stalk the seven-hex forest, and how dangerous they are.',
+      copy: 'Choose how many wild snails stalk Moss Atoll, and how dangerous they are.',
       schema: HUNT_OPTIONS_SCHEMA,
       values: getStoredHuntOptions(),
       startLabel: 'Start Hunt',

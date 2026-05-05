@@ -114,7 +114,11 @@ export function getGroundPatchSurfaceOffset(prop, localPoint, points = getPolygo
   const progress = fract((u / scaleLength) + rowPhase + (Math.abs(row) % 2) * 0.42);
   const lip = smoothstep01(progress);
   const rowLift = (hashNumber(row * 19.17 + 3.3) - 0.5) * collisionRelief * 0.2;
-  const interiorOffset = clamp(thickness * 0.58 + lip * collisionRelief + rowLift, thickness * 0.28, thickness + collisionRelief);
+  const minimumSurfaceOffset = Math.max(0, shape.minSurfaceOffset ?? 0);
+  const interiorOffset = Math.max(
+    minimumSurfaceOffset,
+    clamp(thickness * 0.58 + lip * collisionRelief + rowLift, thickness * 0.28, thickness + collisionRelief)
+  );
   const edgeBlendInset = Math.max(0, shape.edgeBlendInset ?? prop.visual?.edgeBlendInset ?? 0);
   const edge = edgeBlendInset > 0 ? getNearestPolygonEdgeSurface(localPoint, points) : null;
   if (edge?.y !== null && Number.isFinite(edge?.y)) {
