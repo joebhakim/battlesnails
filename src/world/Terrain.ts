@@ -403,14 +403,14 @@ export function getTerrainColor(x: number, z: number, terrainConfig: Readonly<Te
   const leafLitter = new THREE.Color(0x755733).offsetHSL(0, 0, leafSpeckle);
   const rootDirt = new THREE.Color(0x6a3f25);
   const gravel = new THREE.Color(0x7d7767);
-  const rock = new THREE.Color(0x5f6260);
-  const sand = new THREE.Color(0xc8b574).offsetHSL(0.015, 0.04, sandSpeckle);
+  const rock = new THREE.Color(0xa9a083);
+  const sand = new THREE.Color(0xd6bb72).offsetHSL(0.02, 0.06, sandSpeckle);
   const waterFloor = new THREE.Color(0x357f92);
   const color = moss.clone().lerp(leafLitter, leafLitterWeight * 0.92);
   color.lerp(rootDirt, rootDirtWeight * 0.86);
   color.lerp(gravel, gravelWeight * 0.7);
   color.lerp(rock, mountainWeight * 0.9);
-  color.lerp(sand, beachWeight);
+  color.lerp(sand, Math.min(1, beachWeight * 1.35));
   color.lerp(waterFloor, waterWeight * 0.88);
   return color;
 }

@@ -10,7 +10,7 @@ import {
 } from '../src/game/ExplorerSession.js';
 import { MatchSimulation, MATCH_TICK_DURATION } from '../src/sim/MatchSimulation.js';
 import { DEFAULT_TUNING_CONFIG } from '../src/sim/Tuning.js';
-import { getTerrainWaterInfo } from '../src/world/Terrain.js';
+import { getExplorerTerrainRegionWeights, getTerrainWaterInfo } from '../src/world/Terrain.js';
 import {
   EXPLORER_BIRD_COUNT,
   EXPLORER_BEACH_WIDTH,
@@ -429,7 +429,7 @@ test('generated prop contact footprints are discoverable by gameplay nearby quer
     addSample(prop, { x: radius * 0.85, z: 0 });
   };
 
-  for (const kind of ['dry_leaf_patch', 'moss_mat', 'dirt_stick_patch']) {
+  for (const kind of ['dry_leaf_patch', 'moss_mat', 'dirt_stick_patch', 'rock_floor_patch']) {
     addGroundPatchSample(kind);
   }
   for (const kind of ['rotting_log', 'root_branch', 'fallen_branch', 'twig', 'bamboo_stick']) {
@@ -539,6 +539,8 @@ test('explorer map grids expose sparse machine-readable feature and elevation ro
   assert.match(grids.featureGrid, /▒/);
   assert.match(grids.featureGrid, /;/);
   assert.equal(grids.legend.features.dirtStickPatch.symbol, ';');
+  assert.match(grids.featureGrid, /▴/);
+  assert.equal(grids.legend.features.rockFloorPatch.symbol, '▴');
   assert.match(grids.featureGrid, /\//);
   assert.match(grids.featureGrid, /╲/);
   assert.match(grids.featureGrid, /♧/);
@@ -640,7 +642,7 @@ test('generated ground-cover boundary vertices share world heights', () => {
   const world = createExplorerWorld(137);
   const verticesByPosition = new Map();
   const patches = world.props.filter((prop) => (
-    ['dry_leaf_patch', 'moss_mat', 'dirt_stick_patch'].includes(prop.kind) &&
+    ['dry_leaf_patch', 'moss_mat', 'dirt_stick_patch', 'rock_floor_patch'].includes(prop.kind) &&
     Array.isArray(prop.collisionShape?.points)
   ));
 
@@ -679,7 +681,7 @@ test('generated ground-cover visuals overlap collision cells', () => {
   const world = createExplorerWorld(137);
   const patches = world.props
     .filter((prop) => (
-      ['dry_leaf_patch', 'moss_mat', 'dirt_stick_patch'].includes(prop.kind) &&
+      ['dry_leaf_patch', 'moss_mat', 'dirt_stick_patch', 'rock_floor_patch'].includes(prop.kind) &&
       Array.isArray(prop.collisionShape?.points) &&
       Array.isArray(prop.visual?.footprint)
     ))
@@ -701,7 +703,9 @@ test('generated ground-cover patches keep support during short movement replays'
       .filter((prop) => (
         prop.kind === kind &&
         Array.isArray(prop.collisionShape?.points) &&
-        prop.collisionShape.points.length >= 5
+        prop.collisionShape.points.length >= 5 &&
+        getExplorerTerrainRegionWeights(prop.position.x, prop.position.z, world.terrainConfig).mountainWeight < 0.2 &&
+        getExplorerTerrainRegionWeights(prop.position.x, prop.position.z, world.terrainConfig).beachWeight < 0.02
       ))
       .slice(0, 8)
   ));

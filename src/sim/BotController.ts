@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 
-import { createIdleInput } from './MatchSimulation.js';
+import { createIdleInput } from '../protocol/InputProtocol.js';
 
 export class BotController {
   declare approachMoveScale: any;

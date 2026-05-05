@@ -1,6 +1,7 @@
 import { BotController } from '../sim/BotController.js';
 import { createArenaEnvironment } from '../sim/ArenaEnvironment.js';
-import { MATCH_TICK_DURATION, MatchSimulation, normalizePlayerInput } from '../sim/MatchSimulation.js';
+import { normalizePlayerInput } from '../protocol/InputProtocol.js';
+import { MATCH_TICK_DURATION, MatchSimulation } from '../sim/MatchSimulation.js';
 import { DEFAULT_TUNING_CONFIG, createBotControllerConfig, normalizeTuningConfig } from '../sim/Tuning.js';
 import { ARENA_TERRAIN_PRESET_OPTIONS, DEFAULT_TERRAIN_CONFIG } from '../world/Terrain.js';
 

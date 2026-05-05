@@ -404,8 +404,22 @@ Prefer `--headful` for matching the FPS you see while playing. Headless Chromium
 <details>
 <summary>Shared simulation and world state</summary>
 
-- `src/sim/MatchSimulation.ts`: authoritative match rules, player state, movement, jump, rope control, collisions, wet trails, health, and victory.
+- `src/protocol/InputProtocol.ts`: shared input defaults and normalization used by browser sessions, bots, simulator tooling, and the LAN server.
+- `src/protocol/SnapshotProtocol.ts`: custom network snapshot merge and trail-delta helpers. This is the home for future quantized network payloads.
+- `src/sim/MatchSimulation.ts`: authoritative match orchestrator for player state, movement, jump, rope control, collisions, wet trails, health, and victory.
+- `src/sim/SnapshotSerialization.ts`: sim-owned full and network snapshot DTO construction.
+- `src/sim/PlayerStateSystem.ts`: spawn point selection, terrain-aware spawn clearance, fixture/static target state, and profile reapplication.
+- `src/sim/CollisionShape.ts`: shared collision-shape cloning, radius, and height helpers.
+- `src/sim/WorldPropSystem.ts`: normalized world prop state, fixture placement, and world-prop spatial indexing.
+- `src/sim/PowerupSystem.ts`: coveted resource pickups, direct debug grants, stat mutation, and rotting-log interaction events.
+- `src/sim/MatchLifecycleSystem.ts`: living-player filtering, target preference, and mode-specific win/draw evaluation.
+- `src/sim/MovementSupportSystem.ts`: terrain/water grounding, climbable prop support, and planar world-prop collision.
+- `src/sim/SpatialIndex.ts`: reusable broadphase grid used by world prop and player queries.
+- `src/sim/StalkControlSystem.ts`: stalk state creation, held-input control modes, target lag, attachment translation, and stalk snapshot helpers.
+- `src/sim/DamageSystem.ts`: stalk impact damage, contact hysteresis, damage events, and knockback application.
 - `src/sim/StalkRope.ts`: rope-chain helpers, target direction math, and impact evaluation.
+- `src/sim/TrailSystem.ts`: wet trail cell storage, deposition, contact queries, and serialization helpers.
+- `src/sim/CreatureSystem.ts`: non-snail creature defaults, bird movement constants, cover helpers, and creature serialization.
 - `src/sim/BotController.ts`: NPC decision loop that drives the same authoritative input model as players.
 - `src/sim/HumanLikeController.ts`: deterministic simulated human input model for the balance harness.
 - `src/sim/HumanVision.ts`: simple geometric FOV and short noisy memory for simulator perception.

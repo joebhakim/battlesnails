@@ -3,12 +3,12 @@ import { performance } from 'node:perf_hooks';
 import { NPCSnail } from '../entities/NPCSnail.js';
 import { PlayerSnail } from '../entities/PlayerSnail.js';
 import { DEFAULT_TERRAIN_CONFIG } from '../world/Terrain.js';
+import { createIdleInput } from '../protocol/InputProtocol.js';
 import { createArenaEnvironment } from './ArenaEnvironment.js';
 import { BotController } from './BotController.js';
 import {
   MATCH_TICK_DURATION,
-  MatchSimulation,
-  createIdleInput
+  MatchSimulation
 } from './MatchSimulation.js';
 import {
   DEFAULT_TUNING_CONFIG,

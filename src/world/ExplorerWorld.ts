@@ -590,6 +590,19 @@ function createGroundCoverPatch(index, kind, rng, terrainConfig, center) {
       maxPlates: rng.int(76, 118),
       plateCoverage: rng.range(0.72, 0.98),
       labelDistance: 48
+    },
+    rock_floor_patch: {
+      displayName: 'Limestone Floor',
+      thickness: inches(rng.range(0.9, 3.2)),
+      color: rng.choice([0xa39b84, 0xb8ad90, 0xcfc3a2, 0xd9cfb5]),
+      roughness: rng.range(0.58, 0.82),
+      relief: inches(rng.range(1.8, 5.8)),
+      scaleLength: inches(rng.range(12, 28)),
+      scaleWidth: inches(rng.range(10, 24)),
+      scaleDensity: rng.range(0.35, 0.62),
+      maxPlates: rng.int(18, 32),
+      plateCoverage: rng.range(0.42, 0.68),
+      labelDistance: 48
     }
   };
   const visualConfig = visualByKind[kind] ?? visualByKind.dry_leaf_patch;
@@ -599,16 +612,22 @@ function createGroundCoverPatch(index, kind, rng, terrainConfig, center) {
     ? visualConfig.relief * 0.45
     : kind === 'dirt_stick_patch'
       ? visualConfig.relief * 0.62
+      : kind === 'rock_floor_patch'
+        ? visualConfig.relief * 0.9
       : visualConfig.relief;
   const collisionScaleLength = kind === 'moss_mat'
     ? visualConfig.scaleLength * 0.72
     : kind === 'dirt_stick_patch'
       ? visualConfig.scaleLength * 0.68
+      : kind === 'rock_floor_patch'
+        ? visualConfig.scaleLength * 0.82
       : visualConfig.scaleLength;
   const collisionScaleWidth = kind === 'moss_mat'
     ? visualConfig.scaleWidth * 0.72
     : kind === 'dirt_stick_patch'
       ? visualConfig.scaleWidth * 0.7
+      : kind === 'rock_floor_patch'
+        ? visualConfig.scaleWidth * 0.82
       : visualConfig.scaleWidth;
   const footprint = createGroundCoverFootprint(worldFootprint, center, terrainConfig, shapeHalfHeight);
   const visualOverlap = worldFootprint
@@ -679,6 +698,10 @@ function chooseGroundCoverKind(index, total, rng) {
   }
 
   return 'dirt_stick_patch';
+}
+
+function chooseMountainGroundCoverKind() {
+  return 'rock_floor_patch';
 }
 
 function createDiskPolygon(radius, vertexCount = 48) {
@@ -793,7 +816,7 @@ function createForestFloorPatchwork(rng, terrainConfig, worldBounds) {
 
   for (const [siteIndex, site] of sites.entries()) {
     const { mountainWeight, beachWeight, waterWeight } = getExplorerTerrainRegionWeights(site.x, site.z, terrainConfig);
-    if (mountainWeight > 0.42 || beachWeight > 0.38 || waterWeight > 0) {
+    if (beachWeight > 0.38 || waterWeight > 0) {
       continue;
     }
 
@@ -815,7 +838,9 @@ function createForestFloorPatchwork(rng, terrainConfig, worldBounds) {
 
     patches.push(createGroundCoverPatch(
       patches.length,
-      chooseGroundCoverKind(siteIndex, sites.length, rng),
+      mountainWeight > 0.24
+        ? chooseMountainGroundCoverKind()
+        : chooseGroundCoverKind(siteIndex, sites.length, rng),
       rng,
       terrainConfig,
       {
@@ -1410,6 +1435,7 @@ export const EXPLORER_FEATURE_SYMBOLS = Object.freeze({
   mushroom: '♠',
   dryLeafPatch: '▒',
   dirtStickPatch: ';',
+  rockFloorPatch: '▴',
   rootBranch: '╱',
   twig: '/',
   fallenBranch: '╲',
@@ -1454,6 +1480,7 @@ const FEATURE_LEGEND = Object.freeze({
   mushroom: Object.freeze({ symbol: EXPLORER_FEATURE_SYMBOLS.mushroom, label: 'mushroom canopy' }),
   dryLeafPatch: Object.freeze({ symbol: EXPLORER_FEATURE_SYMBOLS.dryLeafPatch, label: 'rough dry-leaf carpet patch' }),
   dirtStickPatch: Object.freeze({ symbol: EXPLORER_FEATURE_SYMBOLS.dirtStickPatch, label: 'dirt patch with sticks' }),
+  rockFloorPatch: Object.freeze({ symbol: EXPLORER_FEATURE_SYMBOLS.rockFloorPatch, label: 'continuous coarse rock floor' }),
   rootBranch: Object.freeze({ symbol: EXPLORER_FEATURE_SYMBOLS.rootBranch, label: 'exposed root branch' }),
   twig: Object.freeze({ symbol: EXPLORER_FEATURE_SYMBOLS.twig, label: 'fallen twig' }),
   fallenBranch: Object.freeze({ symbol: EXPLORER_FEATURE_SYMBOLS.fallenBranch, label: 'fallen branch' }),
@@ -1495,6 +1522,7 @@ const FEATURE_PRIORITY = Object.freeze({
   softFood: 10,
   dryLeafPatch: 9,
   dirtStickPatch: 9,
+  rockFloorPatch: 13,
   rootBranch: 9,
   twig: 9,
   fallenBranch: 9,
@@ -1507,7 +1535,7 @@ const FEATURE_PRIORITY = Object.freeze({
   sharpGrit: 10,
   deciduousTree: 11,
   coniferTree: 11,
-  mountain: 11,
+  mountain: 13,
   birdHome: 12,
   giantTree: 12,
   boss: 13,
@@ -1536,6 +1564,7 @@ const PROP_FEATURE_KEYS = Object.freeze({
   mushroom: 'mushroom',
   dry_leaf_patch: 'dryLeafPatch',
   dirt_stick_patch: 'dirtStickPatch',
+  rock_floor_patch: 'rockFloorPatch',
   root_branch: 'rootBranch',
   twig: 'twig',
   fallen_branch: 'fallenBranch',

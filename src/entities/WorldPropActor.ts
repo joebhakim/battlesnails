@@ -764,7 +764,7 @@ function createRoughGroundPatch(prop, {
             ? 1.35 + hashUnit(seed + plate.row, plate.column + 5) * 0.75
             : isDirtStickPatch
               ? 1.62 + hashUnit(seed + plate.row, plate.column + 5) * 0.92
-          : 0.86 + hashUnit(seed + plate.row, plate.column + 5) * 0.42
+              : 0.86 + hashUnit(seed + plate.row, plate.column + 5) * 0.42
       );
       const plateWidth = scaleWidth * (
         isDryLeafPatch
@@ -773,7 +773,7 @@ function createRoughGroundPatch(prop, {
             ? 1.28 + hashUnit(seed + plate.column, plate.row + 11) * 0.68
             : isDirtStickPatch
               ? 1.48 + hashUnit(seed + plate.column, plate.row + 11) * 0.78
-          : 0.82 + hashUnit(seed + plate.column, plate.row + 11) * 0.38
+              : 0.82 + hashUnit(seed + plate.column, plate.row + 11) * 0.38
       );
       const localAngle = (hashUnit(seed + plateIndex, 23) - 0.5) * 0.32;
       const localAlong = {
@@ -786,13 +786,13 @@ function createRoughGroundPatch(prop, {
         : isDirtStickPatch
           ? getDirtClodBoundary(plate.center, localAlong, localAcross, plateLength, plateWidth, seed + plateIndex * 31)
           : getScalePlateBoundary(
-          plate.center,
-          localAlong,
-          localAcross,
-          plateLength,
-          plateWidth,
-          (hashUnit(seed, plateIndex + 29) - 0.5) * 0.12
-        );
+              plate.center,
+              localAlong,
+              localAcross,
+              plateLength,
+              plateWidth,
+              (hashUnit(seed, plateIndex + 29) - 0.5) * 0.12
+            );
       const clippedBoundary = boundary.filter((point) => isPointInPolygon2D(point, footprint));
       if (clippedBoundary.length < 3) {
         continue;
@@ -803,7 +803,7 @@ function createRoughGroundPatch(prop, {
           ? 0.38 + hashUnit(seed, plateIndex + 37) * 0.16
           : isDirtStickPatch
             ? 0.22 + hashUnit(seed, plateIndex + 37) * 0.2
-          : 0.42 + hashUnit(seed, plateIndex + 37) * 0.18
+            : 0.42 + hashUnit(seed, plateIndex + 37) * 0.18
       );
       pushFanGeometry({
         positions,
@@ -815,7 +815,7 @@ function createRoughGroundPatch(prop, {
             ? 0.18 + hashUnit(seed + plateIndex, 41) * 0.08
             : isDirtStickPatch
               ? 0.22 + hashUnit(seed + plateIndex, 41) * 0.22
-            : 0.36
+              : 0.36
         ),
         colorPalette,
         seed: seed + plateIndex * 101,
@@ -1152,6 +1152,90 @@ function createDirtStickPatch(prop) {
     }
   }
 
+  return group;
+}
+
+function createRockFloorPatch(prop) {
+  const length = prop.visual?.length ?? (prop.collisionShape?.halfExtents?.x ?? 4) * 2;
+  const width = prop.visual?.width ?? (prop.collisionShape?.halfExtents?.z ?? 3) * 2;
+  const thickness = prop.visual?.thickness ?? (prop.collisionShape?.halfExtents?.y ?? 0.12) * 2;
+  const shapeHalfHeight = prop.collisionShape?.halfHeight ?? thickness / 2;
+  const relief = prop.visual?.relief ?? thickness * 0.8;
+  const seed = hashText(prop.id ?? prop.kind ?? 'limestone-floor');
+  const footprint = Array.isArray(prop.visual?.footprint)
+    ? prop.visual.footprint.filter((point) => Number.isFinite(point.x) && Number.isFinite(point.z))
+    : [
+      { x: -length / 2, z: -width / 2 },
+      { x: length / 2, z: -width / 2 },
+      { x: length / 2, z: width / 2 },
+      { x: -length / 2, z: width / 2 }
+    ];
+  const group = new THREE.Group();
+  const palette = [0x8e8976, 0xa59d84, 0xb9ae8f, 0xcec2a0, 0xd9d0b6].map((color) => new THREE.Color(color));
+  const positions = [];
+  const colors = [];
+  const indices = [];
+  const center = footprint.reduce((accumulator, point) => ({
+    x: accumulator.x + point.x / footprint.length,
+    z: accumulator.z + point.z / footprint.length
+  }), { x: 0, z: 0 });
+  const edgeBlendInset = Math.max(
+    0,
+    prop.visual?.edgeBlendInset ?? prop.collisionShape?.edgeBlendInset ?? Math.min(length, width) * 0.08
+  );
+  const fallbackEdgeY = -shapeHalfHeight + thickness * 0.08;
+  const centerY = -shapeHalfHeight + thickness * 0.28 + relief * 0.34;
+
+  function pushColor(index, lightnessBias = 0) {
+    const color = palette[Math.floor(hashUnit(seed + index * 17, index) * palette.length)]?.clone() ?? palette[0].clone();
+    color.offsetHSL(0.01, 0.02, lightnessBias + (hashUnit(seed + index * 23, 9) - 0.5) * 0.08);
+    colors.push(color.r, color.g, color.b);
+  }
+
+  positions.push(center.x, centerY, center.z);
+  pushColor(0, 0.03);
+
+  for (let index = 0; index < footprint.length; index += 1) {
+    const point = footprint[index];
+    const dx = center.x - point.x;
+    const dz = center.z - point.z;
+    const distance = Math.hypot(dx, dz);
+    const inward = distance > 0.0001
+      ? Math.min(Math.max(edgeBlendInset * 1.2, Math.min(length, width) * 0.08), distance * 0.58) / distance
+      : 0;
+    const inner = {
+      x: point.x + dx * inward,
+      z: point.z + dz * inward
+    };
+    const rawInnerY = -shapeHalfHeight + thickness * 0.22 + relief * (0.12 + hashUnit(seed + index * 31, 5) * 0.56);
+    const innerY = blendLocalYToGroundEdge(inner, rawInnerY, footprint, edgeBlendInset, fallbackEdgeY);
+    const outerY = Number.isFinite(point.y) ? point.y : fallbackEdgeY;
+
+    positions.push(point.x, outerY, point.z);
+    pushColor(index + 1, -0.04);
+    positions.push(inner.x, innerY, inner.z);
+    pushColor(index + 101, 0.02);
+  }
+
+  for (let index = 0; index < footprint.length; index += 1) {
+    const next = index === footprint.length - 1 ? 0 : index + 1;
+    const outerA = 1 + index * 2;
+    const innerA = outerA + 1;
+    const outerB = 1 + next * 2;
+    const innerB = outerB + 1;
+    indices.push(outerA, outerB, innerB, outerA, innerB, innerA);
+    indices.push(0, innerA, innerB);
+  }
+
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+  geometry.setIndex(indices);
+  geometry.computeVertexNormals();
+  const surface = new THREE.Mesh(geometry, createVertexColorMaterial(0.99));
+  surface.castShadow = true;
+  surface.receiveShadow = true;
+  group.add(surface);
   return group;
 }
 
@@ -1565,6 +1649,8 @@ export function createPropMesh(prop) {
       return createDryLeafPatch(prop);
     case 'dirt_stick_patch':
       return createDirtStickPatch(prop);
+    case 'rock_floor_patch':
+      return createRockFloorPatch(prop);
     case 'root_branch':
     case 'twig':
       return createBranchLikeProp(prop);

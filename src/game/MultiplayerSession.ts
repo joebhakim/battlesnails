@@ -1,52 +1,12 @@
 import { LocalMultiplayerClient } from '../network/LocalMultiplayerClient.js';
-import { normalizePlayerInput } from '../sim/MatchSimulation.js';
+import { normalizePlayerInput } from '../protocol/InputProtocol.js';
+import { mergeNetworkSnapshot } from '../protocol/SnapshotProtocol.js';
 import {
   MULTIPLAYER_MATCH_MODE,
   normalizeMultiplayerOptions
 } from '../sim/MultiplayerOptions.js';
 
-function createTrailCellKey(cell: any) {
-  return `${cell.x}:${cell.z}`;
-}
-
-export function mergeMultiplayerSnapshot(previous: any, update: any, { replace = false }: any = {}) {
-  if (!update) {
-    return replace ? null : previous;
-  }
-
-  const base = replace ? null : previous;
-  const previousPlayersBySlot = new Map<number, any>((base?.players ?? []).map((player: any) => [player.slot, player]));
-  const players = (update.players ?? base?.players ?? []).map((player: any) => ({
-    ...(previousPlayersBySlot.get(player.slot) ?? {}),
-    ...player
-  }));
-  const trailCells = update.trailCells
-    ? [...update.trailCells]
-    : [...(base?.trailCells ?? [])];
-  const trailCellKeys = new Set(trailCells.map(createTrailCellKey));
-
-  for (const cell of update.trailCellsDelta ?? []) {
-    const key = createTrailCellKey(cell);
-    if (trailCellKeys.has(key)) {
-      continue;
-    }
-
-    trailCellKeys.add(key);
-    trailCells.push(cell);
-  }
-
-  return {
-    ...(base ?? {}),
-    ...update,
-    terrain: update.terrain ?? base?.terrain,
-    trailCellSize: update.trailCellSize ?? base?.trailCellSize,
-    trailCells,
-    worldProps: update.worldProps ?? base?.worldProps ?? [],
-    creatures: update.creatures ?? base?.creatures ?? [],
-    events: update.events ?? [],
-    players
-  };
-}
+export { mergeNetworkSnapshot as mergeMultiplayerSnapshot } from '../protocol/SnapshotProtocol.js';
 
 export class MultiplayerSession {
   declare connectionState: any;
@@ -129,7 +89,7 @@ export class MultiplayerSession {
   }
 
   mergeSnapshot(update, replace = false) {
-    return mergeMultiplayerSnapshot(this.snapshot, update, { replace });
+    return mergeNetworkSnapshot(this.snapshot, update, { replace });
   }
 
   handleClose() {

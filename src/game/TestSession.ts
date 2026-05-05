@@ -1,4 +1,5 @@
-import { MatchSimulation, MATCH_TICK_DURATION, normalizePlayerInput } from '../sim/MatchSimulation.js';
+import { normalizePlayerInput } from '../protocol/InputProtocol.js';
+import { MatchSimulation, MATCH_TICK_DURATION } from '../sim/MatchSimulation.js';
 import {
   DEFAULT_TUNING_CONFIG,
   TUNING_SCHEMA,

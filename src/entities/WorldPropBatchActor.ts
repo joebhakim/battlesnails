@@ -16,7 +16,8 @@ const INDIVIDUAL_RENDER_KINDS = new Set([
 const GROUND_COVER_KINDS = new Set([
   'dry_leaf_patch',
   'moss_mat',
-  'dirt_stick_patch'
+  'dirt_stick_patch',
+  'rock_floor_patch'
 ]);
 
 function hashText(text) {
@@ -155,6 +156,10 @@ function getGroundCoverPalette(prop) {
 
   if (prop.kind === 'dirt_stick_patch') {
     return [0x2f2117, 0x4a3020, 0x5a3924, 0x6a3f25, 0x3b2a1e].map((color) => new THREE.Color(color));
+  }
+
+  if (prop.kind === 'rock_floor_patch') {
+    return [0x8a846f, 0xa39b84, 0xb8ad90, 0xcfc3a2, 0xd9cfb5].map((color) => new THREE.Color(color));
   }
 
   return [0x3f2f20, 0x573a22, 0x6f4a28, 0x8a6233, 0x2f241a].map((color) => new THREE.Color(color));

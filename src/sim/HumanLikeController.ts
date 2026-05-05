@@ -1,4 +1,4 @@
-import { createIdleInput } from './MatchSimulation.js';
+import { createIdleInput } from '../protocol/InputProtocol.js';
 import { SeededRandom } from './SeededRandom.js';
 
 export const DEFAULT_HUMANLIKE_CONFIG = Object.freeze({

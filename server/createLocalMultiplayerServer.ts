@@ -1,5 +1,7 @@
 import { createMinimalWebSocketServer, type MinimalWebSocketConnection } from './MinimalWebSocketServer.js';
-import { MatchSimulation, MATCH_TICK_DURATION, createIdleInput, normalizePlayerInput } from '../src/sim/MatchSimulation.js';
+import { MatchSimulation, MATCH_TICK_DURATION } from '../src/sim/MatchSimulation.js';
+import { createBufferedInput, createIdleInput, normalizePlayerInput } from '../src/protocol/InputProtocol.js';
+import { createTrailCellKey } from '../src/protocol/SnapshotProtocol.js';
 import { BotController } from '../src/sim/BotController.js';
 import { createArenaEnvironment } from '../src/sim/ArenaEnvironment.js';
 import {
@@ -37,26 +39,6 @@ function clampSnapshotRate(value: unknown): number {
   }
 
   return Math.min(60, Math.max(10, Math.floor(numericValue)));
-}
-
-function createTrailCellKey(cell: any): string {
-  return `${cell.x}:${cell.z}`;
-}
-
-function createBufferedInput() {
-  return {
-    moveX: 0,
-    moveZ: 0,
-    jumpPressed: false,
-    interactPressed: false,
-    lockOnHeld: false,
-    lookX: 0,
-    lookY: 0,
-    turnX: 0,
-    reachDelta: 0,
-    leftHeld: false,
-    rightHeld: false
-  };
 }
 
 export function createLocalMultiplayerServer(options: LocalMultiplayerServerOptions = {}) {
