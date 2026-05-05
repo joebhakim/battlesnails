@@ -2,6 +2,7 @@ import * as THREE from 'three';
 
 import {
   STALK_EYE_BOUNCE_RESTITUTION,
+  STALK_EYE_BOUNCE_TANGENT_DAMPING,
   STALK_EYE_RADIUS_SCALE,
   STALK_HEMISPHERE_FORWARD_TILT,
   STALK_ROOT_OFFSETS,
@@ -27,8 +28,37 @@ import {
   type TuningConfig,
   normalizeTuningConfig
 } from './Tuning.js';
-import { createTerrainPosition, getTerrainHeight, normalizeTerrainConfig, type TerrainConfig } from '../world/Terrain.js';
+import {
+  SNAIL_POWERUP_LABELS,
+  SNAIL_POWERUP_TYPES,
+  cloneSnailStats,
+  createEmptySnailStats,
+  getPowerupForProp,
+  getSnailDamageMultiplier,
+  getSnailSpeedMultiplier,
+  updateSnailStatDerivedValues
+} from './SnailPowerups.js';
+import {
+  createTerrainPosition,
+  getTerrainHeight,
+  getTerrainWaterInfo,
+  normalizeTerrainConfig,
+  type TerrainConfig
+} from '../world/Terrain.js';
 import { estimateTerrainBodyClearance, getTerrainBodyGroundHeight } from '../world/TerrainClearance.js';
+import {
+  getGroundPatchSurfaceOffset,
+  getGroundPatchSupportNormal,
+  getPolygonPrismPoints,
+  isPointInPolygon2D
+} from '../world/GroundCoverSurface.js';
+import { clampPointToWorldBounds } from '../world/WorldBounds.js';
+import {
+  createTriangleMeshShapeFromProp,
+  findClosestTriangleContact,
+  getVisualCollisionMesh,
+  isVisualMeshCollisionShape
+} from '../entities/VisualCollisionMesh.js';
 
 export const MATCH_TICK_RATE = 60;
 export const MATCH_TICK_DURATION = 1 / MATCH_TICK_RATE;
@@ -110,13 +140,38 @@ const TOP_DOWN_MIN_FORWARD = 0.02;
 const TOP_DOWN_EPSILON = 0.000001;
 const FREE_TURN_RADIANS_PER_PIXEL = 0.004;
 const BASH_DAMAGE_SCALE = 0.2;
+const SCRAPE_DAMAGE_SCALE = 0.04;
+const SCRAPE_SPEED_DEADZONE = 6;
+const BASH_KNOCKBACK_DISTANCE_SCALE = 0.035;
+const SCRAPE_KNOCKBACK_TRANSFER = 0.08;
+const MIN_BASH_KNOCKBACK_DISTANCE = 1.1;
+const MAX_KNOCKBACK_DISTANCE = 8.5;
+const GROUNDED_KNOCKBACK_VERTICAL_FLIP_SCALE = 0.65;
+const AIRBORNE_KNOCKBACK_VERTICAL_SCALE = 0.45;
+const KNOCKBACK_VERTICAL_VELOCITY_SCALE = 0.18;
+const MAX_KNOCKBACK_VERTICAL_VELOCITY = 18;
 const MIN_DAMAGE_EVENT_AMOUNT = 0.025;
 const CONTACT_RENEWAL_IMPULSE_MARGIN = 10;
 const CONTACT_HYSTERESIS_TICKS = 5;
-const ANALYTIC_STALK_AUTHORITY = true;
+const BIRD_DETECTION_RADIUS = 175;
+const BIRD_TRACK_DURATION = 0.55;
+const BIRD_SWOOP_DURATION = 1.1;
+const BIRD_RECOVER_DURATION = 3.0;
+const BIRD_MIN_COOLDOWN = 10;
+const BIRD_MAX_COOLDOWN = 18;
+const BIRD_WARNING_SHADOW_RADIUS = 11;
+const BIRD_IMPACT_RADIUS = 5;
+const BIRD_PATROL_SHADOW_RADIUS = 4.5;
+const BIRD_SHADOW_TRACK_SPEED = 58;
+const BIRD_SWEEP_TRACK_SPEED = 38;
+const BIRD_COVER_QUERY_RADIUS = 90;
+const BIRD_ATTACK_DAMAGE = 999999;
 const WORLD_PROP_INTERACTION_DISTANCE = 3.1;
-const WORLD_PROP_SPATIAL_CELL_SIZE = 80;
+const WORLD_PROP_PICKUP_DISTANCE = 1.35;
+const WORLD_PROP_SPATIAL_CELL_SIZE = 16;
 const PLAYER_SPATIAL_CELL_SIZE = 16;
+const STALK_OBSTACLE_NODE_BOUNDS_MARGIN = 1.05;
+const STALK_FULL_FIDELITY_HUMAN_DISTANCE = 12;
 const WORLD_UP = new THREE.Vector3(0, 1, 0);
 const STALK_FORWARD = new THREE.Vector3(0, 0, 1);
 const PROP_ADHESION_MARGIN = 0.35;
@@ -152,6 +207,28 @@ const SUMMIT_CYLINDER_PROP_KINDS = new Set([
   'lichen_tower',
   'shrub'
 ]);
+
+function isFalseEnvValue(value) {
+  return value === '0' || value === 'false' || value === 'off' || value === 'no';
+}
+
+function isAnalyticStalkAuthorityEnabled() {
+  const viteValue = (import.meta as any).env?.VITE_ANALYTIC_STALK_AUTHORITY;
+  if (viteValue !== undefined) {
+    return !isFalseEnvValue(String(viteValue).toLowerCase());
+  }
+
+  const processValue = typeof process !== 'undefined'
+    ? process.env?.ANALYTIC_STALK_AUTHORITY
+    : undefined;
+  if (processValue !== undefined) {
+    return !isFalseEnvValue(String(processValue).toLowerCase());
+  }
+
+  return false;
+}
+
+const ANALYTIC_STALK_AUTHORITY = isAnalyticStalkAuthorityEnabled();
 
 function angleDifference(current, target) {
   return Math.atan2(Math.sin(target - current), Math.cos(target - current));
@@ -214,8 +291,21 @@ function cloneCollisionShape(shape) {
     ...shape,
     halfExtents: clonePlainVector(shape.halfExtents),
     points: Array.isArray(shape.points)
-      ? shape.points.map((point) => ({ x: point.x, z: point.z }))
-      : shape.points
+      ? shape.points.map((point) => ({
+        x: point.x,
+        z: point.z,
+        ...(Number.isFinite(point.y) ? { y: point.y } : {})
+      }))
+      : shape.points,
+    meshParts: Array.isArray(shape.meshParts)
+      ? shape.meshParts.map((part) => ({
+        ...part,
+        center: clonePlainVector(part.center),
+        start: clonePlainVector(part.start),
+        end: clonePlainVector(part.end),
+        halfExtents: clonePlainVector(part.halfExtents)
+      }))
+      : shape.meshParts
   };
 }
 
@@ -224,15 +314,23 @@ function cloneWorldProp(prop) {
     ...prop,
     position: prop.position ? { ...prop.position } : null,
     collisionShape: cloneCollisionShape(prop.collisionShape),
+    powerup: prop.powerup ? { ...prop.powerup } : null,
     visual: prop.visual ? { ...prop.visual } : {}
   };
 }
 
 function cloneEvent(event) {
-  return {
+  const cloned: any = {
     ...event,
-    position: event.position ? { ...event.position } : null
+    position: event.position ? { ...event.position } : null,
+    shadowPosition: event.shadowPosition ? { ...event.shadowPosition } : undefined
   };
+
+  if (event.knockback) {
+    cloned.knockback = { ...event.knockback };
+  }
+
+  return cloned;
 }
 
 function createContactKey(attacker, target, side) {
@@ -560,6 +658,38 @@ function getContactSurfaceNormal(target, contactSample) {
   return normal.normalize();
 }
 
+function computeDamageKnockbackVector(target, surfaceNormal, tangentVelocity, bashImpulse, scrapeImpulse) {
+  const impulseVector = new THREE.Vector3();
+
+  if (bashImpulse > 0) {
+    impulseVector.addScaledVector(surfaceNormal, -bashImpulse);
+  }
+
+  if (scrapeImpulse > 0 && tangentVelocity.lengthSq() > TOP_DOWN_EPSILON) {
+    impulseVector.addScaledVector(tangentVelocity.clone().normalize(), scrapeImpulse * SCRAPE_KNOCKBACK_TRANSFER);
+  }
+
+  if (impulseVector.lengthSq() <= TOP_DOWN_EPSILON) {
+    return new THREE.Vector3();
+  }
+
+  const hasBash = bashImpulse > 0;
+  const distance = clamp(
+    impulseVector.length() * BASH_KNOCKBACK_DISTANCE_SCALE,
+    hasBash ? MIN_BASH_KNOCKBACK_DISTANCE : 0,
+    MAX_KNOCKBACK_DISTANCE
+  );
+  const knockback = impulseVector.normalize().multiplyScalar(distance);
+
+  if (target.grounded) {
+    knockback.y = Math.abs(knockback.y) * GROUNDED_KNOCKBACK_VERTICAL_FLIP_SCALE;
+  } else {
+    knockback.y *= AIRBORNE_KNOCKBACK_VERTICAL_SCALE;
+  }
+
+  return knockback;
+}
+
 function computeImpactDamageDetails(attacker, target, stalk, contactSample, contactState: any = null) {
   const threshold = Math.max(0.0001, attacker.profile.impactThreshold);
   const radius = Math.max(0.0001, stalk.segmentRadius ?? STALK_SEGMENT_RADIUS);
@@ -582,20 +712,36 @@ function computeImpactDamageDetails(attacker, target, stalk, contactSample, cont
     ? bashImpulse > (contactState.peakBashImpulse + CONTACT_RENEWAL_IMPULSE_MARGIN)
     : true;
   const activeBashImpulse = renewedBashImpulse ? bashImpulse : 0;
+  const scrapeImpulse = Math.max(0, tangentSpeed - SCRAPE_SPEED_DEADZONE) *
+    STALK_EYE_BOUNCE_TANGENT_DAMPING *
+    massScale;
   // Innervation changes damage by changing stalk motion, not by multiplying the final hit.
   // Pressure is intentionally not used because larger eyes should hit harder, not softer.
-  const bashDamage = (activeBashImpulse / threshold) * BASH_DAMAGE_SCALE;
-  const amount = bashDamage;
+  const damageMultiplier = getSnailDamageMultiplier(attacker.snailStats);
+  const bashDamage = (activeBashImpulse / threshold) * BASH_DAMAGE_SCALE * damageMultiplier;
+  const scrapeDamage = (scrapeImpulse / threshold) * SCRAPE_DAMAGE_SCALE * damageMultiplier;
+  const amount = bashDamage + scrapeDamage;
+  const knockback = computeDamageKnockbackVector(
+    target,
+    surfaceNormal,
+    tangentVelocity,
+    activeBashImpulse,
+    scrapeImpulse
+  );
 
   return {
     amount,
-    impactImpulse: activeBashImpulse,
+    impactImpulse: activeBashImpulse + scrapeImpulse,
     bashDamage,
     bashImpulse: activeBashImpulse,
     rawBashImpulse: bashImpulse,
+    scrapeDamage,
+    scrapeImpulse,
+    rawScrapeImpulse: scrapeImpulse,
     impactSpeed,
     tangentSpeed,
-    massScale
+    massScale,
+    knockback
   };
 }
 
@@ -611,8 +757,13 @@ function createDamageEvent({
   const detailScale = damageDetails.amount > 0
     ? Math.min(1, amount / damageDetails.amount)
     : 0;
+  const bashDamage = damageDetails.bashDamage * detailScale;
+  const scrapeDamage = damageDetails.scrapeDamage * detailScale;
+  const hasBashDamage = bashDamage > 0;
+  const hasScrapeDamage = scrapeDamage > 0;
+  const knockback = damageDetails.knockback?.clone?.().multiplyScalar(detailScale) ?? null;
 
-  return {
+  const event: any = {
     id: `${tick}:damage:${attacker.slot}:${target.slot}:${side}`,
     type: 'damage',
     tick,
@@ -620,16 +771,33 @@ function createDamageEvent({
     targetSlot: target.slot,
     side,
     amount,
-    measurement: 'bash',
+    measurement: hasBashDamage && hasScrapeDamage
+      ? 'mixed'
+      : (hasScrapeDamage ? 'scrape' : 'bash'),
     impactSpeed: damageDetails.impactSpeed,
     tangentSpeed: damageDetails.tangentSpeed,
     impactImpulse: damageDetails.impactImpulse,
     bashImpulse: damageDetails.bashImpulse,
     rawBashImpulse: damageDetails.rawBashImpulse,
-    bashDamage: damageDetails.bashDamage * detailScale,
+    bashDamage,
     massScale: damageDetails.massScale,
     position: cloneVector(getImpactSite(target, contactSample))
   };
+
+  if (knockback && knockback.lengthSq() > TOP_DOWN_EPSILON) {
+    event.knockback = cloneVector(knockback);
+  }
+
+  if (damageDetails.scrapeImpulse > 0) {
+    event.scrapeImpulse = damageDetails.scrapeImpulse;
+    event.rawScrapeImpulse = damageDetails.rawScrapeImpulse;
+  }
+
+  if (scrapeDamage > 0) {
+    event.scrapeDamage = scrapeDamage;
+  }
+
+  return event;
 }
 
 function createTrailCellKey(cellX, cellZ) {
@@ -689,6 +857,10 @@ function getFixtureHalfHeight(fixture) {
 }
 
 function getCollisionShapeHalfHeight(shape, fallback = 1) {
+  if (shape?.type === 'visual_mesh' || shape?.type === 'triangle_mesh') {
+    return Number.isFinite(shape.halfHeight) ? shape.halfHeight : fallback;
+  }
+
   if (shape?.type === 'box') {
     return Number.isFinite(shape.halfExtents?.y) ? shape.halfExtents.y : fallback;
   }
@@ -709,6 +881,10 @@ function getCollisionShapeHalfHeight(shape, fallback = 1) {
 }
 
 function getCollisionShapeRadius(shape, fallback = 1) {
+  if (Number.isFinite(shape?.meshRadius)) {
+    return shape.meshRadius;
+  }
+
   if (shape?.type === 'box') {
     const halfExtents = shape.halfExtents ?? {};
     return Math.hypot(halfExtents.x ?? fallback, halfExtents.z ?? fallback);
@@ -745,9 +921,164 @@ function normalizeWorldProp(rawProp: any = {}, terrainConfig) {
     blocking: rawProp.blocking !== false,
     climbable: rawProp.climbable !== false,
     interactionKind: rawProp.interactionKind ?? null,
+    powerup: rawProp.powerup ? { ...rawProp.powerup } : null,
     collisionShape,
     visual: { ...(rawProp.visual ?? {}) }
   };
+}
+
+function getBirdGroundPosition(x, z, terrainConfig, offset = 0.08) {
+  return new THREE.Vector3(x, getTerrainHeight(x, z, terrainConfig) + offset, z);
+}
+
+function getCreatureHome(rawCreature: any = {}) {
+  return {
+    x: Number.isFinite(rawCreature.home?.x)
+      ? rawCreature.home.x
+      : Number.isFinite(rawCreature.position?.x)
+        ? rawCreature.position.x
+        : 0,
+    z: Number.isFinite(rawCreature.home?.z)
+      ? rawCreature.home.z
+      : Number.isFinite(rawCreature.position?.z)
+        ? rawCreature.position.z
+        : 0
+  };
+}
+
+function normalizeCreature(rawCreature: any = {}, terrainConfig, index = 0) {
+  const kind = rawCreature.kind ?? 'bird';
+  if (kind !== 'bird') {
+    return null;
+  }
+
+  const home = getCreatureHome(rawCreature);
+  const phaseOffset = Number.isFinite(rawCreature.phaseOffset) ? rawCreature.phaseOffset : index * 0.73;
+  const patrolRadius = Number.isFinite(rawCreature.patrolRadius) ? rawCreature.patrolRadius : 55;
+  const altitude = Number.isFinite(rawCreature.altitude) ? rawCreature.altitude : 75;
+  const patrolAngle = Number.isFinite(rawCreature.patrolAngle) ? rawCreature.patrolAngle : phaseOffset;
+  const shadowPosition = rawCreature.shadowPosition
+    ? getBirdGroundPosition(rawCreature.shadowPosition.x ?? home.x, rawCreature.shadowPosition.z ?? home.z, terrainConfig)
+    : getBirdGroundPosition(
+      home.x + Math.cos(patrolAngle) * patrolRadius,
+      home.z + Math.sin(patrolAngle) * patrolRadius,
+      terrainConfig
+    );
+  const position = rawCreature.position
+    ? new THREE.Vector3(
+      rawCreature.position.x ?? shadowPosition.x,
+      rawCreature.position.y ?? shadowPosition.y + altitude,
+      rawCreature.position.z ?? shadowPosition.z
+    )
+    : new THREE.Vector3(shadowPosition.x, shadowPosition.y + altitude, shadowPosition.z);
+
+  return {
+    id: rawCreature.id ? `${rawCreature.id}` : `bird-${index}`,
+    kind: 'bird',
+    displayName: rawCreature.displayName ?? 'Bird',
+    home: new THREE.Vector3(home.x, getTerrainHeight(home.x, home.z, terrainConfig), home.z),
+    position,
+    shadowPosition,
+    rotationY: Number.isFinite(rawCreature.rotationY) ? rawCreature.rotationY : patrolAngle,
+    phase: rawCreature.phase ?? 'patrol',
+    phaseTimer: Number.isFinite(rawCreature.phaseTimer) ? rawCreature.phaseTimer : 0,
+    cooldown: Number.isFinite(rawCreature.cooldown) ? rawCreature.cooldown : BIRD_MIN_COOLDOWN + (phaseOffset % 1) * (BIRD_MAX_COOLDOWN - BIRD_MIN_COOLDOWN),
+    targetSlot: Number.isFinite(rawCreature.targetSlot) ? rawCreature.targetSlot : null,
+    patrolAngle,
+    patrolRadius,
+    patrolSpeed: Number.isFinite(rawCreature.patrolSpeed) ? rawCreature.patrolSpeed : 0.18,
+    altitude,
+    bodyLength: Number.isFinite(rawCreature.bodyLength) ? rawCreature.bodyLength : 5.8,
+    wingSpan: Number.isFinite(rawCreature.wingSpan) ? rawCreature.wingSpan : 12,
+    warningRadius: Number.isFinite(rawCreature.warningRadius) ? rawCreature.warningRadius : BIRD_WARNING_SHADOW_RADIUS,
+    impactRadius: Number.isFinite(rawCreature.impactRadius) ? rawCreature.impactRadius : BIRD_IMPACT_RADIUS,
+    attackDamage: Number.isFinite(rawCreature.attackDamage) ? rawCreature.attackDamage : BIRD_ATTACK_DAMAGE,
+    shadowRadius: Number.isFinite(rawCreature.shadowRadius) ? rawCreature.shadowRadius : BIRD_PATROL_SHADOW_RADIUS,
+    shadowOpacity: Number.isFinite(rawCreature.shadowOpacity) ? rawCreature.shadowOpacity : 0.12
+  };
+}
+
+function cloneCreatureDescriptor(creature) {
+  return {
+    id: creature.id,
+    kind: creature.kind,
+    displayName: creature.displayName,
+    home: cloneVector(creature.home),
+    position: cloneVector(creature.position),
+    shadowPosition: cloneVector(creature.shadowPosition),
+    rotationY: creature.rotationY,
+    phaseOffset: creature.patrolAngle,
+    patrolRadius: creature.patrolRadius,
+    patrolSpeed: creature.patrolSpeed,
+    altitude: creature.altitude,
+    bodyLength: creature.bodyLength,
+    wingSpan: creature.wingSpan,
+    warningRadius: creature.warningRadius,
+    impactRadius: creature.impactRadius,
+    attackDamage: creature.attackDamage
+  };
+}
+
+function serializeCreature(creature) {
+  return {
+    id: creature.id,
+    kind: creature.kind,
+    displayName: creature.displayName,
+    position: cloneVector(creature.position),
+    shadowPosition: cloneVector(creature.shadowPosition),
+    rotationY: creature.rotationY,
+    phase: creature.phase,
+    targetSlot: creature.targetSlot,
+    shadowRadius: creature.shadowRadius,
+    shadowOpacity: creature.shadowOpacity,
+    warningRadius: creature.warningRadius,
+    impactRadius: creature.impactRadius,
+    bodyLength: creature.bodyLength,
+    wingSpan: creature.wingSpan
+  };
+}
+
+function getBirdCoverRadius(prop) {
+  switch (prop.kind) {
+    case 'giant_tree':
+    case 'deciduous_tree':
+    case 'conifer_tree':
+      return prop.visual?.canopyRadius ?? Math.max(prop.bodyRadius * 5, 24);
+    case 'shrub':
+      return prop.visual?.radius ?? Math.max(prop.bodyRadius * 2, 5);
+    case 'mushroom':
+      return prop.visual?.capRadius ?? prop.visual?.radius ?? prop.bodyRadius;
+    case 'rotting_log':
+    case 'fallen_branch':
+    case 'root_branch':
+      return Math.max(prop.bodyRadius ?? 0, getCollisionShapeRadius(prop.collisionShape, 1));
+    case 'rock':
+    case 'forest_rock':
+    case 'talus_rock':
+    case 'rock_cluster':
+      return Math.max(prop.bodyRadius ?? 0, getCollisionShapeRadius(prop.collisionShape, 1)) * 1.05;
+    case 'sprout':
+      return (prop.visual?.height ?? 0) >= 18
+        ? Math.max(prop.visual?.leafLength ?? 0, (prop.visual?.radius ?? prop.bodyRadius ?? 0) * 8, 4)
+        : 0;
+    default:
+      return 0;
+  }
+}
+
+function movePlanarToward(current, target, maximumDistance) {
+  const dx = target.x - current.x;
+  const dz = target.z - current.z;
+  const distance = Math.hypot(dx, dz);
+  if (distance <= TOP_DOWN_EPSILON || distance <= maximumDistance) {
+    current.x = target.x;
+    current.z = target.z;
+    return;
+  }
+
+  const scale = maximumDistance / distance;
+  current.x += dx * scale;
+  current.z += dz * scale;
 }
 
 function createWorldPropSpatialCellKey(cellX, cellZ) {
@@ -919,6 +1250,45 @@ function getMaximumPlayerBodyRadius(players) {
   ), 0);
 }
 
+function createStalkFidelityMap(players) {
+  const livingHumans = players.filter((player) => (
+    player.connected &&
+    player.health > 0 &&
+    !player.fixtureKind &&
+    player.profileName !== 'bot'
+  ));
+  const fullDistanceSquared = STALK_FULL_FIDELITY_HUMAN_DISTANCE * STALK_FULL_FIDELITY_HUMAN_DISTANCE;
+  const fidelity = new Map();
+
+  for (const player of players) {
+    if (
+      !player.connected ||
+      player.health <= 0 ||
+      player.fixtureKind ||
+      player.profileName !== 'bot' ||
+      livingHumans.length === 0
+    ) {
+      fidelity.set(player.slot, 'full');
+      continue;
+    }
+
+    let nearestHumanDistanceSquared = Infinity;
+    for (const human of livingHumans) {
+      nearestHumanDistanceSquared = Math.min(
+        nearestHumanDistanceSquared,
+        player.position.distanceToSquared(human.position)
+      );
+    }
+
+    fidelity.set(
+      player.slot,
+      nearestHumanDistanceSquared <= fullDistanceSquared ? 'full' : 'terrain'
+    );
+  }
+
+  return fidelity;
+}
+
 function createFixturePosition(fixture, terrainConfig) {
   const x = fixture.position?.x ?? 0;
   const z = fixture.position?.z ?? 0;
@@ -969,6 +1339,22 @@ function getPlayerGroundHeight(player, terrainConfig) {
     terrainConfig,
     aboveGroundHeight: player.profile.groundHeight ?? 0
   });
+}
+
+function getPlayerWaterSupport(player, terrainConfig) {
+  const water = getTerrainWaterInfo(player.position.x, player.position.z, terrainConfig);
+  if (water.surfaceHeight === null || water.waterWeight <= 0.35) {
+    return null;
+  }
+
+  const floatHeight = water.surfaceHeight + (player.profile.groundHeight ?? 0) * 0.42;
+  return {
+    kind: 'water',
+    height: floatHeight,
+    normal: WORLD_UP.clone(),
+    surfaceId: 'terrain:water',
+    priority: floatHeight + water.waterWeight
+  };
 }
 
 function snapPlayerToGroundIfGrounded(player, terrainConfig) {
@@ -1071,6 +1457,35 @@ function getStalkEntries(player) {
   return STALK_SIDE_KEYS.map((side) => [side, player.stalks[side]]);
 }
 
+function translateStalkPositionArray(nodes, displacement) {
+  if (!Array.isArray(nodes)) {
+    return;
+  }
+
+  for (const node of nodes) {
+    node.add(displacement);
+  }
+}
+
+function translatePlayerAttachments(player, displacement) {
+  if (displacement.lengthSq() <= TOP_DOWN_EPSILON) {
+    return;
+  }
+
+  player.eyeTipPosition?.add(displacement);
+  player.previousEyeTipPosition?.add(displacement);
+
+  for (const [, stalk] of getStalkEntries(player)) {
+    translateStalkPositionArray(stalk.nodes, displacement);
+    translateStalkPositionArray(stalk.previousNodes, displacement);
+    translateStalkPositionArray(stalk.incidentNodes, displacement);
+    translateStalkPositionArray(stalk.incidentPreviousNodes, displacement);
+    stalk.tipPosition?.add(displacement);
+    stalk.previousTipPosition?.add(displacement);
+    stalk.rootWorld?.add(displacement);
+  }
+}
+
 function createBodyObstacles(players) {
   return players
     .filter((player) => player.connected && player.health > 0)
@@ -1090,7 +1505,9 @@ function createWorldPropObstacles(worldProps) {
       propId: prop.id,
       position: prop.position,
       radius: prop.bodyRadius,
-      shape: prop.collisionShape,
+      shape: isVisualMeshCollisionShape(prop.collisionShape)
+        ? createTriangleMeshShapeFromProp(prop)
+        : prop.collisionShape,
       rotationY: prop.rotationY ?? 0
     }));
 }
@@ -1130,75 +1547,8 @@ function getMovementInwardAmount(movement, normal) {
   return Math.max(0, -movement.dot(normal));
 }
 
-function fract(value) {
-  return value - Math.floor(value);
-}
-
-function hashNumber(value) {
-  return fract(Math.sin(value * 127.1) * 43758.5453123);
-}
-
-function getPolygonPrismPoints(shape) {
-  return Array.isArray(shape?.points)
-    ? shape.points.filter((point) => Number.isFinite(point.x) && Number.isFinite(point.z))
-    : [];
-}
-
-function isPointInPolygon2D(point, polygon) {
-  let inside = false;
-  for (let index = 0, previousIndex = polygon.length - 1; index < polygon.length; previousIndex = index, index += 1) {
-    const current = polygon[index];
-    const previous = polygon[previousIndex];
-    const intersects = ((current.z > point.z) !== (previous.z > point.z)) &&
-      (point.x < ((previous.x - current.x) * (point.z - current.z)) / ((previous.z - current.z) || TOP_DOWN_EPSILON) + current.x);
-    if (intersects) {
-      inside = !inside;
-    }
-  }
-
-  return inside;
-}
-
-function getGroundPatchSurfaceOffset(prop, localPoint) {
-  const shape = prop.collisionShape ?? {};
-  const thickness = Math.max(
-    0.01,
-    prop.visual?.thickness ?? (Number.isFinite(shape.halfHeight) ? shape.halfHeight * 2 : 1)
-  );
-  const relief = Math.max(0, prop.visual?.relief ?? shape.relief ?? thickness * 0.25);
-  const scaleLength = Math.max(0.5, prop.visual?.scaleLength ?? shape.scaleLength ?? 4);
-  const scaleWidth = Math.max(0.5, prop.visual?.scaleWidth ?? shape.scaleWidth ?? 2);
-  const grainAngle = prop.visual?.grainAngle ?? shape.grainAngle ?? 0;
-  const alongX = Math.cos(grainAngle);
-  const alongZ = Math.sin(grainAngle);
-  const acrossX = -alongZ;
-  const acrossZ = alongX;
-  const u = (localPoint.x * alongX) + (localPoint.z * alongZ);
-  const v = (localPoint.x * acrossX) + (localPoint.z * acrossZ);
-  const row = Math.floor(v / scaleWidth);
-  const rowPhase = hashNumber(row + (prop.id?.length ?? 0));
-  const progress = fract((u / scaleLength) + rowPhase + (Math.abs(row) % 2) * 0.42);
-  const lip = progress * progress * (3 - (2 * progress));
-  const rowLift = (hashNumber(row * 19.17 + 3.3) - 0.5) * relief * 0.2;
-
-  return clamp(thickness * 0.58 + lip * relief + rowLift, thickness * 0.28, thickness + relief);
-}
-
-function getGroundPatchSupportNormal(prop, localPoint) {
-  const step = Math.max(0.35, Math.min(1.2, (prop.visual?.scaleWidth ?? 3) * 0.18));
-  const left = getGroundPatchSurfaceOffset(prop, { x: localPoint.x - step, z: localPoint.z });
-  const right = getGroundPatchSurfaceOffset(prop, { x: localPoint.x + step, z: localPoint.z });
-  const back = getGroundPatchSurfaceOffset(prop, { x: localPoint.x, z: localPoint.z - step });
-  const forward = getGroundPatchSurfaceOffset(prop, { x: localPoint.x, z: localPoint.z + step });
-  return new THREE.Vector3(
-    -(right - left) / (2 * step),
-    1,
-    -(forward - back) / (2 * step)
-  ).normalize();
-}
-
 function shouldDetachFromSurface(player, support, movement) {
-  if (!support || support.normal.y >= VERTICAL_SURFACE_MIN_UP_DOT) {
+  if (!support || !support.climb || support.normal.y >= VERTICAL_SURFACE_MIN_UP_DOT) {
     return false;
   }
 
@@ -1260,8 +1610,56 @@ function getCylinderPlanarContact(player, prop) {
   };
 }
 
+function getVisualMeshContact(player, prop, maximumDistance) {
+  const mesh = getVisualCollisionMesh(prop);
+  const localCenter = getYawLocalVector(player.position.clone().sub(prop.position), prop.rotationY ?? 0);
+  const contact = findClosestTriangleContact(localCenter, mesh.triangles, maximumDistance);
+  if (!contact) {
+    return null;
+  }
+
+  const worldNormal = getYawWorldVector(contact.normal, prop.rotationY ?? 0);
+  if (worldNormal.lengthSq() <= TOP_DOWN_EPSILON) {
+    worldNormal.copy(WORLD_UP);
+  } else {
+    worldNormal.normalize();
+  }
+
+  const worldPoint = prop.position.clone().add(getYawWorldVector(contact.point, prop.rotationY ?? 0));
+  return {
+    ...contact,
+    mesh,
+    localCenter,
+    worldNormal,
+    worldPoint
+  };
+}
+
+function getVisualMeshPlanarContact(player, prop) {
+  const contact = getVisualMeshContact(player, prop, player.bodyRadius + PROP_ADHESION_MARGIN);
+  if (!contact || contact.distance >= player.bodyRadius) {
+    return null;
+  }
+
+  const correction = contact.worldNormal.clone().multiplyScalar(player.bodyRadius - contact.distance);
+  if (Math.abs(correction.x) + Math.abs(correction.z) <= TOP_DOWN_EPSILON) {
+    return null;
+  }
+
+  return {
+    correction,
+    normal: contact.worldNormal,
+    local: contact.localCenter,
+    face: 'mesh'
+  };
+}
+
 function getPropShapeHalfHeight(prop) {
   const shape = prop.collisionShape ?? { type: 'sphere', radius: prop.bodyRadius };
+  if (isVisualMeshCollisionShape(shape)) {
+    return Number.isFinite(shape.halfHeight) ? shape.halfHeight : prop.bodyRadius;
+  }
+
   if (shape.type === 'box') {
     return shape.halfExtents?.y ?? prop.bodyRadius;
   }
@@ -1298,6 +1696,10 @@ function getPropTopSupportHeight(prop, player) {
 }
 
 function shouldSkipPlanarPropCollision(player, prop) {
+  if (isVisualMeshCollisionShape(prop.collisionShape)) {
+    return false;
+  }
+
   if (!prop.climbable) {
     return false;
   }
@@ -1475,6 +1877,53 @@ function getSphereSupport(player, prop) {
   });
 }
 
+function getVisualMeshSupport(player, prop, movement, speed, delta) {
+  const contact = getVisualMeshContact(
+    player,
+    prop,
+    player.bodyRadius + PROP_ADHESION_MARGIN + PROP_SUPPORT_SNAP_DISTANCE
+  );
+  if (!contact) {
+    return null;
+  }
+
+  const normal = contact.worldNormal;
+  const surfaceId = `prop:${prop.id}:mesh`;
+  const supportHeight = contact.worldPoint.y + Math.max(0, normal.y) * player.bodyRadius;
+
+  if (normal.y > 0.12) {
+    if (player.position.y > supportHeight + PROP_SUPPORT_SNAP_DISTANCE) {
+      return null;
+    }
+
+    return createPropSupport({
+      prop,
+      height: supportHeight,
+      normal,
+      surfaceId,
+      priority: supportHeight + normal.y
+    });
+  }
+
+  const inwardAmount = getMovementInwardAmount(movement, normal);
+  if (inwardAmount <= CLIMB_INWARD_INPUT_THRESHOLD && player.supportSurfaceId !== surfaceId) {
+    return null;
+  }
+
+  const climbDelta = inwardAmount * speed * delta * PROP_CLIMB_SPEED_SCALE;
+  const minimumHeight = prop.position.y + contact.mesh.bounds.min.y + player.bodyRadius * 0.35;
+  const maximumHeight = prop.position.y + contact.mesh.bounds.max.y + player.bodyRadius;
+  const height = clamp(player.position.y + climbDelta, minimumHeight, maximumHeight);
+  return createPropSupport({
+    prop,
+    height,
+    normal,
+    surfaceId,
+    climb: true,
+    priority: height + 5
+  });
+}
+
 function getConeSupport(player, prop) {
   const shape = prop.collisionShape ?? { type: 'cylinder', radius: prop.bodyRadius, halfHeight: prop.bodyRadius };
   const radius = shape.radius ?? prop.visual?.radius ?? prop.bodyRadius;
@@ -1598,6 +2047,68 @@ function getStalkObstacleBroadphaseRadius(player) {
   );
 }
 
+function getObstaclePlanarRadius(obstacle) {
+  return Math.max(
+    0,
+    obstacle?.radius ?? getCollisionShapeRadius(obstacle?.shape ?? obstacle?.collisionShape, 1)
+  );
+}
+
+function expandStalkBoundsWithNodes(bounds, nodes = []) {
+  for (const node of nodes) {
+    if (!node) {
+      continue;
+    }
+
+    bounds.minX = Math.min(bounds.minX, node.x);
+    bounds.maxX = Math.max(bounds.maxX, node.x);
+    bounds.minZ = Math.min(bounds.minZ, node.z);
+    bounds.maxZ = Math.max(bounds.maxZ, node.z);
+  }
+}
+
+function getStalkPlanarBounds(stalk, rootWorld, goalWorld) {
+  const bounds = {
+    minX: Math.min(rootWorld.x, goalWorld.x),
+    maxX: Math.max(rootWorld.x, goalWorld.x),
+    minZ: Math.min(rootWorld.z, goalWorld.z),
+    maxZ: Math.max(rootWorld.z, goalWorld.z)
+  };
+
+  expandStalkBoundsWithNodes(bounds, stalk.nodes);
+  expandStalkBoundsWithNodes(bounds, stalk.previousNodes);
+  expandStalkBoundsWithNodes(bounds, stalk.incidentNodes);
+  return bounds;
+}
+
+function filterStalkCollisionObstacles(stalk, rootWorld, goalWorld, obstacles) {
+  if (obstacles.length === 0) {
+    return obstacles;
+  }
+
+  const bounds = getStalkPlanarBounds(stalk, rootWorld, goalWorld);
+  const margin = STALK_OBSTACLE_NODE_BOUNDS_MARGIN + (stalk.segmentRadius ?? STALK_SEGMENT_RADIUS);
+
+  return obstacles.filter((obstacle) => {
+    if (obstacle.self) {
+      return true;
+    }
+
+    const position = obstacle.position;
+    if (!position) {
+      return false;
+    }
+
+    const radius = getObstaclePlanarRadius(obstacle) + margin;
+    return (
+      position.x >= bounds.minX - radius &&
+      position.x <= bounds.maxX + radius &&
+      position.z >= bounds.minZ - radius &&
+      position.z <= bounds.maxZ + radius
+    );
+  });
+}
+
 function getStalkBodyObstacles(player, bodyObstacles) {
   const broadphaseRadius = getStalkObstacleBroadphaseRadius(player);
 
@@ -1682,7 +2193,7 @@ function serializeStalk(stalk) {
   const targetPoint = stalk.targetVector.clone().multiplyScalar(stalk.targetReach);
   const currentPoint = stalk.currentVector.clone().multiplyScalar(stalk.currentReach);
 
-  return {
+  const serialized: any = {
     segmentRadius: stalk.segmentRadius,
     held: stalk.held,
     impactPower: stalk.impactPower,
@@ -1697,6 +2208,12 @@ function serializeStalk(stalk) {
     targetYaw: stalk.desiredYaw,
     targetPitch: stalk.desiredPitch
   };
+
+  if (!ANALYTIC_STALK_AUTHORITY) {
+    serialized.nodes = serializeNodes(stalk.nodes);
+  }
+
+  return serialized;
 }
 
 function serializeStalks(player) {
@@ -1719,11 +2236,13 @@ function serializeNetworkPlayer(player, { includeStatic = true } = {}) {
     health: player.health,
     onTrail: player.onTrail,
     grounded: player.grounded,
+    supportKind: player.supportKind,
     supportNormal: cloneVector(player.supportNormal ?? WORLD_UP),
     lockOn: player.lockOnHeld,
     controlMode: player.controlMode,
     controlIntensity: player.controlIntensity,
-    impactPower: player.impactPower
+    impactPower: player.impactPower,
+    snailStats: cloneSnailStats(player.snailStats)
   };
 
   if (!includeStatic) {
@@ -1834,12 +2353,15 @@ function createPlayerState(
     rotationY: initialRotation,
     health: profile.maxHealth,
     maxHealth: profile.maxHealth,
+    baseMaxHealth: profile.maxHealth,
+    snailStats: createEmptySnailStats(),
     onTrail: false,
     grounded: spawnDropHeight <= 0,
     supportNormal: WORLD_UP.clone(),
     supportKind: 'terrain',
     supportSurfaceId: null,
     verticalVelocity: 0,
+    immortal: Boolean(participant?.immortal),
     lockOnHeld: false,
     controlMode: 'idle',
     controlIntensity: 0,
@@ -1854,7 +2376,9 @@ function applyProfileToPlayer(player, profile) {
   }
 
   player.profile = profile;
-  player.maxHealth = profile.maxHealth;
+  player.baseMaxHealth = profile.maxHealth;
+  const calcium = Math.max(0, Number(player.snailStats?.calcium) || 0);
+  player.maxHealth = profile.maxHealth + calcium;
   player.health = Math.min(player.health, player.maxHealth);
   player.bodyRadius = profile.bodyRadius;
 
@@ -1908,6 +2432,8 @@ function applyArenaRadiusOverride(profileTemplates: any, arenaRadius: any) {
 
 export class MatchSimulation {
   declare tuningConfig: TuningConfig;
+  declare creatures: any[];
+  declare initialCreatureDescriptors: any[];
   declare wetTrailCells: Map<string, any>;
   declare arenaRadiusOverride: any;
   declare contactMemory: Map<string, any>;
@@ -1926,6 +2452,7 @@ export class MatchSimulation {
   declare trailContactRadius: any;
   declare trailSpeedMultiplier: any;
   declare winnerSlot: any;
+  declare worldBounds: any;
   declare worldProps: any[];
   declare worldPropSpatialCellSize: any;
   declare worldPropSpatialIndex: any;
@@ -1945,6 +2472,7 @@ export class MatchSimulation {
     this.arenaRadiusOverride = Number.isFinite(options.arenaRadius)
       ? options.arenaRadius
       : this.terrainConfig.worldRadius;
+    this.worldBounds = options.worldBounds ?? null;
     applyArenaRadiusOverride(this.profileTemplates, this.arenaRadiusOverride);
     this.mode = options.mode ?? 'singleplayer';
     this.phase = options.startImmediately === false ? 'waiting' : 'running';
@@ -1960,6 +2488,10 @@ export class MatchSimulation {
     this.worldProps = (options.worldProps ?? []).map((prop) => normalizeWorldProp(prop, this.terrainConfig));
     this.worldPropSpatialCellSize = options.worldPropSpatialCellSize ?? WORLD_PROP_SPATIAL_CELL_SIZE;
     this.worldPropSpatialIndex = createWorldPropSpatialIndex(this.worldProps, this.worldPropSpatialCellSize);
+    this.creatures = (options.creatures ?? [])
+      .map((creature, index) => normalizeCreature(creature, this.terrainConfig, index))
+      .filter(Boolean);
+    this.initialCreatureDescriptors = this.creatures.map(cloneCreatureDescriptor);
 
     this.players = new Map();
     this.inputs = new Map();
@@ -2016,6 +2548,9 @@ export class MatchSimulation {
     this.wetTrailCells.clear();
     this.events = [];
     this.contactMemory.clear();
+    this.creatures = this.initialCreatureDescriptors
+      .map((creature, index) => normalizeCreature(creature, this.terrainConfig, index))
+      .filter(Boolean);
   }
 
   setPlayerConnected(slot, connected) {
@@ -2072,6 +2607,7 @@ export class MatchSimulation {
         x: cell.x,
         z: cell.z
       })),
+      creatures: this.creatures.map(serializeCreature),
       events: this.events.map(cloneEvent),
       players: Array.from(this.players.values())
         .sort((left, right) => left.slot - right.slot)
@@ -2090,11 +2626,13 @@ export class MatchSimulation {
           groundHeight: player.profile.groundHeight,
           onTrail: player.onTrail,
           grounded: player.grounded,
+          supportKind: player.supportKind,
           supportNormal: cloneVector(player.supportNormal ?? WORLD_UP),
           lockOn: player.lockOnHeld,
           controlMode: player.controlMode,
           controlIntensity: player.controlIntensity,
           impactPower: player.impactPower,
+          snailStats: cloneSnailStats(player.snailStats),
           stalks: serializeStalks(player)
         }))
     };
@@ -2112,6 +2650,7 @@ export class MatchSimulation {
       phase: this.phase,
       winnerSlot: this.winnerSlot,
       reason: this.endReason,
+      creatures: this.creatures.map(serializeCreature),
       events: this.events.map(cloneEvent),
       players: Array.from(this.players.values())
         .sort((left, right) => left.slot - right.slot)
@@ -2189,6 +2728,7 @@ export class MatchSimulation {
     }
 
     const playerSpatialIndex = createPlayerSpatialIndex(orderedPlayers);
+    const stalkFidelity = createStalkFidelityMap(orderedPlayers);
     const maximumBodyRadius = getMaximumPlayerBodyRadius(orderedPlayers);
     const resolvedBodyPairs = new Set();
     for (let leftIndex = 0; leftIndex < orderedPlayers.length; leftIndex += 1) {
@@ -2241,19 +2781,25 @@ export class MatchSimulation {
         }
       }
 
-      const nearbyBodyPlayers = queryPlayerSpatialIndex(
-        playerSpatialIndex,
-        player.position,
-        getStalkObstacleBroadphaseRadius(player) + maximumBodyRadius
-      );
-      const playerBodyObstacles = createBodyObstacles(nearbyBodyPlayers);
-      const stalkPropObstacles = createWorldPropObstacles(
-        this.getNearbyWorldProps(player.position, getStalkObstacleBroadphaseRadius(player))
-      );
+      const fidelity = stalkFidelity.get(player.slot) ?? 'full';
+      const needsFullStalkObstacles = fidelity === 'full';
+      const nearbyBodyPlayers = needsFullStalkObstacles
+        ? queryPlayerSpatialIndex(
+          playerSpatialIndex,
+          player.position,
+          getStalkObstacleBroadphaseRadius(player) + maximumBodyRadius
+        )
+        : [];
+      const playerBodyObstacles = needsFullStalkObstacles ? createBodyObstacles(nearbyBodyPlayers) : [];
+      const stalkPropObstacles = needsFullStalkObstacles
+        ? createWorldPropObstacles(
+          this.getNearbyWorldProps(player.position, getStalkObstacleBroadphaseRadius(player))
+        )
+        : [];
       this.updateStalkRopes(player, delta, [
         ...playerBodyObstacles,
         ...stalkPropObstacles
-      ]);
+      ], { fidelity });
       player.bodyVelocity.copy(player.position).sub(player.previousPosition).divideScalar(Math.max(delta, 0.0001));
       updateCompositeTipState(player, delta);
       player.onTrail = player.health > 0 && this.isPlayerOnWetTrail(player);
@@ -2278,6 +2824,7 @@ export class MatchSimulation {
       }
     }
 
+    this.updateCreatures(delta);
     this.evaluateEndState();
     this.tick += 1;
     return this.getSnapshot(snapshotOptions);
@@ -2415,10 +2962,13 @@ export class MatchSimulation {
     const baseSpeed = normalizedInput.lockOnHeld
       ? player.profile.lockedMoveSpeed
       : player.profile.freeMoveSpeed;
-    const speed = baseSpeed * (this.isPlayerOnWetTrail(player) ? this.trailSpeedMultiplier : 1);
+    const speed = baseSpeed *
+      getSnailSpeedMultiplier(player.snailStats) *
+      (this.isPlayerOnWetTrail(player) ? this.trailSpeedMultiplier : 1);
     player.position.addScaledVector(movement, speed * delta);
     this.clampPlanarPosition(player);
     const propContacts = this.resolveWorldPropCollision(player);
+    this.collectNearbyPowerups(player);
 
     const terrainHeight = getPlayerGroundHeight(player, this.terrainConfig);
     const support = this.getBestWorldSupport(player, movement, speed, delta, propContacts);
@@ -2558,7 +3108,7 @@ export class MatchSimulation {
     }
   }
 
-  updateStalkRopes(player, delta, bodyObstacles = []) {
+  updateStalkRopes(player, delta, bodyObstacles = [], options: any = {}) {
     if (ANALYTIC_STALK_AUTHORITY) {
       for (const [, stalk] of getStalkEntries(player)) {
         advanceAppliedStalkTarget(stalk, player.profile, delta);
@@ -2598,6 +3148,8 @@ export class MatchSimulation {
       return;
     }
 
+    const fidelity = options.fidelity ?? 'full';
+    const fullFidelity = fidelity === 'full';
     const collisionBodyObstacles = getStalkBodyObstacles(player, bodyObstacles);
     const terrainHeightAt = (x, z) => getTerrainHeight(x, z, this.terrainConfig);
 
@@ -2614,6 +3166,12 @@ export class MatchSimulation {
         stalk.rootOffset
       );
       const rootWorld = getStalkRootWorldPosition(player.position, player.rotationY, stalk.rootOffset);
+      const stalkCollisionObstacles = filterStalkCollisionObstacles(
+        stalk,
+        rootWorld,
+        goalWorld,
+        fullFidelity ? collisionBodyObstacles : []
+      );
 
       simulateStalkRope({
         nodes: stalk.nodes,
@@ -2627,12 +3185,14 @@ export class MatchSimulation {
         gravity: player.profile.stalkGravity,
         damping: player.profile.stalkDamping,
         goalPull: stalk.held ? player.profile.stalkDrivePull : player.profile.stalkIdlePull,
-        constraintIterations: player.profile.stalkConstraintIterations,
+        constraintIterations: fullFidelity ? player.profile.stalkConstraintIterations : 1,
         turgidity: stalk.held ? player.profile.stalkTurgidity : 0,
         collision: {
           terrainHeightAt,
-          bodyObstacles: collisionBodyObstacles,
-          segmentRadius: stalk.segmentRadius
+          bodyObstacles: stalkCollisionObstacles,
+          segmentRadius: stalk.segmentRadius,
+          includeSegmentMidpoints: fullFidelity,
+          iterations: fullFidelity ? undefined : 0
         }
       });
 
@@ -2729,6 +3289,10 @@ export class MatchSimulation {
       priority: terrainHeight
     };
     let bestSupport = terrainSupport;
+    const waterSupport = getPlayerWaterSupport(player, this.terrainConfig);
+    if (waterSupport && waterSupport.priority > bestSupport.priority) {
+      bestSupport = waterSupport;
+    }
     const contactByPropId = new Map(contacts.map((contact) => [contact.prop.id, contact]));
 
     const supportProps = this.getNearbyWorldProps(
@@ -2741,11 +3305,17 @@ export class MatchSimulation {
         continue;
       }
 
+      if (!player.grounded && player.verticalVelocity > 0.05) {
+        continue;
+      }
+
       const shape = prop.collisionShape ?? { type: 'sphere', radius: prop.bodyRadius };
       const planarContact = contactByPropId.get(prop.id)?.contact ?? null;
       let support = null;
 
-      if (prop.kind === 'rotting_log' || prop.kind === 'root_branch' || prop.kind === 'twig' || prop.kind === 'fallen_branch') {
+      if (isVisualMeshCollisionShape(shape)) {
+        support = getVisualMeshSupport(player, prop, movement, speed, delta);
+      } else if (prop.kind === 'rotting_log' || prop.kind === 'root_branch' || prop.kind === 'twig' || prop.kind === 'fallen_branch') {
         support = getLogSupport(player, prop, movement, speed, delta);
       } else if (prop.kind === 'bamboo_stick') {
         support = getBambooStickSupport(player, prop);
@@ -2783,12 +3353,24 @@ export class MatchSimulation {
     const nextSurfaceId = support?.surfaceId ?? null;
     const wasPropSupported = previousKind === 'prop' && previousSurfaceId;
     const isPropSupported = nextKind === 'prop' && nextSurfaceId;
+    const isWaterSupported = nextKind === 'water';
 
-    if (!isPropSupported && wasPropSupported && player.position.y > terrainHeight + 0.05) {
+    if (!isPropSupported && !isWaterSupported && wasPropSupported && player.position.y > terrainHeight + 0.05) {
       player.grounded = false;
       player.verticalVelocity = Math.min(0, player.verticalVelocity);
       player.supportKind = 'air';
       player.supportSurfaceId = null;
+      player.supportNormal.copy(WORLD_UP);
+      return false;
+    }
+
+    if (isWaterSupported) {
+      const bob = Math.sin((this.tick * 0.075) + player.slot) * 0.025;
+      player.position.y = moveTowards(player.position.y, nextHeight + bob, Math.max(speed * 0.8 * delta, 0.03));
+      player.grounded = true;
+      player.verticalVelocity = 0;
+      player.supportKind = 'water';
+      player.supportSurfaceId = nextSurfaceId;
       player.supportNormal.copy(WORLD_UP);
       return false;
     }
@@ -2835,6 +3417,19 @@ export class MatchSimulation {
 
         const shape = prop.collisionShape ?? { type: 'sphere', radius: prop.bodyRadius };
 
+        if (isVisualMeshCollisionShape(shape)) {
+          const contact = getVisualMeshPlanarContact(player, prop);
+          if (!contact) {
+            continue;
+          }
+
+          player.position.x += contact.correction.x;
+          player.position.z += contact.correction.z;
+          contacts.push({ prop, contact });
+          moved = true;
+          continue;
+        }
+
         if (shape.type === 'box') {
           const contact = getRotatedBoxPlanarContact(player, prop);
           if (!contact) {
@@ -2867,6 +3462,121 @@ export class MatchSimulation {
     }
 
     return contacts;
+  }
+
+  rebuildWorldPropSpatialIndex() {
+    this.worldPropSpatialIndex = createWorldPropSpatialIndex(this.worldProps, this.worldPropSpatialCellSize);
+  }
+
+  removeWorldPropById(propId) {
+    const index = this.worldProps.findIndex((prop) => prop.id === propId);
+    if (index < 0) {
+      return null;
+    }
+
+    const [prop] = this.worldProps.splice(index, 1);
+    this.rebuildWorldPropSpatialIndex();
+    return prop;
+  }
+
+  applyPowerupToPlayer(player, powerup, prop) {
+    if (!player.snailStats) {
+      player.snailStats = createEmptySnailStats();
+    }
+
+    const amount = Math.max(0, Number(powerup.amount) || 0);
+    player.snailStats.pickups += 1;
+
+    switch (powerup.type) {
+      case 'dew':
+        player.snailStats.dew += amount;
+        break;
+      case 'food':
+        player.snailStats.food += amount;
+        player.health = Math.min(player.maxHealth, player.health + amount);
+        break;
+      case 'calcium':
+        player.snailStats.calcium += amount;
+        player.maxHealth = (player.baseMaxHealth ?? player.profile.maxHealth) + player.snailStats.calcium;
+        player.health = Math.min(player.maxHealth, player.health + amount * 0.65);
+        break;
+      case 'grit':
+        player.snailStats.grit += amount;
+        break;
+    }
+
+    updateSnailStatDerivedValues(player.snailStats);
+    const burstPosition = cloneVector(prop.position);
+    burstPosition.y = Math.max(
+      burstPosition.y + Math.max(1, (prop.bodyRadius ?? 0) * 0.65),
+      player.position.y + Math.max(1.6, player.bodyRadius * 1.2)
+    );
+    this.events.push({
+      id: `${this.tick}:powerup:${player.slot}:${prop.id}`,
+      type: 'powerup',
+      tick: this.tick,
+      playerSlot: player.slot,
+      propId: prop.id,
+      powerupType: powerup.type,
+      amount,
+      label: powerup.label,
+      position: burstPosition
+    });
+  }
+
+  collectNearbyPowerups(player) {
+    if (!player.connected || player.health <= 0 || player.fixtureKind) {
+      return;
+    }
+
+    const candidates = this.getNearbyWorldProps(player.position, player.bodyRadius + WORLD_PROP_PICKUP_DISTANCE + 8);
+    for (const prop of candidates) {
+      const powerup = getPowerupForProp(prop);
+      if (!powerup) {
+        continue;
+      }
+
+      const distance = Math.hypot(
+        player.position.x - prop.position.x,
+        player.position.z - prop.position.z
+      );
+      const pickupDistance = player.bodyRadius + prop.bodyRadius + WORLD_PROP_PICKUP_DISTANCE;
+      if (distance > pickupDistance) {
+        continue;
+      }
+
+      const removed = this.removeWorldPropById(prop.id);
+      if (!removed) {
+        continue;
+      }
+
+      this.applyPowerupToPlayer(player, powerup, removed);
+      break;
+    }
+  }
+
+  grantPowerupToSlot(slot, type, amount = 1, label = null) {
+    if (!SNAIL_POWERUP_TYPES.includes(type)) {
+      return false;
+    }
+
+    const player = this.players.get(slot);
+    if (!player || !player.connected || player.health <= 0 || player.fixtureKind) {
+      return false;
+    }
+
+    const safeAmount = Math.max(0, Number(amount) || 0);
+    const debugIndex = (player.snailStats?.pickups ?? 0) + 1;
+    this.applyPowerupToPlayer(player, {
+      type,
+      amount: safeAmount,
+      label: label ?? SNAIL_POWERUP_LABELS[type] ?? type
+    }, {
+      id: `debug-${type}-${slot}-${this.tick}-${debugIndex}`,
+      position: cloneVector(player.position),
+      bodyRadius: player.bodyRadius
+    });
+    return true;
   }
 
   resolveWorldPropInteraction(player) {
@@ -2912,8 +3622,233 @@ export class MatchSimulation {
   }
 
   clampPlanarPosition(player) {
+    if (this.worldBounds) {
+      const clamped = clampPointToWorldBounds(player.position.x, player.position.z, this.worldBounds);
+      player.position.x = clamped.x;
+      player.position.z = clamped.z;
+      return;
+    }
+
     player.position.x = clamp(player.position.x, -player.profile.arenaRadius, player.profile.arenaRadius);
     player.position.z = clamp(player.position.z, -player.profile.arenaRadius, player.profile.arenaRadius);
+  }
+
+  isPlayerUnderBirdCover(player) {
+    const props = this.getNearbyWorldProps(player.position, BIRD_COVER_QUERY_RADIUS);
+
+    for (const prop of props) {
+      const coverRadius = getBirdCoverRadius(prop);
+      if (coverRadius <= 0) {
+        continue;
+      }
+
+      const distance = Math.hypot(
+        player.position.x - prop.position.x,
+        player.position.z - prop.position.z
+      );
+      if (distance <= coverRadius + Math.max(0.5, player.bodyRadius * 0.35)) {
+        return true;
+      }
+    }
+
+    return false;
+  }
+
+  findBirdTarget(creature) {
+    const detectionRadiusSq = BIRD_DETECTION_RADIUS * BIRD_DETECTION_RADIUS;
+    let bestTarget = null;
+    let bestScore = Infinity;
+
+    for (const player of this.players.values()) {
+      if (
+        !player.connected ||
+        player.health <= 0 ||
+        player.fixtureKind
+      ) {
+        continue;
+      }
+
+      const dx = player.position.x - creature.shadowPosition.x;
+      const dz = player.position.z - creature.shadowPosition.z;
+      const distanceSq = dx * dx + dz * dz;
+      if (distanceSq > detectionRadiusSq || this.isPlayerUnderBirdCover(player)) {
+        continue;
+      }
+
+      const humanBias = player.profileName === 'bot' ? detectionRadiusSq : 0;
+      const score = distanceSq + humanBias;
+      if (score < bestScore) {
+        bestScore = score;
+        bestTarget = player;
+      }
+    }
+
+    return bestTarget;
+  }
+
+  setBirdPhase(creature, phase, targetSlot = null) {
+    creature.phase = phase;
+    creature.phaseTimer = 0;
+    creature.targetSlot = targetSlot;
+  }
+
+  syncBirdPose(creature, diveAlpha = 0) {
+    const shadowGround = getBirdGroundPosition(
+      creature.shadowPosition.x,
+      creature.shadowPosition.z,
+      this.terrainConfig
+    );
+    const oldX = creature.position.x;
+    const oldZ = creature.position.z;
+    creature.shadowPosition.copy(shadowGround);
+    const lowAltitude = Math.max(creature.bodyLength * 1.35, 7);
+    const altitude = THREE.MathUtils.lerp(creature.altitude, lowAltitude, clamp(diveAlpha, 0, 1));
+    creature.position.set(creature.shadowPosition.x, creature.shadowPosition.y + altitude, creature.shadowPosition.z);
+
+    const dx = creature.position.x - oldX;
+    const dz = creature.position.z - oldZ;
+    if ((dx * dx) + (dz * dz) > TOP_DOWN_EPSILON) {
+      creature.rotationY = Math.atan2(dx, dz);
+    }
+  }
+
+  updateBirdPatrol(creature, delta) {
+    creature.phaseTimer += delta;
+    creature.cooldown = Math.max(0, creature.cooldown - delta);
+    creature.patrolAngle += creature.patrolSpeed * delta;
+    creature.shadowPosition.x = creature.home.x + Math.cos(creature.patrolAngle) * creature.patrolRadius;
+    creature.shadowPosition.z = creature.home.z + Math.sin(creature.patrolAngle) * creature.patrolRadius;
+    creature.shadowRadius = BIRD_PATROL_SHADOW_RADIUS;
+    creature.shadowOpacity = 0.12;
+    this.syncBirdPose(creature);
+
+    if (creature.cooldown > 0) {
+      return;
+    }
+
+    const target = this.findBirdTarget(creature);
+    if (target) {
+      this.setBirdPhase(creature, 'tracking', target.slot);
+    }
+  }
+
+  updateBirdTracking(creature, delta) {
+    creature.phaseTimer += delta;
+    const target = this.players.get(creature.targetSlot);
+    if (!target || target.health <= 0 || !target.connected || this.isPlayerUnderBirdCover(target)) {
+      creature.cooldown = 2.5;
+      this.setBirdPhase(creature, 'patrol');
+      return;
+    }
+
+    movePlanarToward(creature.shadowPosition, target.position, BIRD_SHADOW_TRACK_SPEED * delta);
+    creature.shadowRadius = creature.warningRadius;
+    creature.shadowOpacity = 0.3;
+    this.syncBirdPose(creature);
+
+    if (creature.phaseTimer >= BIRD_TRACK_DURATION) {
+      this.setBirdPhase(creature, 'swoop', target.slot);
+    }
+  }
+
+  resolveBirdImpact(creature) {
+    const target = this.players.get(creature.targetSlot);
+    const targetAlive = target && target.connected && target.health > 0 && !target.fixtureKind;
+    const hit = Boolean(targetAlive) &&
+      !this.isPlayerUnderBirdCover(target) &&
+      Math.hypot(
+        target.position.x - creature.shadowPosition.x,
+        target.position.z - creature.shadowPosition.z
+      ) <= creature.impactRadius;
+
+    if (hit) {
+      const amount = target.immortal ? 0 : Math.min(target.health, creature.attackDamage);
+      if (!target.immortal) {
+        target.health = Math.max(0, target.health - creature.attackDamage);
+      }
+
+      this.events.push({
+        id: `${this.tick}:bird_attack:${creature.id}:${target.slot}`,
+        type: 'bird_attack',
+        tick: this.tick,
+        birdId: creature.id,
+        targetSlot: target.slot,
+        amount,
+        lethal: !target.immortal,
+        position: cloneVector(target.position),
+        shadowPosition: cloneVector(creature.shadowPosition)
+      });
+    } else {
+      this.events.push({
+        id: `${this.tick}:bird_miss:${creature.id}:${creature.targetSlot ?? 'none'}`,
+        type: 'bird_miss',
+        tick: this.tick,
+        birdId: creature.id,
+        targetSlot: creature.targetSlot,
+        position: cloneVector(creature.shadowPosition)
+      });
+    }
+
+    const phaseJitter = ((Math.sin((this.tick + creature.id.length) * 12.9898) * 43758.5453123) % 1 + 1) % 1;
+    creature.cooldown = BIRD_MIN_COOLDOWN + phaseJitter * (BIRD_MAX_COOLDOWN - BIRD_MIN_COOLDOWN);
+    this.setBirdPhase(creature, 'recover');
+  }
+
+  updateBirdSwoop(creature, delta) {
+    creature.phaseTimer += delta;
+    const target = this.players.get(creature.targetSlot);
+    if (target?.connected && target.health > 0) {
+      movePlanarToward(creature.shadowPosition, target.position, BIRD_SWEEP_TRACK_SPEED * delta);
+    }
+
+    const alpha = clamp(creature.phaseTimer / BIRD_SWOOP_DURATION, 0, 1);
+    creature.shadowRadius = THREE.MathUtils.lerp(creature.warningRadius, creature.impactRadius, alpha);
+    creature.shadowOpacity = THREE.MathUtils.lerp(0.34, 0.66, alpha);
+    this.syncBirdPose(creature, alpha);
+
+    if (creature.phaseTimer >= BIRD_SWOOP_DURATION) {
+      this.resolveBirdImpact(creature);
+    }
+  }
+
+  updateBirdRecover(creature, delta) {
+    creature.phaseTimer += delta;
+    creature.cooldown = Math.max(0, creature.cooldown - delta);
+    creature.patrolAngle += creature.patrolSpeed * delta * 1.5;
+    const recoverRadius = creature.patrolRadius * 1.15;
+    creature.shadowPosition.x = creature.home.x + Math.cos(creature.patrolAngle) * recoverRadius;
+    creature.shadowPosition.z = creature.home.z + Math.sin(creature.patrolAngle) * recoverRadius;
+    creature.shadowRadius = BIRD_PATROL_SHADOW_RADIUS;
+    creature.shadowOpacity = 0.08;
+    this.syncBirdPose(creature);
+
+    if (creature.phaseTimer >= BIRD_RECOVER_DURATION) {
+      this.setBirdPhase(creature, 'patrol');
+    }
+  }
+
+  updateCreatures(delta) {
+    for (const creature of this.creatures) {
+      if (creature.kind !== 'bird') {
+        continue;
+      }
+
+      switch (creature.phase) {
+        case 'tracking':
+          this.updateBirdTracking(creature, delta);
+          break;
+        case 'swoop':
+          this.updateBirdSwoop(creature, delta);
+          break;
+        case 'recover':
+          this.updateBirdRecover(creature, delta);
+          break;
+        case 'patrol':
+        default:
+          this.updateBirdPatrol(creature, delta);
+          break;
+      }
+    }
   }
 
   resolveBodyCollision(playerA, playerB) {
@@ -2950,6 +3885,55 @@ export class MatchSimulation {
     this.clampPlanarPosition(playerB);
     snapPlayerToGroundIfGrounded(playerA, this.terrainConfig);
     snapPlayerToGroundIfGrounded(playerB, this.terrainConfig);
+  }
+
+  applyImpactKnockback(target, knockback, delta) {
+    if (
+      !target ||
+      target.staticBody ||
+      target.fixtureKind ||
+      knockback.lengthSq() <= TOP_DOWN_EPSILON
+    ) {
+      return;
+    }
+
+    const safeDelta = Math.max(delta, 0.0001);
+    const originalPosition = target.position.clone();
+    const hasVerticalLift = knockback.y > TOP_DOWN_EPSILON;
+
+    target.position.add(knockback);
+    this.clampPlanarPosition(target);
+    this.resolveWorldPropCollision(target);
+
+    if (hasVerticalLift) {
+      target.grounded = false;
+      target.supportKind = 'air';
+      target.supportSurfaceId = null;
+      target.supportNormal.copy(WORLD_UP);
+      target.verticalVelocity = Math.max(
+        target.verticalVelocity,
+        clamp(
+          knockback.y / safeDelta * KNOCKBACK_VERTICAL_VELOCITY_SCALE,
+          0,
+          MAX_KNOCKBACK_VERTICAL_VELOCITY
+        )
+      );
+    } else if (target.grounded && target.supportKind === 'terrain') {
+      target.position.y = getPlayerGroundHeight(target, this.terrainConfig);
+    } else if (!target.grounded && Math.abs(knockback.y) > TOP_DOWN_EPSILON) {
+      target.verticalVelocity = clamp(
+        target.verticalVelocity + (knockback.y / safeDelta * KNOCKBACK_VERTICAL_VELOCITY_SCALE),
+        -MAX_KNOCKBACK_VERTICAL_VELOCITY,
+        MAX_KNOCKBACK_VERTICAL_VELOCITY
+      );
+    }
+
+    const appliedDisplacement = target.position.clone().sub(originalPosition);
+    if (appliedDisplacement.lengthSq() <= TOP_DOWN_EPSILON) {
+      return;
+    }
+
+    translatePlayerAttachments(target, appliedDisplacement);
   }
 
   resolveImpact(attacker, target, delta) {
@@ -3031,7 +4015,7 @@ export class MatchSimulation {
         contactState.normal = clonePlainVector(impactResult.contactSample.surfaceNormal);
         contactState.peakBashImpulse = Math.max(
           contactState.peakBashImpulse,
-          damageDetails.amount >= MIN_DAMAGE_EVENT_AMOUNT
+          damageDetails.bashDamage >= MIN_DAMAGE_EVENT_AMOUNT
             ? damageDetails.rawBashImpulse
             : 0
         );
@@ -3063,8 +4047,13 @@ export class MatchSimulation {
       target.health = Math.max(0, target.health - totalDamage);
     }
 
+    const totalKnockback = new THREE.Vector3();
     let remainingVisibleDamage = appliedDamage;
     for (const pendingEvent of pendingDamageEvents) {
+      if (pendingEvent.damageDetails.knockback) {
+        totalKnockback.add(pendingEvent.damageDetails.knockback);
+      }
+
       const visibleAmount = Math.min(pendingEvent.amount, remainingVisibleDamage);
       if (visibleAmount <= 0) {
         continue;
@@ -3079,6 +4068,8 @@ export class MatchSimulation {
         amount: visibleAmount
       }));
     }
+
+    this.applyImpactKnockback(target, totalKnockback, delta);
   }
 }
 

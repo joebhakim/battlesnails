@@ -1,12 +1,17 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 
-const BATCH_CHUNK_SIZE = 260;
-const GROUND_DETAIL_DISTANCE = 230;
+import { createPropMesh } from './WorldPropActor.js';
+
+const BATCH_CHUNK_SIZE = 340;
+const GROUND_DETAIL_DISTANCE = 165;
 const INDIVIDUAL_RENDER_KINDS = new Set([
   'dew_bead',
   'dew_pool',
-  'rotting_log'
+  'rotting_log',
+  'shell_shard',
+  'sharp_grit',
+  'soft_food'
 ]);
 const GROUND_COVER_KINDS = new Set([
   'dry_leaf_patch',
@@ -120,6 +125,10 @@ function normalizeGeometryForBatch(mesh, material) {
 
 function getShapeHalfHeight(prop) {
   const shape = prop.collisionShape ?? {};
+  if (shape.type === 'visual_mesh') {
+    return shape.halfHeight ?? prop.bodyRadius ?? 1;
+  }
+
   if (shape.type === 'box') {
     return shape.halfExtents?.y ?? prop.bodyRadius ?? 1;
   }
@@ -177,14 +186,14 @@ function createSimplifiedGroundCoverGeometry(prop) {
   const halfHeight = getShapeHalfHeight(prop);
   const thickness = prop.visual?.thickness ?? halfHeight * 0.8;
   const relief = prop.visual?.relief ?? thickness * 0.5;
-  const baseY = prop.position.y - halfHeight + thickness * 0.26 + relief * 0.08;
   const rotationY = prop.rotationY ?? 0;
   const cos = Math.cos(rotationY);
   const sin = Math.sin(rotationY);
   const center = points.reduce((sum, point) => ({
     x: sum.x + point.x / points.length,
-    z: sum.z + point.z / points.length
-  }), { x: 0, z: 0 });
+    z: sum.z + point.z / points.length,
+    y: sum.y + ((Number.isFinite(point.y) ? point.y : 0) / points.length)
+  }), { x: 0, z: 0, y: 0 });
   const palette = getGroundCoverPalette(prop);
   const positions = [];
   const colors = [];
@@ -193,7 +202,10 @@ function createSimplifiedGroundCoverGeometry(prop) {
     const jitter = (hashUnit(seed + vertexIndex * 17, vertexIndex) - 0.5) * relief * 0.36;
     const x = prop.position.x + point.x * cos - point.z * sin;
     const z = prop.position.z + point.x * sin + point.z * cos;
-    positions.push(x, baseY + jitter, z);
+    const y = Number.isFinite(point.y)
+      ? prop.position.y + point.y
+      : prop.position.y + center.y + relief * 0.12 + jitter;
+    positions.push(x, y, z);
     const color = (palette[Math.floor(hashUnit(seed + 31, vertexIndex) * palette.length)] ?? palette[0]).clone();
     color.offsetHSL(0, 0, (hashUnit(seed + 53, vertexIndex) - 0.5) * 0.1);
     colors.push(color.r, color.g, color.b);
@@ -222,6 +234,30 @@ function disposeMaterial(material) {
   }
 
   material?.dispose?.();
+}
+
+function disposeObjectResources(object) {
+  const materials = new Set<any>();
+  object.traverse((node) => {
+    if (!node.isMesh) {
+      return;
+    }
+
+    node.geometry?.dispose?.();
+    if (Array.isArray(node.material)) {
+      for (const material of node.material) {
+        if (material) {
+          materials.add(material);
+        }
+      }
+    } else if (node.material) {
+      materials.add(node.material);
+    }
+  });
+
+  for (const material of materials) {
+    material.dispose?.();
+  }
 }
 
 export function shouldRenderWorldPropIndividually(prop) {
@@ -277,11 +313,21 @@ export class WorldPropBatchActor {
   rebuild(entries) {
     const buckets = new Map();
 
-    for (const { prop, actor } of entries) {
+    for (const { prop, actor = null } of entries) {
       const chunkKey = getChunkKey(prop.position);
       const isGroundCover = GROUND_COVER_KINDS.has(prop.kind);
-      actor.mesh.updateWorldMatrix(true, true);
-      actor.body.traverse((node) => {
+      const body = actor?.body ?? createPropMesh(prop);
+      const root = actor?.mesh ?? body;
+
+      if (actor) {
+        root.updateWorldMatrix(true, true);
+      } else {
+        root.position.set(prop.position.x, prop.position.y, prop.position.z);
+        root.rotation.y = prop.rotationY ?? 0;
+        root.updateWorldMatrix(true, true);
+      }
+
+      body.traverse((node) => {
         if (!node.isMesh || !node.geometry) {
           return;
         }
@@ -313,6 +359,10 @@ export class WorldPropBatchActor {
         bucket.geometries.push(geometry);
         this.sourceMeshCount += 1;
       });
+
+      if (!actor) {
+        disposeObjectResources(body);
+      }
 
       if (isGroundCover) {
         const geometry = createSimplifiedGroundCoverGeometry(prop);

@@ -41,6 +41,27 @@
         <span><span class="perf-label">TPS</span> <span id="tps-value">--</span></span>
       </div>
 
+      <div class="hud-card stats-card" id="snail-stats">
+        <div class="stat-row"><span>Dew</span><strong id="stat-dew">0</strong></div>
+        <div class="stat-row"><span>Food</span><strong id="stat-food">0</strong></div>
+        <div class="stat-row"><span>Calcium</span><strong id="stat-calcium">0</strong></div>
+        <div class="stat-row"><span>Grit</span><strong id="stat-grit">0</strong></div>
+        <div class="stat-row stat-row--derived"><span>Speed</span><strong id="stat-speed">1.00x</strong></div>
+        <div class="stat-row stat-row--derived"><span>Damage</span><strong id="stat-damage">1.00x</strong></div>
+      </div>
+
+      <div class="hud-card trial-card" id="trial-hud">
+        <div class="trial-kicker" id="trial-phase">Forage</div>
+        <div class="trial-title" id="trial-title">Wet Window</div>
+        <div class="trial-time" id="trial-time">--</div>
+        <div class="trial-objective" id="trial-objective">Gather dew, food, calcium, and grit.</div>
+      </div>
+
+      <div class="hud-card nearby-card" id="nearby-items">
+        <div class="nearby-title">Nearby</div>
+        <div id="nearby-items-list" class="nearby-items-list">No coveted things nearby</div>
+      </div>
+
       <div class="hud-card controls-card" id="controls-hint">
         WASD move · Mouse turn · Space jump · Hold LMB/RMB stalks · Wheel plane height · Hold Shift lock-on · Click arena
       </div>
@@ -92,10 +113,10 @@
       <div class="menu-card">
         <p class="menu-kicker">BattleSnails</p>
         <h1>Choose A Mode</h1>
-        <p class="menu-copy">Arena, Adventure, or LAN Multiplayer. Press ` for debug modes.</p>
+        <p class="menu-copy">Arena, The Hunt, or LAN Multiplayer. Press ` for debug modes.</p>
         <div class="menu-actions" id="mode-actions">
           <button id="start-singleplayer" type="button">Arena</button>
-          <button id="start-explorer" type="button">Adventure</button>
+          <button id="start-explorer" type="button">The Hunt</button>
           <button id="start-multiplayer" type="button">LAN Multiplayer</button>
           <button id="start-testmode" class="hidden" type="button">Test Mode</button>
           <button id="start-simulator" class="hidden" type="button">Simulator</button>
@@ -199,6 +220,16 @@
           <div>Eye stalk tip: <span id="eye-stalk-position">x: 0.00, y: 0.00, z: 0.00</span></div>
           <div>Opponent body: <span id="opponent-body-position">x: 0.00, y: 0.00, z: 0.00</span></div>
           <div>Opponent radius: <span id="opponent-body-radius">0.00</span></div>
+        </div>
+
+        <div class="debug-section">
+          <h3>Resources</h3>
+          <div class="debug-resource-controls">
+            <button class="debug-resource-button" data-resource-type="dew" data-resource-amount="10" type="button">Dew +10</button>
+            <button class="debug-resource-button" data-resource-type="food" data-resource-amount="80" type="button">Food +80</button>
+            <button class="debug-resource-button" data-resource-type="calcium" data-resource-amount="25" type="button">Calcium +25</button>
+            <button class="debug-resource-button" data-resource-type="grit" data-resource-amount="5" type="button">Grit +5</button>
+          </div>
         </div>
 
         <div class="debug-section">

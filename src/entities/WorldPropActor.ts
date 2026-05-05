@@ -31,6 +31,10 @@ function createVertexColorMaterial(roughness = 0.98) {
 
 function getPropShapeHalfHeight(prop) {
   const shape = prop.collisionShape ?? {};
+  if (shape.type === 'visual_mesh') {
+    return Number.isFinite(shape.halfHeight) ? shape.halfHeight : prop.bodyRadius ?? 1;
+  }
+
   if (shape.type === 'box') {
     return shape.halfExtents?.y ?? prop.bodyRadius ?? 1;
   }
@@ -124,18 +128,33 @@ function createTree(prop) {
   group.add(trunk);
 
   const branchMaterial = createMaterial(0x46321f, 0.97);
-  const branchCount = treeType === 'conifer' ? 5 : 7;
+  const branchLeafMaterial = createMaterial(treeType === 'conifer' ? 0x244b36 : 0x426f38, 0.94);
+  const barkMaterial = createMaterial(0x3f2b1d, 0.98);
+  const barkBandCount = Math.min(9, Math.max(3, Math.round(height / Math.max(radius * 11, 1))));
+  for (let index = 0; index < barkBandCount; index += 1) {
+    const band = new THREE.Mesh(
+      new THREE.CylinderGeometry(radius * 1.012, radius * 1.012, radius * 0.12, 8),
+      barkMaterial
+    );
+    band.position.y = -height * 0.44 + ((index + 0.5) / barkBandCount) * height * 0.82;
+    band.rotation.y = hashUnit(seed + 3, index) * Math.PI * 2;
+    band.castShadow = true;
+    band.receiveShadow = true;
+    group.add(band);
+  }
+
+  const branchCount = treeType === 'conifer' ? 9 : 9;
   for (let index = 0; index < branchCount; index += 1) {
     const angle = (index / branchCount) * Math.PI * 2 + hashUnit(seed, index) * 0.48;
     const heightAlpha = treeType === 'conifer'
-      ? 0.1 + index * 0.09
-      : 0.04 + index * 0.065;
+      ? 0.05 + index * 0.082
+      : 0.03 + index * 0.064;
     const startY = (-height * 0.32) + height * heightAlpha;
     const branchLength = branchReach * (treeType === 'conifer'
-      ? 0.72 + hashUnit(seed + 17, index) * 0.28
+      ? 0.74 + hashUnit(seed + 17, index) * 0.42
       : 0.68 + hashUnit(seed + 23, index) * 0.4);
     const lift = branchLength * (treeType === 'conifer'
-      ? -0.12 + hashUnit(seed + 31, index) * 0.18
+      ? -0.22 + hashUnit(seed + 31, index) * 0.12
       : 0.08 + hashUnit(seed + 37, index) * 0.28);
     addFrustumSegment(
       group,
@@ -154,19 +173,52 @@ function createTree(prop) {
       radius * 0.09,
       5
     );
+
+    if (treeType === 'conifer') {
+      const needleClump = new THREE.Mesh(
+        new THREE.ConeGeometry(radius * (0.65 + hashUnit(seed + 67, index) * 0.35), radius * 2.4, 6),
+        branchLeafMaterial
+      );
+      needleClump.position.set(
+        Math.cos(angle) * (radius + branchLength * 0.72),
+        startY + lift + radius * 0.14,
+        Math.sin(angle) * (radius + branchLength * 0.72)
+      );
+      needleClump.rotation.z = Math.PI / 2;
+      needleClump.rotation.y = -angle;
+      needleClump.scale.set(1.45, 0.72, 0.72);
+      needleClump.castShadow = true;
+      needleClump.receiveShadow = true;
+      group.add(needleClump);
+    } else {
+      const branchLeaf = new THREE.Mesh(
+        new THREE.DodecahedronGeometry(radius * (1.15 + hashUnit(seed + 71, index) * 0.65), 0),
+        branchLeafMaterial
+      );
+      branchLeaf.position.set(
+        Math.cos(angle) * (radius + branchLength * 0.92),
+        startY + lift + radius * 0.6,
+        Math.sin(angle) * (radius + branchLength * 0.92)
+      );
+      branchLeaf.scale.set(1.35, 0.45, 0.95);
+      branchLeaf.rotation.y = angle;
+      branchLeaf.castShadow = true;
+      branchLeaf.receiveShadow = true;
+      group.add(branchLeaf);
+    }
   }
 
   if (treeType === 'conifer') {
     const needleMaterial = createMaterial(0x244b36, 0.94);
-    const tierCount = 3;
+    const tierCount = 7;
     for (let index = 0; index < tierCount; index += 1) {
-      const tierRadius = canopyRadius * (1 - index * 0.2);
-      const tierHeight = height * 0.28;
+      const tierRadius = canopyRadius * (0.98 - index * 0.085);
+      const tierHeight = height * (0.15 + index * 0.008);
       const tier = new THREE.Mesh(
         new THREE.ConeGeometry(tierRadius, tierHeight, 8),
         needleMaterial
       );
-      tier.position.y = height * (0.28 + index * 0.18);
+      tier.position.y = height * (-0.02 + index * 0.095);
       tier.castShadow = true;
       tier.receiveShadow = true;
       group.add(tier);
@@ -213,23 +265,66 @@ function createSaltCone(prop) {
 function createBambooStick(prop) {
   const length = prop.visual?.length ?? 6;
   const radius = prop.visual?.radius ?? 0.12;
+  const displayRadius = Math.max(radius, 0.08, length * 0.012);
   const tilt = prop.visual?.tilt ?? 0.28;
+  const group = new THREE.Group();
+  group.rotation.z = tilt;
   const mesh = new THREE.Mesh(
-    new THREE.CylinderGeometry(radius, radius, length, 6),
+    new THREE.CylinderGeometry(displayRadius, displayRadius, length, 6),
     createMaterial(0x9aa05b, 0.8)
   );
-  mesh.rotation.z = tilt;
   mesh.castShadow = true;
   mesh.receiveShadow = true;
-  return mesh;
+  group.add(mesh);
+
+  const nodeMaterial = createMaterial(0x6f7747, 0.88);
+  const nodeCount = Math.max(2, Math.min(7, Math.round(length / Math.max(displayRadius * 24, 1.3))));
+  for (let index = 0; index < nodeCount; index += 1) {
+    const y = -length * 0.42 + ((index + 0.5) / nodeCount) * length * 0.84;
+    const node = new THREE.Mesh(
+      new THREE.CylinderGeometry(displayRadius * 1.32, displayRadius * 1.32, displayRadius * 0.85, 6),
+      nodeMaterial
+    );
+    node.position.y = y;
+    node.castShadow = true;
+    node.receiveShadow = true;
+    group.add(node);
+
+    if (index % 2 === 0) {
+      const leaf = new THREE.Mesh(
+        new THREE.SphereGeometry(displayRadius * 2.8, 6, 4),
+        createMaterial(0x74824a, 0.92)
+      );
+      leaf.scale.set(2.8, 0.2, 0.62);
+      leaf.position.set(displayRadius * 3.4, y + displayRadius * 0.2, 0);
+      leaf.rotation.z = 0.45;
+      leaf.castShadow = true;
+      leaf.receiveShadow = true;
+      group.add(leaf);
+    }
+  }
+
+  return group;
 }
 
 function createGravel(prop) {
   const radius = prop.visual?.radius ?? prop.collisionShape?.radius ?? 0.3;
   const mesh = new THREE.Mesh(
     new THREE.DodecahedronGeometry(radius, 0),
-    createMaterial(0x77746b, 0.96)
+    createMaterial(prop.visual?.color ?? 0x77746b, 0.96)
   );
+  mesh.castShadow = true;
+  mesh.receiveShadow = true;
+  return mesh;
+}
+
+function createSharpGrit(prop) {
+  const radius = prop.visual?.radius ?? prop.collisionShape?.radius ?? 0.4;
+  const mesh = new THREE.Mesh(
+    new THREE.TetrahedronGeometry(radius * 1.25, 0),
+    createMaterial(prop.visual?.color ?? 0xc8bd98, 0.88)
+  );
+  mesh.rotation.set(0.45, 0.25, 0.2);
   mesh.castShadow = true;
   mesh.receiveShadow = true;
   return mesh;
@@ -271,15 +366,33 @@ function createRockCluster(prop) {
 function createMossCushion(prop) {
   const radius = prop.visual?.radius ?? prop.collisionShape?.radius ?? 1.2;
   const squash = prop.visual?.squash ?? 0.5;
-  const mesh = new THREE.Mesh(
-    new THREE.SphereGeometry(radius, 14, 8),
-    createMaterial(0x4d8f4f, 0.98)
-  );
-  mesh.scale.y = squash;
-  mesh.position.y = -radius * (1 - squash);
-  mesh.castShadow = true;
-  mesh.receiveShadow = true;
-  return mesh;
+  const seed = hashText(prop.id ?? prop.kind ?? 'moss-cushion');
+  const group = new THREE.Group();
+  const colors = [0x315f35, 0x3f7c43, 0x569247, 0x76a943];
+  const lobeCount = 7;
+  for (let index = 0; index < lobeCount; index += 1) {
+    const angle = index === 0 ? 0 : hashUnit(seed + 13, index) * Math.PI * 2;
+    const distance = index === 0 ? 0 : radius * (0.16 + hashUnit(seed + 19, index) * 0.28);
+    const lobeRadius = radius * (index === 0
+      ? 0.92
+      : 0.42 + hashUnit(seed + 23, index) * 0.2);
+    const verticalScale = Math.max(0.44, squash * (0.92 + hashUnit(seed + 29, index) * 0.32));
+    const mesh = new THREE.Mesh(
+      new THREE.SphereGeometry(lobeRadius, 8, 5),
+      createMaterial(colors[index % colors.length], 0.98)
+    );
+    mesh.scale.y = verticalScale;
+    mesh.position.set(
+      Math.cos(angle) * distance,
+      -radius + lobeRadius * verticalScale + radius * (index === 0 ? 0.04 : 0.16),
+      Math.sin(angle) * distance
+    );
+    mesh.rotation.y = hashUnit(seed + 31, index) * Math.PI;
+    mesh.castShadow = true;
+    mesh.receiveShadow = true;
+    group.add(mesh);
+  }
+  return group;
 }
 
 function fract(value) {
@@ -346,6 +459,45 @@ function getScalePlateBoundary(center, along, across, length, width, noseJitter 
   }));
 }
 
+function getMossMoundBoundary(center, along, across, length, width, seed) {
+  const pointCount = 10;
+  return Array.from({ length: pointCount }, (_, index) => {
+    const angle = (index / pointCount) * Math.PI * 2;
+    const radiusJitter = 0.82 + hashUnit(seed + index * 17, 5) * 0.3;
+    const u = Math.cos(angle) * radiusJitter;
+    const v = Math.sin(angle) * radiusJitter;
+    return {
+      x: center.x + along.x * u * length * 0.5 + across.x * v * width * 0.5,
+      z: center.z + along.z * u * length * 0.5 + across.z * v * width * 0.5,
+      u
+    };
+  });
+}
+
+function getDirtClodBoundary(center, along, across, length, width, seed) {
+  const points = [
+    [-0.58, -0.48],
+    [-0.2, -0.58],
+    [0.36, -0.44],
+    [0.64, -0.08],
+    [0.42, 0.38],
+    [-0.08, 0.56],
+    [-0.55, 0.34]
+  ];
+
+  return points.map(([u, v], index) => {
+    const jitterU = (hashUnit(seed + index * 11, 3) - 0.5) * 0.16;
+    const jitterV = (hashUnit(seed + index * 17, 7) - 0.5) * 0.18;
+    const localU = u + jitterU;
+    const localV = v + jitterV;
+    return {
+      x: center.x + along.x * localU * length + across.x * localV * width,
+      z: center.z + along.z * localU * length + across.z * localV * width,
+      u: localU
+    };
+  });
+}
+
 function pushFanGeometry({ positions, colors, indices, points, centerY, colorPalette, seed, yForPoint }) {
   if (points.length < 3) {
     return;
@@ -373,6 +525,95 @@ function pushFanGeometry({ positions, colors, indices, points, centerY, colorPal
     const next = index === points.length ? 1 : index + 1;
     indices.push(startIndex, startIndex + next, startIndex + index);
   }
+}
+
+function pushEdgeBandGeometry({ positions, colors, indices, points, inset, innerYForPoint, colorPalette, seed }) {
+  if (points.length < 3 || inset <= 0) {
+    return;
+  }
+
+  const center = points.reduce((accumulator, point) => ({
+    x: accumulator.x + point.x / points.length,
+    z: accumulator.z + point.z / points.length
+  }), { x: 0, z: 0 });
+  const startIndex = positions.length / 3;
+
+  for (let index = 0; index < points.length; index += 1) {
+    const point = points[index];
+    const dx = center.x - point.x;
+    const dz = center.z - point.z;
+    const distance = Math.hypot(dx, dz);
+    const move = distance > 0.0001 ? Math.min(inset, distance * 0.45) / distance : 0;
+    const inner = {
+      x: point.x + dx * move,
+      z: point.z + dz * move
+    };
+    const outerY = Number.isFinite(point.y) ? point.y : innerYForPoint(point, index);
+    const innerY = innerYForPoint(inner, index);
+    const color = colorPalette[Math.floor(hashUnit(seed, index + 7) * colorPalette.length)]?.clone() ?? colorPalette[0].clone();
+    color.offsetHSL(0, 0, (hashUnit(seed, index + 23) - 0.5) * 0.1);
+
+    positions.push(point.x, outerY, point.z);
+    colors.push(color.r, color.g, color.b);
+    positions.push(inner.x, innerY, inner.z);
+    colors.push(color.r, color.g, color.b);
+  }
+
+  for (let index = 0; index < points.length; index += 1) {
+    const next = index === points.length - 1 ? 0 : index + 1;
+    const outerA = startIndex + index * 2;
+    const innerA = outerA + 1;
+    const outerB = startIndex + next * 2;
+    const innerB = outerB + 1;
+    indices.push(outerA, outerB, innerB, outerA, innerB, innerA);
+  }
+}
+
+function smoothstep01(value) {
+  const t = Math.min(1, Math.max(0, value));
+  return t * t * (3 - (2 * t));
+}
+
+function getNearestEdgeSurface(point, polygon) {
+  let best = null;
+  for (let index = 0; index < polygon.length; index += 1) {
+    const start = polygon[index];
+    const end = polygon[(index + 1) % polygon.length];
+    const dx = end.x - start.x;
+    const dz = end.z - start.z;
+    const lengthSq = dx * dx + dz * dz;
+    if (lengthSq <= 0.000001) {
+      continue;
+    }
+
+    const t = Math.min(1, Math.max(0, (((point.x - start.x) * dx) + ((point.z - start.z) * dz)) / lengthSq));
+    const x = start.x + dx * t;
+    const z = start.z + dz * t;
+    const distance = Math.hypot(point.x - x, point.z - z);
+    if (!best || distance < best.distance) {
+      const startY = Number.isFinite(start.y) ? start.y : null;
+      const endY = Number.isFinite(end.y) ? end.y : null;
+      best = {
+        distance,
+        y: startY !== null && endY !== null
+          ? startY + (endY - startY) * t
+          : null
+      };
+    }
+  }
+
+  return best;
+}
+
+function blendLocalYToGroundEdge(point, desiredY, polygon, edgeBlendInset, fallbackEdgeY) {
+  const edge = getNearestEdgeSurface(point, polygon);
+  if (!edge || edge.y === null || edgeBlendInset <= 0) {
+    return desiredY;
+  }
+
+  const edgeY = Number.isFinite(edge.y) ? edge.y : fallbackEdgeY;
+  const interior = smoothstep01(edge.distance / edgeBlendInset);
+  return edgeY + (desiredY - edgeY) * interior;
 }
 
 function createRoughGroundPatch(prop, {
@@ -405,30 +646,73 @@ function createRoughGroundPatch(prop, {
     const scaleLength = Math.max(1.2, prop.visual?.scaleLength ?? length * 0.14);
     const scaleWidth = Math.max(0.7, prop.visual?.scaleWidth ?? width * 0.08);
     const density = Math.max(0.2, prop.visual?.scaleDensity ?? 0.65);
-    const maxPlateLimit = Math.max(8, prop.visual?.maxPlates ?? 34);
-    const plateCoverage = Math.max(0.08, prop.visual?.plateCoverage ?? 0.18);
+    const isDryLeafPatch = prop.kind === 'dry_leaf_patch';
+    const isMossMat = prop.kind === 'moss_mat';
+    const isDirtStickPatch = prop.kind === 'dirt_stick_patch';
+    const maxPlateLimit = Math.max(
+      isDryLeafPatch ? 260 : isMossMat ? 110 : isDirtStickPatch ? 130 : 8,
+      prop.visual?.maxPlates ?? (isDryLeafPatch ? 360 : isMossMat ? 160 : isDirtStickPatch ? 170 : 34)
+    );
+    const plateCoverage = Math.max(
+      isDryLeafPatch ? 0.78 : isMossMat ? 0.9 : isDirtStickPatch ? 1.2 : 0.08,
+      prop.visual?.plateCoverage ?? (isDryLeafPatch ? 0.95 : isMossMat ? 1.1 : isDirtStickPatch ? 1.45 : 0.18)
+    );
     const along = { x: Math.cos(grainAngle), z: Math.sin(grainAngle) };
     const across = { x: -along.z, z: along.x };
     const bounds = getPolygonBounds(footprint);
+    const edgeBlendInset = Math.max(
+      0,
+      prop.visual?.edgeBlendInset ?? prop.collisionShape?.edgeBlendInset ?? Math.min(scaleLength, scaleWidth)
+    );
+    const fallbackEdgeY = -shapeHalfHeight + thickness * 0.18;
+    const isGroundCoverPatch = isDryLeafPatch || isMossMat || isDirtStickPatch;
 
-    pushFanGeometry({
-      positions,
-      colors,
-      indices,
-      points: footprint,
-      centerY: -shapeHalfHeight + thickness * 0.08,
-      colorPalette,
-      seed,
-      yForPoint: (point, index) => {
-        const waveA = Math.sin((point.x * 0.037) + (point.z * 0.041) + index * 1.37);
-        const waveB = Math.cos((point.x * 0.029) - (point.z * 0.033) + index * 0.79);
-        return -shapeHalfHeight + thickness * 0.08 + (waveA * 0.55 + waveB * 0.45) * thickness * roughness * 0.08;
-      }
-    });
+    if (isGroundCoverPatch) {
+      pushEdgeBandGeometry({
+        positions,
+        colors,
+        indices,
+        points: footprint,
+        inset: Math.min(edgeBlendInset, Math.max(1.2, Math.min(scaleLength, scaleWidth) * 0.8)),
+        colorPalette,
+        seed,
+        innerYForPoint: (point, index) => {
+          const waveA = Math.sin((point.x * 0.037) + (point.z * 0.041) + index * 1.37);
+          const waveB = Math.cos((point.x * 0.029) - (point.z * 0.033) + index * 0.79);
+          const baseLift = isMossMat ? thickness * 0.22 : isDirtStickPatch ? thickness * 0.16 : thickness * 0.08;
+          const broadRelief = thickness * roughness * 0.06;
+          return blendLocalYToGroundEdge(
+            point,
+            -shapeHalfHeight + baseLift + (waveA * 0.55 + waveB * 0.45) * broadRelief,
+            footprint,
+            edgeBlendInset,
+            fallbackEdgeY
+          );
+        }
+      });
+    } else {
+      pushFanGeometry({
+        positions,
+        colors,
+        indices,
+        points: footprint,
+        centerY: -shapeHalfHeight + thickness * 0.08,
+        colorPalette,
+        seed,
+        yForPoint: (point, index) => {
+          if (Number.isFinite(point.y)) {
+            return point.y;
+          }
+          const waveA = Math.sin((point.x * 0.037) + (point.z * 0.041) + index * 1.37);
+          const waveB = Math.cos((point.x * 0.029) - (point.z * 0.033) + index * 0.79);
+          return -shapeHalfHeight + thickness * 0.08 + (waveA * 0.55 + waveB * 0.45) * thickness * roughness * 0.08;
+        }
+      });
+    }
 
-    const platePositions = [];
-    const stepU = scaleLength * 0.76;
-    const stepV = scaleWidth * 0.74;
+    const plateCandidates = [];
+    const stepU = scaleLength * (isMossMat ? 0.56 : isDirtStickPatch ? 0.44 : 0.76);
+    const stepV = scaleWidth * (isMossMat ? 0.54 : isDirtStickPatch ? 0.42 : 0.74);
     const diagonal = Math.hypot(bounds.maxX - bounds.minX, bounds.maxZ - bounds.minZ);
     const minU = -diagonal;
     const maxU = diagonal;
@@ -436,9 +720,9 @@ function createRoughGroundPatch(prop, {
     const maxV = diagonal;
     const maxPlates = Math.max(8, Math.min(maxPlateLimit, Math.round((length * width) / Math.max(1, scaleLength * scaleWidth) * plateCoverage * density)));
 
-    for (let row = 0, v = minV; v <= maxV && platePositions.length < maxPlates; row += 1, v += stepV) {
+    for (let row = 0, v = minV; v <= maxV; row += 1, v += stepV) {
       const rowOffset = row % 2 === 0 ? 0 : stepU * 0.44;
-      for (let column = 0, u = minU + rowOffset; u <= maxU && platePositions.length < maxPlates; column += 1, u += stepU) {
+      for (let column = 0, u = minU + rowOffset; u <= maxU; column += 1, u += stepU) {
         const jitterU = (hashUnit(seed + row * 31, column) - 0.5) * scaleLength * 0.26;
         const jitterV = (hashUnit(seed + column * 17, row) - 0.5) * scaleWidth * 0.34;
         const center = {
@@ -454,45 +738,117 @@ function createRoughGroundPatch(prop, {
         ) {
           continue;
         }
-        platePositions.push({ center, row, column });
+        plateCandidates.push({ center, row, column });
       }
     }
+    const platePositions = plateCandidates.length <= maxPlates
+      ? plateCandidates
+      : Array.from({ length: maxPlates }, (_, index) => {
+        const ratio = maxPlates <= 1 ? 0 : index / (maxPlates - 1);
+        const jitter = (hashUnit(seed + index * 43, 17) - 0.5) / maxPlates;
+        const candidateIndex = Math.max(
+          0,
+          Math.min(
+            plateCandidates.length - 1,
+            Math.round((ratio + jitter) * (plateCandidates.length - 1))
+          )
+        );
+        return plateCandidates[candidateIndex];
+      });
 
     for (const [plateIndex, plate] of platePositions.entries()) {
-      const plateLength = scaleLength * (0.86 + hashUnit(seed + plate.row, plate.column + 5) * 0.42);
-      const plateWidth = scaleWidth * (0.82 + hashUnit(seed + plate.column, plate.row + 11) * 0.38);
+      const plateLength = scaleLength * (
+        isDryLeafPatch
+          ? 1.06 + hashUnit(seed + plate.row, plate.column + 5) * 0.5
+          : isMossMat
+            ? 1.35 + hashUnit(seed + plate.row, plate.column + 5) * 0.75
+            : isDirtStickPatch
+              ? 1.62 + hashUnit(seed + plate.row, plate.column + 5) * 0.92
+          : 0.86 + hashUnit(seed + plate.row, plate.column + 5) * 0.42
+      );
+      const plateWidth = scaleWidth * (
+        isDryLeafPatch
+          ? 1.02 + hashUnit(seed + plate.column, plate.row + 11) * 0.44
+          : isMossMat
+            ? 1.28 + hashUnit(seed + plate.column, plate.row + 11) * 0.68
+            : isDirtStickPatch
+              ? 1.48 + hashUnit(seed + plate.column, plate.row + 11) * 0.78
+          : 0.82 + hashUnit(seed + plate.column, plate.row + 11) * 0.38
+      );
       const localAngle = (hashUnit(seed + plateIndex, 23) - 0.5) * 0.32;
       const localAlong = {
         x: Math.cos(grainAngle + localAngle),
         z: Math.sin(grainAngle + localAngle)
       };
       const localAcross = { x: -localAlong.z, z: localAlong.x };
-      const boundary = getScalePlateBoundary(
-        plate.center,
-        localAlong,
-        localAcross,
-        plateLength,
-        plateWidth,
-        (hashUnit(seed, plateIndex + 29) - 0.5) * 0.12
-      );
+      const boundary = isMossMat
+        ? getMossMoundBoundary(plate.center, localAlong, localAcross, plateLength, plateWidth, seed + plateIndex * 29)
+        : isDirtStickPatch
+          ? getDirtClodBoundary(plate.center, localAlong, localAcross, plateLength, plateWidth, seed + plateIndex * 31)
+          : getScalePlateBoundary(
+          plate.center,
+          localAlong,
+          localAcross,
+          plateLength,
+          plateWidth,
+          (hashUnit(seed, plateIndex + 29) - 0.5) * 0.12
+        );
       const clippedBoundary = boundary.filter((point) => isPointInPolygon2D(point, footprint));
       if (clippedBoundary.length < 3) {
         continue;
       }
 
-      const plateBase = -shapeHalfHeight + thickness * (0.42 + hashUnit(seed, plateIndex + 37) * 0.18);
+      const plateBase = -shapeHalfHeight + thickness * (
+        isMossMat
+          ? 0.38 + hashUnit(seed, plateIndex + 37) * 0.16
+          : isDirtStickPatch
+            ? 0.22 + hashUnit(seed, plateIndex + 37) * 0.2
+          : 0.42 + hashUnit(seed, plateIndex + 37) * 0.18
+      );
       pushFanGeometry({
         positions,
         colors,
         indices,
         points: clippedBoundary,
-        centerY: plateBase + relief * 0.36,
+        centerY: plateBase + relief * (
+          isMossMat
+            ? 0.18 + hashUnit(seed + plateIndex, 41) * 0.08
+            : isDirtStickPatch
+              ? 0.22 + hashUnit(seed + plateIndex, 41) * 0.22
+            : 0.36
+        ),
         colorPalette,
         seed: seed + plateIndex * 101,
         yForPoint: (point, index) => {
+          if (isMossMat) {
+            const hummockEdge = relief * (0.08 + hashUnit(seed + plateIndex * 17, index + 3) * 0.08);
+            return blendLocalYToGroundEdge(
+              point,
+              plateBase + hummockEdge,
+              footprint,
+              edgeBlendInset,
+              fallbackEdgeY
+            );
+          }
+          if (isDirtStickPatch) {
+            const compactedEdge = relief * (0.02 + hashUnit(seed + plateIndex * 19, index + 3) * 0.16);
+            return blendLocalYToGroundEdge(
+              point,
+              plateBase + compactedEdge,
+              footprint,
+              edgeBlendInset,
+              fallbackEdgeY
+            );
+          }
           const frontLift = Math.max(0, point.u + 0.58) / 1.2;
           const crinkle = (hashUnit(seed + plateIndex * 13, index) - 0.5) * relief * roughness * roughnessMultiplier;
-          return plateBase + frontLift * relief + crinkle;
+          return blendLocalYToGroundEdge(
+            point,
+            plateBase + frontLift * relief + crinkle,
+            footprint,
+            edgeBlendInset,
+            fallbackEdgeY
+          );
         }
       });
     }
@@ -574,10 +930,10 @@ function createRoughGroundPatch(prop, {
 
 function createMossMat(prop) {
   return createRoughGroundPatch(prop, {
-    baseColor: 0x4d8f4f,
-    palette: [0x244b36, 0x3f7c43, 0x4d8f4f, 0x5fa64d, 0x6dad50],
-    roughnessMultiplier: 0.48,
-    surfaceLift: 0.42
+    baseColor: 0x3f7c43,
+    palette: [0x1f3f2b, 0x2e5f35, 0x3f7c43, 0x569247, 0x76a943, 0x9aaa45],
+    roughnessMultiplier: 0.3,
+    surfaceLift: 0.38
   });
 }
 
@@ -617,6 +973,7 @@ function createMushroom(prop) {
   const capThickness = prop.visual?.capThickness ?? 0.6;
   const height = stemHeight + capThickness;
   const group = new THREE.Group();
+  const seed = hashText(prop.id ?? prop.kind ?? 'mushroom');
   const stem = new THREE.Mesh(
     new THREE.CylinderGeometry(stemRadius * 0.8, stemRadius, stemHeight, 6),
     createMaterial(0xd8c7a0, 0.92)
@@ -626,13 +983,106 @@ function createMushroom(prop) {
     new THREE.SphereGeometry(capRadius, 12, 6),
     createMaterial(prop.visual?.color ?? 0xb64d48, 0.78)
   );
-  cap.scale.y = Math.max(0.18, capThickness / Math.max(0.001, capRadius));
+  cap.scale.y = Math.max(0.34, capThickness / Math.max(0.001, capRadius));
   cap.position.y = (height / 2) - (capThickness * 0.45);
+  const underside = new THREE.Mesh(
+    new THREE.CylinderGeometry(capRadius * 0.86, capRadius * 0.96, Math.max(0.03, capThickness * 0.12), 12),
+    createMaterial(0xc8b58e, 0.96)
+  );
+  underside.position.y = cap.position.y - capThickness * 0.32;
+  const rim = new THREE.Mesh(
+    new THREE.TorusGeometry(capRadius * 0.86, Math.max(0.02, capThickness * 0.045), 4, 12),
+    createMaterial(0x9b6538, 0.86)
+  );
+  rim.rotation.x = Math.PI / 2;
+  rim.position.y = underside.position.y + capThickness * 0.03;
+  const gillMaterial = createMaterial(0x8d785d, 0.98);
+  for (let index = 0; index < 8; index += 1) {
+    const angle = (index / 8) * Math.PI * 2;
+    const gill = new THREE.Mesh(
+      new THREE.BoxGeometry(capRadius * 0.7, Math.max(0.015, capThickness * 0.045), Math.max(0.02, capRadius * 0.035)),
+      gillMaterial
+    );
+    gill.position.set(Math.cos(angle) * capRadius * 0.32, underside.position.y - capThickness * 0.07, Math.sin(angle) * capRadius * 0.32);
+    gill.rotation.y = -angle;
+    gill.castShadow = true;
+    gill.receiveShadow = true;
+    group.add(gill);
+  }
+
+  const spotMaterial = createMaterial(0xe6d39d, 0.9);
+  for (let index = 0; index < 8; index += 1) {
+    const angle = hashUnit(seed + 11, index) * Math.PI * 2;
+    const distance = capRadius * (0.18 + hashUnit(seed + 17, index) * 0.5);
+    const spot = new THREE.Mesh(new THREE.SphereGeometry(capRadius * (0.055 + hashUnit(seed + 23, index) * 0.04), 6, 4), spotMaterial);
+    spot.scale.y = 0.18;
+    spot.position.set(
+      Math.cos(angle) * distance,
+      cap.position.y + capThickness * (0.13 + hashUnit(seed + 31, index) * 0.08),
+      Math.sin(angle) * distance
+    );
+    spot.castShadow = true;
+    spot.receiveShadow = true;
+    group.add(spot);
+  }
+  for (let index = 0; index < 10; index += 1) {
+    const angle = (index / 10) * Math.PI * 2 + hashUnit(seed + 47, index) * 0.28;
+    const edgeSpot = new THREE.Mesh(
+      new THREE.SphereGeometry(capRadius * (0.075 + hashUnit(seed + 53, index) * 0.055), 6, 4),
+      spotMaterial
+    );
+    edgeSpot.scale.set(1.55, 0.38, 0.32);
+    edgeSpot.position.set(
+      Math.cos(angle) * capRadius * 0.98,
+      cap.position.y - capThickness * (0.08 + hashUnit(seed + 59, index) * 0.12),
+      Math.sin(angle) * capRadius * 0.98
+    );
+    edgeSpot.rotation.y = -angle;
+    edgeSpot.castShadow = true;
+    edgeSpot.receiveShadow = true;
+    group.add(edgeSpot);
+  }
   stem.castShadow = true;
   stem.receiveShadow = true;
   cap.castShadow = true;
   cap.receiveShadow = true;
-  group.add(stem, cap);
+  underside.castShadow = true;
+  underside.receiveShadow = true;
+  rim.castShadow = true;
+  rim.receiveShadow = true;
+  group.add(stem, underside, rim, cap);
+  return group;
+}
+
+function createSoftFood(prop) {
+  const radius = prop.visual?.radius ?? prop.collisionShape?.radius ?? 0.8;
+  const height = prop.visual?.height ?? (prop.collisionShape?.halfHeight ?? 0.2) * 2;
+  const group = new THREE.Group();
+  const seed = hashText(prop.id ?? prop.kind ?? 'soft-food');
+  const base = new THREE.Mesh(
+    new THREE.CylinderGeometry(radius, radius * 0.9, Math.max(0.04, height), 9),
+    createMaterial(prop.visual?.color ?? 0x9f6b38, 0.98)
+  );
+  const shine = new THREE.Mesh(
+    new THREE.SphereGeometry(radius * 0.32, 8, 5),
+    createTransparentMaterial(0xffe1a6, 0.36, 0.2)
+  );
+  shine.position.set(-radius * 0.2, height * 0.55, radius * 0.18);
+  base.castShadow = true;
+  base.receiveShadow = true;
+  group.add(base, shine);
+
+  const moldMaterial = createMaterial(0x6f8f4e, 0.99);
+  for (let index = 0; index < 4; index += 1) {
+    const angle = hashUnit(seed + 5, index) * Math.PI * 2;
+    const distance = radius * (0.18 + hashUnit(seed + 13, index) * 0.52);
+    const spot = new THREE.Mesh(new THREE.SphereGeometry(radius * 0.08, 6, 4), moldMaterial);
+    spot.scale.y = 0.16;
+    spot.position.set(Math.cos(angle) * distance, height * 0.58, Math.sin(angle) * distance);
+    spot.castShadow = true;
+    spot.receiveShadow = true;
+    group.add(spot);
+  }
   return group;
 }
 
@@ -649,29 +1099,57 @@ function createDirtStickPatch(prop) {
   const length = prop.visual?.length ?? (prop.collisionShape?.halfExtents?.x ?? 3) * 2;
   const width = prop.visual?.width ?? (prop.collisionShape?.halfExtents?.z ?? 1.5) * 2;
   const thickness = prop.visual?.thickness ?? (prop.collisionShape?.halfExtents?.y ?? 0.05) * 2;
+  const halfHeight = prop.collisionShape?.halfHeight ?? thickness / 2;
+  const relief = prop.visual?.relief ?? thickness * 0.75;
+  const seed = hashText(prop.id ?? prop.kind ?? 'dirt-stick-patch');
   const group = createRoughGroundPatch(prop, {
     baseColor: 0x5a3924,
-    palette: [0x2f2117, 0x4a3020, 0x5a3924, 0x6a3f25, 0x3b2a1e],
-    roughnessMultiplier: 0.42,
+    palette: [0x24170f, 0x342116, 0x4a2e1c, 0x633b22, 0x7a4a2a, 0x2b1c13],
+    roughnessMultiplier: 0.34,
     surfaceLift: 0.28
   });
 
-  const stickMaterial = createMaterial(0x3b2618, 0.98);
-  const stickCount = prop.visual?.stickCount ?? 3;
+  const rootMaterial = createMaterial(0x3b2618, 0.98);
+  const darkRootMaterial = createMaterial(0x24160f, 0.99);
+  const stickCount = prop.visual?.stickCount ?? 6;
+  const surfaceY = -halfHeight + thickness * 0.58 + relief * 0.46;
   for (let index = 0; index < stickCount; index += 1) {
-    const stickLength = length * (0.18 + (index % 3) * 0.05);
-    const stickWidth = Math.max(0.08, width * 0.018);
-    const stick = new THREE.Mesh(
-      new THREE.BoxGeometry(stickLength, Math.max(0.04, thickness * 0.22), stickWidth),
-      stickMaterial
-    );
-    stick.position.x = Math.sin(index * 1.77) * length * 0.28;
-    stick.position.z = Math.cos(index * 2.19) * width * 0.28;
-    stick.position.y = thickness * 0.92;
-    stick.rotation.y = index * 0.93;
-    stick.castShadow = true;
-    stick.receiveShadow = true;
-    group.add(stick);
+    const angle = hashUnit(seed + index * 17, 1) * Math.PI * 2;
+    const dir = { x: Math.cos(angle), z: Math.sin(angle) };
+    const side = { x: -dir.z, z: dir.x };
+    const stickLength = Math.min(length * 0.46, width * 1.25) * (0.42 + hashUnit(seed + index * 23, 2) * 0.58);
+    const radius = Math.max(0.055, Math.min(0.34, width * (0.008 + hashUnit(seed + index * 29, 4) * 0.014)));
+    const center = {
+      x: (hashUnit(seed + index * 31, 5) - 0.5) * length * 0.52,
+      z: (hashUnit(seed + index * 37, 6) - 0.5) * width * 0.52
+    };
+    const segmentCount = 2 + Math.floor(hashUnit(seed + index * 41, 7) * 2.999);
+    let previous = {
+      x: center.x - dir.x * stickLength * 0.5,
+      y: surfaceY + (hashUnit(seed + index * 43, 8) - 0.5) * relief * 0.12,
+      z: center.z - dir.z * stickLength * 0.5
+    };
+
+    for (let segmentIndex = 1; segmentIndex <= segmentCount; segmentIndex += 1) {
+      const t = segmentIndex / segmentCount;
+      const bend = Math.sin(t * Math.PI) * (hashUnit(seed + index * 47, segmentIndex) - 0.5) * width * 0.18;
+      const next = {
+        x: center.x + dir.x * stickLength * (t - 0.5) + side.x * bend,
+        y: surfaceY + (hashUnit(seed + index * 53, segmentIndex) - 0.5) * relief * 0.16,
+        z: center.z + dir.z * stickLength * (t - 0.5) + side.z * bend
+      };
+      const taper = segmentIndex / segmentCount;
+      addFrustumSegment(
+        group,
+        index % 3 === 0 ? darkRootMaterial : rootMaterial,
+        previous,
+        next,
+        radius * (1.12 - taper * 0.28),
+        radius * (0.94 - taper * 0.32),
+        5
+      );
+      previous = next;
+    }
   }
 
   return group;
@@ -731,7 +1209,7 @@ function createSprout(prop) {
   const material = createMaterial(prop.visual?.color ?? 0x4f8b3d, 0.92);
   const group = new THREE.Group();
   const stem = new THREE.Mesh(
-    new THREE.CylinderGeometry(radius * 0.38, radius, height, 4),
+    new THREE.CylinderGeometry(radius * 0.65, radius * 1.1, height, 4),
     createMaterial(0x35632e, 0.94)
   );
   stem.castShadow = true;
@@ -742,7 +1220,7 @@ function createSprout(prop) {
   for (let index = 0; index < leafCount; index += 1) {
     const leaf = new THREE.Mesh(new THREE.SphereGeometry(1, 6, 4), material);
     const angle = index * Math.PI * 1.13;
-    leaf.scale.set(leafLength * 0.5, Math.max(0.025, radius * 0.26), leafLength * 0.13);
+    leaf.scale.set(leafLength * 0.66, Math.max(0.04, radius * 0.42), leafLength * 0.18);
     leaf.position.y = height * (0.04 + index * 0.18);
     leaf.position.x = Math.cos(angle) * leafLength * 0.2;
     leaf.position.z = Math.sin(angle) * leafLength * 0.2;
@@ -760,7 +1238,7 @@ function createShrub(prop) {
   const height = prop.visual?.height ?? (prop.collisionShape?.halfHeight ?? 4) * 2;
   const radius = prop.visual?.radius ?? prop.collisionShape?.radius ?? 3;
   const stemCount = prop.visual?.stemCount ?? 6;
-  const leafCount = prop.visual?.leafCount ?? 3;
+  const leafCount = Math.max(prop.visual?.leafCount ?? 3, Math.round(stemCount * 1.4));
   const seed = hashText(prop.id ?? 'shrub');
   const group = new THREE.Group();
   const twigMaterial = createMaterial(0x45301f, 0.98);
@@ -785,13 +1263,13 @@ function createShrub(prop) {
   for (let index = 0; index < leafCount; index += 1) {
     const angle = (index / Math.max(1, leafCount)) * Math.PI * 2 + hashUnit(seed + 41, index);
     const leaf = new THREE.Mesh(
-      new THREE.DodecahedronGeometry(radius * (0.14 + hashUnit(seed + 59, index) * 0.07), 0),
+      new THREE.DodecahedronGeometry(radius * (0.18 + hashUnit(seed + 59, index) * 0.16), 0),
       leafMaterial
     );
     leaf.position.set(
-      Math.cos(angle) * radius * (0.32 + hashUnit(seed + 67, index) * 0.38),
-      baseY + height * (0.46 + hashUnit(seed + 73, index) * 0.42),
-      Math.sin(angle) * radius * (0.32 + hashUnit(seed + 83, index) * 0.38)
+      Math.cos(angle) * radius * (0.24 + hashUnit(seed + 67, index) * 0.44),
+      baseY + height * (0.32 + hashUnit(seed + 73, index) * 0.58),
+      Math.sin(angle) * radius * (0.24 + hashUnit(seed + 83, index) * 0.44)
     );
     leaf.scale.y = 0.55;
     leaf.castShadow = true;
@@ -852,23 +1330,47 @@ function createFallenBranch(prop) {
 
 function createAntTrail(prop) {
   const length = prop.visual?.length ?? (prop.collisionShape?.halfExtents?.x ?? 4) * 2;
-  const width = prop.visual?.width ?? (prop.collisionShape?.halfExtents?.z ?? 0.5) * 2;
-  const thickness = prop.visual?.thickness ?? (prop.collisionShape?.halfExtents?.y ?? 0.02) * 2;
+  const sourceWidth = prop.visual?.width ?? (prop.collisionShape?.halfExtents?.z ?? 0.5) * 2;
+  const width = Math.max(0.65, sourceWidth * 2.4, length * 0.025);
+  const thickness = Math.max(0.035, prop.visual?.thickness ?? (prop.collisionShape?.halfExtents?.y ?? 0.02) * 2);
   const group = new THREE.Group();
   const road = new THREE.Mesh(
     new THREE.BoxGeometry(length, thickness, width),
-    createMaterial(0x2b231d, 0.98)
+    createMaterial(0x3a2d24, 0.98)
   );
   road.receiveShadow = true;
   group.add(road);
 
+  const seed = hashText(prop.id ?? 'ant');
+  const seamMaterial = createMaterial(0x231a15, 0.98);
+  const seamCount = Math.max(6, Math.min(24, Math.round(length / 0.55)));
+  for (let index = 0; index < seamCount; index += 1) {
+    const alpha = seamCount === 1 ? 0 : (index / (seamCount - 1)) - 0.5;
+    const seam = new THREE.Mesh(
+      new THREE.BoxGeometry(
+        width * (0.22 + hashUnit(seed + 3, index) * 0.24),
+        thickness * 0.58,
+        width * (0.06 + hashUnit(seed + 5, index) * 0.07)
+      ),
+      seamMaterial
+    );
+    seam.position.set(
+      alpha * length * 0.84,
+      thickness * 0.8,
+      (hashUnit(seed + 7, index) - 0.5) * width * 0.5
+    );
+    seam.rotation.y = (hashUnit(seed + 11, index) - 0.5) * 1.4;
+    seam.receiveShadow = true;
+    group.add(seam);
+  }
+
   const dotMaterial = createMaterial(0x15110e, 0.95);
-  const dotCount = Math.max(3, Math.min(9, Math.round(length / Math.max(1, width * 3))));
+  const dotCount = Math.max(5, Math.min(18, Math.round(length / Math.max(0.6, width * 2.2))));
   for (let index = 0; index < dotCount; index += 1) {
-    const dot = new THREE.Mesh(new THREE.SphereGeometry(width * 0.18, 6, 4), dotMaterial);
+    const dot = new THREE.Mesh(new THREE.SphereGeometry(width * 0.095, 6, 4), dotMaterial);
     const alpha = dotCount === 1 ? 0 : (index / (dotCount - 1)) - 0.5;
-    dot.position.x = alpha * length * 0.72;
-    dot.position.z = (index % 2 === 0 ? -1 : 1) * width * 0.18;
+    dot.position.x = alpha * length * 0.82;
+    dot.position.z = (index % 2 === 0 ? -1 : 1) * width * (0.18 + hashUnit(seed, index) * 0.18);
     dot.position.y = thickness * 1.7;
     group.add(dot);
   }
@@ -894,27 +1396,85 @@ function createLichenTower(prop) {
   crown.castShadow = true;
   crown.receiveShadow = true;
   group.add(trunk, crown);
+
+  const shelfMaterial = createMaterial(0x6f8f45, 0.98);
+  for (let index = 0; index < 4; index += 1) {
+    const angle = index * Math.PI * 0.55;
+    const shelf = new THREE.Mesh(
+      new THREE.DodecahedronGeometry(radius * (0.46 + index * 0.08), 0),
+      shelfMaterial
+    );
+    shelf.scale.set(1.6, 0.22, 0.85);
+    shelf.position.set(
+      Math.cos(angle) * radius * 0.56,
+      -height * 0.28 + index * height * 0.17,
+      Math.sin(angle) * radius * 0.56
+    );
+    shelf.rotation.y = angle;
+    shelf.castShadow = true;
+    shelf.receiveShadow = true;
+    group.add(shelf);
+  }
   return group;
+}
+
+function createShellShardGeometry(length, width, thickness) {
+  const halfLength = length / 2;
+  const halfWidth = width / 2;
+  const halfThickness = thickness / 2;
+  const positions = new Float32Array([
+    -halfLength, -halfThickness, -halfWidth * 0.62,
+    -halfLength * 0.72, -halfThickness, halfWidth,
+    halfLength, -halfThickness, halfWidth * 0.38,
+    halfLength * 0.86, -halfThickness, -halfWidth,
+    -halfLength, halfThickness, -halfWidth * 0.46,
+    -halfLength * 0.68, halfThickness * 1.35, halfWidth * 0.92,
+    halfLength, halfThickness * 0.85, halfWidth * 0.32,
+    halfLength * 0.82, halfThickness * 1.15, -halfWidth * 0.9
+  ]);
+  const indices = [
+    0, 1, 2, 0, 2, 3,
+    4, 6, 5, 4, 7, 6,
+    0, 4, 5, 0, 5, 1,
+    1, 5, 6, 1, 6, 2,
+    2, 6, 7, 2, 7, 3,
+    3, 7, 4, 3, 4, 0
+  ];
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+  geometry.setIndex(indices);
+  geometry.computeVertexNormals();
+  return geometry;
 }
 
 function createShellShard(prop) {
   const length = prop.visual?.length ?? (prop.collisionShape?.halfExtents?.x ?? 0.9) * 2;
   const width = prop.visual?.width ?? (prop.collisionShape?.halfExtents?.z ?? 0.3) * 2;
   const thickness = prop.visual?.thickness ?? (prop.collisionShape?.halfExtents?.y ?? 0.14) * 2;
-  const mesh = new THREE.Mesh(
-    new THREE.BoxGeometry(length, thickness, width),
-    createMaterial(prop.visual?.color ?? 0xd6c8a2, 0.82)
-  );
+  const group = new THREE.Group();
+  const mesh = new THREE.Mesh(createShellShardGeometry(length, width, thickness), createMaterial(prop.visual?.color ?? 0xd6c8a2, 0.82));
   mesh.rotation.z = 0.18;
   mesh.castShadow = true;
   mesh.receiveShadow = true;
-  return mesh;
+  group.add(mesh);
+
+  const ridge = new THREE.Mesh(
+    new THREE.BoxGeometry(length * 0.76, Math.max(0.015, thickness * 0.18), Math.max(0.02, width * 0.06)),
+    createMaterial(0xf2e5c4, 0.86)
+  );
+  ridge.position.y = thickness * 0.62;
+  ridge.rotation.z = 0.18;
+  ridge.castShadow = true;
+  ridge.receiveShadow = true;
+  group.add(ridge);
+  return group;
 }
 
 function createLog(prop) {
   const length = prop.visual?.length ?? (prop.collisionShape?.halfExtents?.x ?? 3) * 2;
   const radius = prop.visual?.radius ?? prop.collisionShape?.halfExtents?.y ?? 0.6;
   const group = new THREE.Group();
+  const seed = hashText(prop.id ?? prop.kind ?? 'log');
   const log = new THREE.Mesh(
     new THREE.CylinderGeometry(radius, radius, length, 10),
     createMaterial(0x5f3f2a, 0.96)
@@ -930,6 +1490,37 @@ function createLog(prop) {
   capA.rotation.y = -Math.PI / 2;
   capB.rotation.y = Math.PI / 2;
   group.add(log, capA, capB);
+
+  const ringMaterial = createMaterial(0x3a2418, 0.99);
+  const ringCount = Math.max(3, Math.min(9, Math.round(length / Math.max(radius * 3.8, 1.2))));
+  for (let index = 0; index < ringCount; index += 1) {
+    const band = new THREE.Mesh(
+      new THREE.CylinderGeometry(radius * 1.015, radius * 1.015, Math.max(0.035, radius * 0.08), 10),
+      ringMaterial
+    );
+    band.rotation.z = Math.PI / 2;
+    band.position.x = -length * 0.42 + ((index + 0.5) / ringCount) * length * 0.84;
+    band.castShadow = true;
+    band.receiveShadow = true;
+    group.add(band);
+  }
+
+  for (let index = 0; index < 2; index += 1) {
+    const angle = hashUnit(seed + 11, index) * Math.PI * 2;
+    const knot = new THREE.Mesh(
+      new THREE.SphereGeometry(radius * (0.18 + hashUnit(seed + 17, index) * 0.08), 6, 4),
+      createMaterial(0x2d1b12, 0.99)
+    );
+    knot.scale.set(1, 0.38, 0.7);
+    knot.position.set(
+      (hashUnit(seed + 23, index) - 0.5) * length * 0.55,
+      Math.cos(angle) * radius * 0.86,
+      Math.sin(angle) * radius * 0.86
+    );
+    knot.castShadow = true;
+    knot.receiveShadow = true;
+    group.add(knot);
+  }
   return group;
 }
 
@@ -944,7 +1535,7 @@ function createDefaultProp(prop) {
   return mesh;
 }
 
-function createPropMesh(prop) {
+export function createPropMesh(prop) {
   switch (prop.kind) {
     case 'giant_tree':
     case 'deciduous_tree':
@@ -968,6 +1559,8 @@ function createPropMesh(prop) {
       return createDewPool(prop);
     case 'mushroom':
       return createMushroom(prop);
+    case 'soft_food':
+      return createSoftFood(prop);
     case 'dry_leaf_patch':
       return createDryLeafPatch(prop);
     case 'dirt_stick_patch':
@@ -987,6 +1580,8 @@ function createPropMesh(prop) {
       return createLichenTower(prop);
     case 'shell_shard':
       return createShellShard(prop);
+    case 'sharp_grit':
+      return createSharpGrit(prop);
     case 'salt_cone':
       return createSaltCone(prop);
     case 'bamboo_stick':
@@ -1008,13 +1603,14 @@ export class WorldPropActor {
   declare labelDistance: any;
   declare mesh: any;
   declare nibbleTimer: any;
-  constructor(prop) {
+  constructor(prop, options: any = {}) {
+    const createLabel = options.createLabel ?? true;
     this.id = prop.id;
     this.kind = prop.kind;
     this.mesh = new THREE.Group();
     this.body = createPropMesh(prop);
     this.mesh.add(this.body);
-    this.label = createLabelSprite(prop.kind ?? prop.displayName ?? prop.id);
+    this.label = createLabel ? createLabelSprite(prop.kind ?? prop.displayName ?? prop.id) : null;
     if (this.label) {
       this.label.position.y = getPropShapeHalfHeight(prop) + 4.8;
       this.mesh.add(this.label);

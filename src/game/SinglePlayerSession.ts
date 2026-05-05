@@ -154,7 +154,9 @@ export class SinglePlayerSession {
       tuning: this.tuningConfig,
       terrainConfig: environment?.terrainConfig,
       arenaRadius: environment?.arenaRadius,
-      worldProps: environment?.worldProps
+      worldBounds: environment?.worldBounds,
+      worldProps: environment?.worldProps,
+      creatures: environment?.creatures
     });
 
     const botControllerConfig = createBotControllerConfig(this.tuningConfig);
@@ -169,6 +171,18 @@ export class SinglePlayerSession {
     this.snapshot = this.simulation.getSnapshot();
     this.staticWorldProps = this.snapshot.worldProps ?? [];
     this.accumulator = 0;
+  }
+
+  syncConsumedPowerups(events: any[] = []) {
+    const consumedIds = events
+      .filter((event) => event.type === 'powerup' && event.propId)
+      .map((event) => event.propId);
+    if (consumedIds.length === 0) {
+      return;
+    }
+
+    const consumedSet = new Set(consumedIds);
+    this.staticWorldProps = this.staticWorldProps.filter((prop) => !consumedSet.has(prop.id));
   }
 
   update(delta, localInput) {
@@ -202,6 +216,8 @@ export class SinglePlayerSession {
           ...this.simulation.step(MATCH_TICK_DURATION, { includeWorldProps: false }),
           worldProps: this.staticWorldProps
         };
+        this.syncConsumedPowerups(this.snapshot.events ?? []);
+        this.snapshot.worldProps = this.staticWorldProps;
         this.accumulator -= MATCH_TICK_DURATION;
       }
     } else {
@@ -250,6 +266,19 @@ export class SinglePlayerSession {
 
   getSnapshot() {
     return this.snapshot;
+  }
+
+  grantDebugResource(type, amount) {
+    const applied = this.simulation?.grantPowerupToSlot?.(this.localSlot, type, amount, `Debug ${type}`) ?? false;
+    if (!applied) {
+      return false;
+    }
+
+    this.snapshot = {
+      ...this.simulation.getSnapshot({ includeWorldProps: false }),
+      worldProps: this.staticWorldProps
+    };
+    return true;
   }
 
   getLocalSlot() {

@@ -31,11 +31,18 @@ document.addEventListener('DOMContentLoaded', () => {
     const game = new Game(container);
 
     game.init();
-    if (new URLSearchParams(window.location.search).has('profile')) {
+    const query = new URLSearchParams(window.location.search);
+    const profileRequested = query.has('profile') || query.has('asset-studio');
+    if (profileRequested) {
       (window as any).__battlesnailsGame = game;
       (window as any).__battlesnailsProfile = installBrowserProfileHarness(game);
     }
     game.start();
+    if (query.has('asset-studio')) {
+      requestAnimationFrame(() => {
+        (window as any).__battlesnailsProfile?.startAssetStudio?.(Object.fromEntries(query.entries()));
+      });
+    }
   } catch (error) {
     console.error('BattleSnails failed to boot.', error);
     showBootError(error);

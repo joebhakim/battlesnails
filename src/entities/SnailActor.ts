@@ -120,6 +120,7 @@ export class SnailActor {
   declare stalkPitchMin: any;
   declare stalkSegmentCount: any;
   declare stalkSegmentLength: any;
+  declare stalkRenderFidelity: any;
   declare stalkYawLimit: any;
   declare stalks: any;
   declare tiltRoot: any;
@@ -146,6 +147,7 @@ export class SnailActor {
     this.stalkPitchMin = config.stalkPitchMin ?? -0.7;
     this.stalkPitchMax = config.stalkPitchMax ?? 0.8;
     this.stalkSegmentCount = config.stalkSegmentCount ?? STALK_SEGMENT_COUNT;
+    this.stalkRenderFidelity = 'full';
     this.stalkLength = config.stalkLength ?? STALK_TOTAL_LENGTH;
     this.stalkSegmentLength = this.stalkLength / this.stalkSegmentCount;
     this.stalkSegmentRadius = config.stalkSegmentRadius ?? STALK_SEGMENT_RADIUS;
@@ -758,7 +760,7 @@ export class SnailActor {
     this.controlIntensity = 0;
   }
 
-  applyMatchState(state, delta = 0) {
+  applyMatchState(state, delta = 0, options: any = {}) {
     if (!state) {
       this.resetDeathBurst();
       this.mesh.visible = false;
@@ -786,6 +788,8 @@ export class SnailActor {
       this.hasReceivedMatchState = true;
       return;
     }
+
+    this.setStalkRenderFidelity(options.stalkRenderFidelity ?? 'full');
 
     this.health = state.health;
     this.maxHealth = state.maxHealth;
@@ -855,7 +859,8 @@ export class SnailActor {
       this.applySyntheticStalkState(state, delta);
     }
 
-    if (!this.deathBurst.active) {
+    const shouldRenderStalks = this.stalkRenderFidelity !== 'hidden';
+    if (shouldRenderStalks && !this.deathBurst.active) {
       this.renderStalks();
     }
 
@@ -867,7 +872,9 @@ export class SnailActor {
     this.updateShellColor();
     this.updateDeathBurst(delta);
     this.updateMotionState(delta);
-    this.updateStalkVisualState();
+    if (shouldRenderStalks) {
+      this.updateStalkVisualState();
+    }
     this.mesh.userData.hasAppliedMatchState = true;
     this.hasReceivedMatchState = true;
   }
@@ -877,6 +884,14 @@ export class SnailActor {
       this.resetDeathBurst();
     }
     this.mesh.visible = visible;
+  }
+
+  setStalkRenderFidelity(fidelity = 'full') {
+    this.stalkRenderFidelity = fidelity;
+    const visible = fidelity !== 'hidden';
+    for (const stalk of (Object.values(this.stalks) as any[])) {
+      stalk.group.visible = visible;
+    }
   }
 
   applySupportNormal(supportNormal = LOCAL_UP) {

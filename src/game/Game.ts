@@ -8,6 +8,7 @@ import { NPCSnail } from '../entities/NPCSnail.js';
 import { TestFixtureActor } from '../entities/TestFixtureActor.js';
 import { WorldPropActor } from '../entities/WorldPropActor.js';
 import { WorldPropBatchActor, shouldRenderWorldPropIndividually } from '../entities/WorldPropBatchActor.js';
+import { BirdActor } from '../entities/BirdActor.js';
 import { MouseControls } from '../controls/MouseControls.js';
 import { KeyboardControls } from '../controls/KeyboardControls.js';
 import { MobileControls } from '../controls/MobileControls.js';
@@ -20,12 +21,17 @@ import {
   SinglePlayerSession,
   getStoredSinglePlayerOptions
 } from './SinglePlayerSession.js';
-import { ExplorerSession } from './ExplorerSession.js';
+import {
+  HUNT_OPTIONS_SCHEMA,
+  ExplorerSession,
+  getStoredHuntOptions
+} from './ExplorerSession.js';
 import { MultiplayerSession } from './MultiplayerSession.js';
 import { TestSession } from './TestSession.js';
 import { SimulatorSession } from './SimulatorSession.js';
 import { TrailRenderer } from './TrailRenderer.js';
 import { DamageIndicators } from './DamageIndicators.js';
+import { startAssetStudio } from './AssetStudio.js';
 import { DEFAULT_BOT_MAX_HEALTH, DEFAULT_MAX_HEALTH } from '../sim/MatchSimulation.js';
 import { DEFAULT_TERRAIN_CONFIG } from '../world/Terrain.js';
 import {
@@ -33,11 +39,14 @@ import {
   MULTIPLAYER_OPTIONS_SCHEMA,
   normalizeMultiplayerOptions
 } from '../sim/MultiplayerOptions.js';
+import { getPowerupForProp } from '../sim/SnailPowerups.js';
 
 const DEFAULT_CAMERA_PLAYER = new THREE.Vector3(0, 1, 6);
 const DEFAULT_CAMERA_ENEMY = new THREE.Vector3(0, 1, -6);
 const DEFAULT_FORWARD = new THREE.Vector3(0, 0, -1);
 const PERFORMANCE_SAMPLE_INTERVAL = 0.5;
+const REMOTE_BOT_STALK_RENDER_DISTANCE = 48;
+const NEARBY_POWERUP_RADIUS = 42;
 
 const REMOTE_PLAYER_OVERRIDES = {
   position: new THREE.Vector3(0, 1, -6),
@@ -110,7 +119,10 @@ export class Game {
   declare otherActorViews: any;
   declare worldPropViews: any;
   declare worldPropBatch: any;
+  declare creatureViews: any;
   declare audio: any;
+  declare assetStudioRestore: any;
+  declare assetStudioState: any;
   declare camera: any;
   declare cameraController: any;
   declare collisionDetection: any;
@@ -127,6 +139,7 @@ export class Game {
   declare lastFrameTime: any;
   declare latestSnapshotEvents: any;
   declare lastWorldPropsReference: any;
+  declare worldPropBatchSignature: any;
   declare performanceFrameCount: any;
   declare performanceLastSampleTick: any;
   declare performanceLastSampleTime: any;
@@ -154,6 +167,7 @@ export class Game {
     this.otherActorViews = new Map();
     this.worldPropViews = new Map();
     this.worldPropBatch = null;
+    this.creatureViews = new Map();
     this.mouseControls = null;
     this.mobileControls = null;
     this.keyboardControls = null;
@@ -166,6 +180,7 @@ export class Game {
     this.currentOverlayKey = null;
     this.latestSnapshotEvents = [];
     this.lastWorldPropsReference = null;
+    this.worldPropBatchSignature = '';
     this.performanceFrameCount = 0;
     this.performanceLastSampleTime = performance.now();
     this.performanceLastSampleTick = null;
@@ -203,7 +218,7 @@ export class Game {
     this.ui.setupMusicButton(this.toggleMusic.bind(this));
     this.ui.setupModeButtons({
       onSinglePlayer: this.showSinglePlayerSetup.bind(this),
-      onExplorer: this.startExplorerSession.bind(this),
+      onExplorer: this.showHuntSetup.bind(this),
       onTestMode: this.startTestSession.bind(this),
       onSimulator: this.startSimulatorSession.bind(this),
       onMultiplayer: this.showMultiplayerSetup.bind(this)
@@ -243,6 +258,8 @@ export class Game {
     this.isRunning = false;
     this.currentSession?.leave();
     this.currentSession = null;
+    this.assetStudioRestore?.();
+    this.assetStudioRestore = null;
     this.ui?.hideTestPanel();
     this.ui?.hideSimulatorPanel();
     this.mobileControls?.setEnabled(false);
@@ -306,8 +323,12 @@ export class Game {
       this.playerSnail.setTerrainConfig(DEFAULT_TERRAIN_CONFIG);
       this.trailRenderer?.setTerrainConfig(DEFAULT_TERRAIN_CONFIG);
       this.ui?.updateStalkIndicators(null);
+      this.ui?.updateSnailStats(null);
+      this.ui?.updateTrialHud(null);
+      this.ui?.updateNearbyItems([]);
       this.latestSnapshotEvents = [];
       this.damageIndicators?.clear();
+      this.syncCreatureViews([], delta);
       if (this.debug) {
         this.debug.update();
       }
@@ -323,6 +344,7 @@ export class Game {
     this.trailRenderer?.applySnapshot(snapshot);
     const localState = this.currentSession.getLocalPlayerState();
     this.syncWorldPropViews(snapshot?.worldProps ?? [], delta, localState?.position ?? null);
+    this.syncCreatureViews(snapshot?.creatures ?? [], delta);
 
     const otherStates = this.currentSession.getOtherPlayerStates?.() ?? [];
     const focusState = this.currentSession.getFocusTargetState?.() ?? this.currentSession.getOpponentPlayerState();
@@ -335,7 +357,7 @@ export class Game {
       this.getDamageIndicatorColors(localState)
     );
     this.damageIndicators?.update(delta);
-    this.updateHud(localState, focusState);
+    this.updateHud(localState, focusState, snapshot);
     this.ui.updateStalkIndicators(localState?.stalks ?? null);
     this.updateTestPanel();
     this.updateSimulatorPanel();
@@ -436,17 +458,33 @@ export class Game {
     }
 
     this.lastWorldPropsReference = worldProps;
-    const desiredIds = new Set(worldProps.map((prop) => prop.id));
+    const desiredIndividualIds = new Set();
     const batchEntries = [];
+    const batchSignatureParts = [];
 
-    if (this.worldPropBatch) {
-      this.scene.scene.remove(this.worldPropBatch.mesh);
-      this.worldPropBatch.dispose();
-      this.worldPropBatch = null;
+    for (const prop of worldProps) {
+      if (shouldRenderWorldPropIndividually(prop)) {
+        desiredIndividualIds.add(prop.id);
+        continue;
+      }
+
+      batchEntries.push({ prop });
+      batchSignatureParts.push([
+        prop.id,
+        prop.kind,
+        prop.position?.x,
+        prop.position?.y,
+        prop.position?.z,
+        prop.rotationY,
+        prop.bodyRadius,
+        prop.collisionShape?.type
+      ].join(':'));
     }
 
+    const nextBatchSignature = batchSignatureParts.join('|');
+
     for (const [id, actor] of this.worldPropViews.entries()) {
-      if (desiredIds.has(id)) {
+      if (desiredIndividualIds.has(id)) {
         continue;
       }
 
@@ -455,27 +493,61 @@ export class Game {
     }
 
     for (const prop of worldProps) {
+      if (!shouldRenderWorldPropIndividually(prop)) {
+        continue;
+      }
+
       let actor = this.worldPropViews.get(prop.id);
       if (!actor) {
-        actor = new WorldPropActor(prop);
+        actor = new WorldPropActor(prop, { createLabel: false });
         this.worldPropViews.set(prop.id, actor);
         this.scene.scene.add(actor.mesh);
       } else {
         actor.applyPropState(prop);
       }
 
-      const renderIndividually = shouldRenderWorldPropIndividually(prop);
-      actor.setBodyVisible(renderIndividually);
-      if (!renderIndividually) {
-        batchEntries.push({ prop, actor });
-      }
+      actor.setBodyVisible(true);
       actor.update(delta, localPlayerPosition);
     }
 
-    if (batchEntries.length > 0) {
+    if (nextBatchSignature !== this.worldPropBatchSignature) {
+      if (this.worldPropBatch) {
+        this.scene.scene.remove(this.worldPropBatch.mesh);
+        this.worldPropBatch.dispose();
+        this.worldPropBatch = null;
+      }
+      this.worldPropBatchSignature = nextBatchSignature;
+    }
+
+    if (!this.worldPropBatch && batchEntries.length > 0) {
       this.worldPropBatch = new WorldPropBatchActor(batchEntries);
       this.scene.scene.add(this.worldPropBatch.mesh);
-      this.worldPropBatch.update(localPlayerPosition);
+    }
+    this.worldPropBatch?.update(localPlayerPosition);
+  }
+
+  syncCreatureViews(creatures, delta) {
+    const desiredIds = new Set(creatures.map((creature) => creature.id));
+
+    for (const [id, actor] of this.creatureViews.entries()) {
+      if (desiredIds.has(id)) {
+        continue;
+      }
+
+      this.scene.scene.remove(actor.mesh);
+      this.creatureViews.delete(id);
+    }
+
+    for (const creature of creatures) {
+      let actor = this.creatureViews.get(creature.id);
+      if (!actor) {
+        actor = new BirdActor();
+        this.creatureViews.set(creature.id, actor);
+        this.scene.scene.add(actor.mesh);
+      }
+
+      actor.applyCreatureState(creature);
+      actor.update(delta);
     }
   }
 
@@ -502,10 +574,19 @@ export class Game {
     this.playerSnail.applyMatchState(localState, delta);
     this.syncOtherActorViews(otherStates);
 
+    const terrainConfig = this.currentSession?.getSnapshot?.()?.terrain ?? DEFAULT_TERRAIN_CONFIG;
     for (const state of otherStates) {
       const actor = this.otherActorViews.get(state.slot);
-      actor?.setTerrainConfig(this.currentSession?.getSnapshot?.()?.terrain ?? DEFAULT_TERRAIN_CONFIG);
-      actor?.applyMatchState(state, delta);
+      const isFocused = focusState?.slot === state.slot;
+      const dx = state.position.x - localState.position.x;
+      const dz = state.position.z - localState.position.z;
+      const botStalksInRange = (dx * dx) + (dz * dz) <=
+        REMOTE_BOT_STALK_RENDER_DISTANCE * REMOTE_BOT_STALK_RENDER_DISTANCE;
+      const stalkRenderFidelity = state.profileName === 'bot' && !isFocused && !botStalksInRange
+        ? 'hidden'
+        : 'full';
+      actor?.setTerrainConfig(terrainConfig);
+      actor?.applyMatchState(state, delta, { stalkRenderFidelity });
     }
 
     const focusActor = focusState ? this.otherActorViews.get(focusState.slot) ?? null : null;
@@ -533,7 +614,40 @@ export class Game {
     );
   }
 
-  updateHud(localState, focusState) {
+  getNearbyPowerupItems(worldProps: any[] = [], localState: any = null) {
+    if (!localState?.position || !Array.isArray(worldProps)) {
+      return [];
+    }
+
+    return worldProps
+      .map((prop) => {
+        const powerup = getPowerupForProp(prop);
+        if (!powerup) {
+          return null;
+        }
+
+        const dx = prop.position.x - localState.position.x;
+        const dz = prop.position.z - localState.position.z;
+        const distance = Math.hypot(dx, dz);
+        if (distance > NEARBY_POWERUP_RADIUS + (prop.bodyRadius ?? 0)) {
+          return null;
+        }
+
+        return {
+          id: prop.id,
+          kind: prop.kind,
+          type: powerup.type,
+          label: prop.displayName ?? powerup.label,
+          amount: powerup.amount,
+          distance
+        };
+      })
+      .filter(Boolean)
+      .sort((left, right) => left.distance - right.distance)
+      .slice(0, 5);
+  }
+
+  updateHud(localState, focusState, snapshot: any = null) {
     if (localState) {
       this.ui.updatePlayerHealth(localState.health, localState.maxHealth);
     }
@@ -549,6 +663,9 @@ export class Game {
 
     const labels = this.currentSession?.getHudLabels?.(focusState) ?? { opponent: 'Enemy' };
     this.ui.setHealthLabels('Player', labels.opponent);
+    this.ui.updateSnailStats(localState?.snailStats ?? null);
+    this.ui.updateTrialHud(snapshot?.trialState ?? null);
+    this.ui.updateNearbyItems(this.getNearbyPowerupItems(snapshot?.worldProps ?? [], localState));
   }
 
   getActorBodyColor(actor) {
@@ -624,6 +741,17 @@ export class Game {
     this.ui.showSinglePlayerSetup(getStoredSinglePlayerOptions());
   }
 
+  showHuntSetup() {
+    this.ui.showModeSetup({
+      title: 'The Hunt',
+      copy: 'Choose how many wild snails stalk the seven-hex forest, and how dangerous they are.',
+      schema: HUNT_OPTIONS_SCHEMA,
+      values: getStoredHuntOptions(),
+      startLabel: 'Start Hunt',
+      onStart: this.startExplorerSession.bind(this)
+    });
+  }
+
   showMultiplayerSetup() {
     this.ui.showModeSetup({
       title: 'LAN Multiplayer',
@@ -639,8 +767,19 @@ export class Game {
     this.enterSession(new SinglePlayerSession({ options }));
   }
 
-  startExplorerSession() {
-    this.enterSession(new ExplorerSession());
+  startExplorerSession(options: any = {}) {
+    const params = new URLSearchParams(window.location.search);
+    this.enterSession(new ExplorerSession({
+      seed: params.has('seed') ? Number(params.get('seed')) : undefined,
+      options: {
+        ...options,
+        npcCount: params.has('npcs') ? Number(params.get('npcs')) : options.npcCount,
+        npcStrength: params.has('strength') ? Number(params.get('strength')) : options.npcStrength
+      },
+      trialKind: params.get('trial') ?? undefined,
+      startInTrial: params.has('trial-now') || params.get('trialNow') === '1',
+      forageDuration: params.has('forage') ? Number(params.get('forage')) : undefined
+    }));
   }
 
   startTestSession() {
@@ -655,11 +794,17 @@ export class Game {
     this.enterSession(new SimulatorSession());
   }
 
+  startAssetStudio(rawOptions: any = {}) {
+    return startAssetStudio(this, rawOptions);
+  }
+
   enterSession(session) {
     this.currentSession?.leave();
     this.currentSession = session;
     this.currentOverlayKey = null;
     this.hasRenderedMatchState = false;
+    this.assetStudioRestore?.();
+    this.assetStudioRestore = null;
     this.resetViewActors();
     this.ui.hideStartMenu();
     this.ui.clearMessage();
@@ -679,6 +824,8 @@ export class Game {
     this.currentSession = null;
     this.currentOverlayKey = null;
     this.hasRenderedMatchState = false;
+    this.assetStudioRestore?.();
+    this.assetStudioRestore = null;
     this.resetViewActors();
     this.ui.clearMessage();
     this.ui.showStartMenu();
@@ -718,7 +865,7 @@ export class Game {
     }
 
     if (this.currentSession?.mode === 'explorer') {
-      this.ui.setInstructions('WASD move · Mouse turn · E nibble logs · Space jump · Hold LMB/RMB stalks · Wheel plane height · Hold Shift lock-on · Click arena');
+      this.ui.setInstructions('WASD move · Mouse turn · E nibble logs · Space jump · Hold LMB/RMB stalks · Wheel plane height · Hold Shift lock-on · Click hunt');
       return;
     }
 
@@ -744,6 +891,9 @@ export class Game {
     event.preventDefault();
     this.developerModesVisible = !this.developerModesVisible;
     this.ui.setDeveloperModesVisible(this.developerModesVisible);
+    if (this.developerModesVisible && this.debug && !this.debug.enabled) {
+      this.debug.toggleDebugMode();
+    }
   }
 
   resetViewActors() {
@@ -767,6 +917,12 @@ export class Game {
       this.worldPropBatch = null;
     }
     this.lastWorldPropsReference = null;
+    this.worldPropBatchSignature = '';
+
+    for (const actor of this.creatureViews.values()) {
+      this.scene.scene.remove(actor.mesh);
+    }
+    this.creatureViews.clear();
   }
 
   toggleMusic() {
@@ -795,6 +951,28 @@ export class Game {
       playerView: this.playerSnail.mesh.visible ? this.playerSnail : null,
       opponentView: focusState ? this.otherActorViews.get(focusState.slot) ?? null : null
     };
+  }
+
+  addDebugResource(type, amount) {
+    const applied = this.currentSession?.grantDebugResource?.(type, amount) ?? false;
+    if (!applied) {
+      this.debug?.addEvent?.(`Could not add ${type}`);
+      this.debug?.renderEventLog?.();
+      return false;
+    }
+
+    const snapshot = this.currentSession?.getSnapshot?.() ?? null;
+    this.latestSnapshotEvents = snapshot?.events ?? [];
+    const localState = this.currentSession?.getLocalPlayerState?.() ?? null;
+    this.ui?.updateSnailStats(localState?.snailStats ?? null);
+    this.damageIndicators?.handleSnapshotEvents?.(
+      this.latestSnapshotEvents,
+      this.getDamageIndicatorColors(localState)
+    );
+    this.damageIndicators?.update?.(0);
+    this.debug?.addEvent?.(`Added ${amount} ${type}`);
+    this.debug?.updateDebugInfo?.();
+    return true;
   }
 
   onWindowResize() {
@@ -834,6 +1012,10 @@ export class Game {
         ? (focusState.immortal ? 1 : focusState.maxHealth)
         : this.currentSession?.getDefaultOpponentMaxHealth?.() ?? DEFAULT_BOT_MAX_HEALTH
     );
+    const snapshot = this.currentSession?.getSnapshot?.() ?? null;
+    this.ui.updateSnailStats(localState?.snailStats ?? null);
+    this.ui.updateTrialHud(snapshot?.trialState ?? null);
+    this.ui.updateNearbyItems(this.getNearbyPowerupItems(snapshot?.worldProps ?? [], localState));
 
     if (this.isTuningSession()) {
       this.ui.showTestPanel({

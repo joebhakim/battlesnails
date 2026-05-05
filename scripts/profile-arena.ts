@@ -109,13 +109,16 @@ function evaluateThresholds(result, args) {
     result.byteSizes.networkSnapshot.averageBytes / 1024,
     getNumber(args, 'max-network-snapshot-avg-kb')
   );
+  if ((result.diagnostics?.validationFailureCount ?? 0) > 0) {
+    failures.push(`validation failures ${result.diagnostics.validationFailureCount} > 0`);
+  }
   return failures;
 }
 
 function printHumanSummary(result) {
-  const { scenario, metrics, byteSizes, presentationObjects, finalState } = result;
+  const { scenario, metrics, byteSizes, presentationObjects, finalState, inputCoverage, diagnostics } = result;
   console.log(`Arena performance profile: ${scenario.botCount} bots, ${scenario.seconds}s (${scenario.measuredTicks} measured ticks)`);
-  console.log(`stage ${scenario.stagePreset} · presentation ${scenario.includePresentation ? 'on' : 'off'} · sample every ${scenario.snapshotSampleEvery} ticks`);
+  console.log(`stage ${scenario.stagePreset} · input ${scenario.inputMode} · presentation ${scenario.includePresentation ? 'on' : 'off'} · sample every ${scenario.snapshotSampleEvery} ticks`);
   console.log('');
   console.log(`local frame:       ${formatMs(metrics.localFrame)}`);
   console.log(`input:             ${formatMs(metrics.input)}`);
@@ -127,6 +130,17 @@ function printHumanSummary(result) {
     console.log('');
     console.log(`presentation objects: ${presentationObjects.actors} actors · ${presentationObjects.meshCount} meshes · ${presentationObjects.visibleMeshCount} visible meshes`);
   }
+  if (inputCoverage) {
+    console.log('');
+    console.log(`input coverage: movement ${inputCoverage.movementTicks}/${inputCoverage.totalTicks} ticks · lock-on ${inputCoverage.lockOnTicks} · stalk ${inputCoverage.stalkHeldTicks} · jumps ${inputCoverage.jumpPresses} · reach ${inputCoverage.reachTicks}`);
+  }
+  if ((diagnostics?.validationFailureCount ?? 0) > 0) {
+    console.log('');
+    console.log(`validation failures: ${diagnostics.validationFailureCount}`);
+    for (const failure of diagnostics.validationFailures ?? []) {
+      console.log(`- ${failure}`);
+    }
+  }
   console.log(`final: ${finalState.phase} · tick ${finalState.tick} · living ${finalState.livingPlayers} · trails ${finalState.trailCells} · props ${finalState.worldProps}`);
 }
 
@@ -137,6 +151,7 @@ const result = runArenaPerformanceProfile({
   warmupSeconds: getNumber(args, 'warmup'),
   snapshotSampleEvery: getNumber(args, 'snapshot-every'),
   stagePreset: getString(args, 'stage'),
+  inputMode: getString(args, 'input'),
   includePresentation: !getBoolean(args, 'no-presentation')
 });
 const failures = evaluateThresholds(result, args);

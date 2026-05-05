@@ -133,6 +133,7 @@ test('multiplayer server can start a generated adventure co-op room', async () =
   assert.equal(matchStartB.snapshot.players.filter((player) => player.profileName === 'human').length, 2);
   assert.equal(matchStartB.snapshot.players.filter((player) => player.profileName === 'bot').length, 1);
   assert(matchStartB.snapshot.worldProps.length > 0);
+  assert(matchStartB.snapshot.creatures.length > 0);
 
   clientA.close();
   clientB.close();

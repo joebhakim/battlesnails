@@ -77,6 +77,7 @@ export class ProfileArenaSession {
       tuning: this.tuningConfig,
       terrainConfig: environment?.terrainConfig,
       arenaRadius: environment?.arenaRadius,
+      worldBounds: environment?.worldBounds,
       worldProps: environment?.worldProps
     });
 
@@ -144,6 +145,19 @@ export class ProfileArenaSession {
 
   getSnapshot() {
     return this.snapshot;
+  }
+
+  grantDebugResource(type, amount) {
+    const applied = this.simulation?.grantPowerupToSlot?.(this.localSlot, type, amount, `Debug ${type}`) ?? false;
+    if (!applied) {
+      return false;
+    }
+
+    this.snapshot = {
+      ...this.simulation.getSnapshot({ includeWorldProps: false }),
+      worldProps: this.staticWorldProps
+    };
+    return true;
   }
 
   getLocalSlot() {

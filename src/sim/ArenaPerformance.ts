@@ -18,9 +18,11 @@ import {
 
 const HUMAN_SLOT = 1;
 const DEFAULT_BOT_COUNT = 40;
-const DEFAULT_PROFILE_SECONDS = 6;
+const DEFAULT_PROFILE_SECONDS = 15;
 const DEFAULT_WARMUP_SECONDS = 1;
 const DEFAULT_SNAPSHOT_SAMPLE_EVERY = 10;
+const DEFAULT_INPUT_MODE = 'mixed-15s';
+const PROFILE_INPUT_MODES = new Set(['idle', 'walk', 'mixed-15s', 'mixed', 'stress']);
 
 function clampInteger(value, fallback, min, max) {
   const numericValue = Number(value);
@@ -97,13 +99,282 @@ function timeOperation(callback) {
 
 function createArenaParticipants(botCount) {
   return [
-    { slot: HUMAN_SLOT, profile: 'human', connected: true },
+    { slot: HUMAN_SLOT, profile: 'human', connected: true, immortal: true },
     ...Array.from({ length: botCount }, (_, index) => ({
       slot: index + 2,
       profile: 'bot',
-      connected: true
+      connected: true,
+      immortal: true
     }))
   ];
+}
+
+function normalizeInputMode(value) {
+  const mode = String(value ?? DEFAULT_INPUT_MODE);
+  return PROFILE_INPUT_MODES.has(mode) ? mode : DEFAULT_INPUT_MODE;
+}
+
+function smoothstep(value) {
+  const t = Math.min(1, Math.max(0, value));
+  return t * t * (3 - (2 * t));
+}
+
+function hashUnit(seed) {
+  const value = Math.sin(seed * 127.1) * 43758.5453123;
+  return value - Math.floor(value);
+}
+
+function hashSigned(seed) {
+  return (hashUnit(seed) * 2) - 1;
+}
+
+function smoothNoise(elapsedSeconds, channel, period) {
+  const scaled = elapsedSeconds / period;
+  const bucket = Math.floor(scaled);
+  const alpha = smoothstep(scaled - bucket);
+  const left = hashSigned((bucket * 19.91) + (channel * 37.17));
+  const right = hashSigned(((bucket + 1) * 19.91) + (channel * 37.17));
+  return left + ((right - left) * alpha);
+}
+
+function clampUnitVector2(x, z) {
+  const length = Math.hypot(x, z);
+  if (length <= 1 || length <= 0.000001) {
+    return { x, z };
+  }
+
+  return {
+    x: x / length,
+    z: z / length
+  };
+}
+
+function getPulse(elapsedSeconds, previousElapsedSeconds, interval, offset = 0) {
+  if (elapsedSeconds < offset) {
+    return false;
+  }
+
+  return Math.floor((elapsedSeconds - offset) / interval) !==
+    Math.floor((previousElapsedSeconds - offset) / interval);
+}
+
+function createNavigationVector(simulation, elapsedSeconds, randomX, randomZ) {
+  const player = simulation.getPlayerState(HUMAN_SLOT);
+  const target = player ? simulation.findPreferredTarget(player) : null;
+  if (!player || !target) {
+    return clampUnitVector2(randomX, randomZ);
+  }
+
+  const dx = target.position.x - player.position.x;
+  const dz = target.position.z - player.position.z;
+  const distance = Math.hypot(dx, dz);
+  if (distance <= 0.000001) {
+    return clampUnitVector2(randomX, randomZ);
+  }
+
+  const forwardX = dx / distance;
+  const forwardZ = dz / distance;
+  const sideX = forwardZ;
+  const sideZ = -forwardX;
+  const approach = distance > 13
+    ? 0.95
+    : distance < 6
+      ? -0.75
+      : Math.sin(elapsedSeconds * 0.73) * 0.35;
+  const orbit = (Math.sin(elapsedSeconds * 1.07) > 0 ? 1 : -1) * 0.65;
+
+  return clampUnitVector2(
+    (forwardX * approach) + (sideX * orbit) + (randomX * 0.22),
+    (forwardZ * approach) + (sideZ * orbit) + (randomZ * 0.22)
+  );
+}
+
+export function createHeadlessArenaInput({
+  inputMode = DEFAULT_INPUT_MODE,
+  simulation,
+  tick = 0,
+  delta = MATCH_TICK_DURATION
+}: any = {}) {
+  const mode = normalizeInputMode(inputMode);
+  if (mode === 'idle') {
+    return createIdleInput();
+  }
+
+  const elapsedSeconds = tick * delta;
+  const previousElapsedSeconds = Math.max(0, elapsedSeconds - delta);
+  const baseInput = createIdleInput();
+  const randomX = smoothNoise(elapsedSeconds, 1, 0.85);
+  const randomZ = smoothNoise(elapsedSeconds, 2, 0.95);
+  const jumpPressed = getPulse(elapsedSeconds, previousElapsedSeconds, 1.55, 0.55);
+
+  if (mode === 'walk') {
+    return {
+      ...baseInput,
+      moveZ: -1,
+      jumpPressed
+    };
+  }
+
+  const phase = (elapsedSeconds % 15) / 15;
+  const navigation = createNavigationVector(simulation, elapsedSeconds, randomX, randomZ);
+  const freeMove = clampUnitVector2(
+    (randomX * 0.85) + (Math.sin(elapsedSeconds * 0.47) * 0.25),
+    (randomZ * 0.85) - 0.2
+  );
+  const combatMove = clampUnitVector2(
+    (navigation.x * 0.75) + (Math.sin(elapsedSeconds * 1.91) * 0.3),
+    (navigation.z * 0.75) + (Math.cos(elapsedSeconds * 1.37) * 0.25)
+  );
+  const navigating = phase >= 0.18 && phase < 0.72;
+  const combat = phase >= 0.36 && phase < 0.9;
+  const movement = navigating ? (combat ? combatMove : navigation) : freeMove;
+  const stalkBurst = combat || Math.sin(elapsedSeconds * 1.6) > 0.55;
+  const leftHeld = stalkBurst && Math.sin(elapsedSeconds * 1.31) > -0.72;
+  const rightHeld = stalkBurst && Math.cos(elapsedSeconds * 1.17) > -0.72;
+  const jerkX = smoothNoise(elapsedSeconds, 10, 0.18) * 15;
+  const jerkY = smoothNoise(elapsedSeconds, 11, 0.22) * 11;
+  const strikePulse = getPulse(elapsedSeconds, previousElapsedSeconds, 0.72, 0.34)
+    ? hashSigned(Math.floor(elapsedSeconds / 0.72) + 301) * 18
+    : 0;
+  const reachDelta = getPulse(elapsedSeconds, previousElapsedSeconds, 1.05, 0.2)
+    ? hashSigned(Math.floor(elapsedSeconds / 1.05) + 811) * 2.2
+    : 0;
+
+  return {
+    ...baseInput,
+    moveX: movement.x,
+    moveZ: movement.z,
+    lockOnHeld: navigating || combat,
+    turnX: navigating ? 0 : (smoothNoise(elapsedSeconds, 8, 0.7) * 15),
+    lookX: leftHeld || rightHeld
+      ? (Math.sin(elapsedSeconds * 8.9) * 12) + jerkX + strikePulse
+      : 0,
+    lookY: leftHeld || rightHeld
+      ? (Math.cos(elapsedSeconds * 6.1) * 8) + jerkY
+      : 0,
+    reachDelta,
+    jumpPressed,
+    leftHeld,
+    rightHeld
+  };
+}
+
+function createInputCoverage() {
+  return {
+    totalTicks: 0,
+    movementTicks: 0,
+    lockOnTicks: 0,
+    freeTurnTicks: 0,
+    jumpPresses: 0,
+    stalkHeldTicks: 0,
+    dualStalkTicks: 0,
+    leftOnlyTicks: 0,
+    rightOnlyTicks: 0,
+    reachTicks: 0
+  };
+}
+
+function recordInputCoverage(coverage, input) {
+  coverage.totalTicks += 1;
+  if (Math.hypot(input.moveX, input.moveZ) > 0.001) {
+    coverage.movementTicks += 1;
+  }
+  if (input.lockOnHeld) {
+    coverage.lockOnTicks += 1;
+  }
+  if (Math.abs(input.turnX) > 0.001) {
+    coverage.freeTurnTicks += 1;
+  }
+  if (input.jumpPressed) {
+    coverage.jumpPresses += 1;
+  }
+  if (input.leftHeld || input.rightHeld) {
+    coverage.stalkHeldTicks += 1;
+  }
+  if (input.leftHeld && input.rightHeld) {
+    coverage.dualStalkTicks += 1;
+  } else if (input.leftHeld) {
+    coverage.leftOnlyTicks += 1;
+  } else if (input.rightHeld) {
+    coverage.rightOnlyTicks += 1;
+  }
+  if (Math.abs(input.reachDelta) > 0.001) {
+    coverage.reachTicks += 1;
+  }
+}
+
+function createDiagnostics() {
+  return {
+    validationFailureCount: 0,
+    validationFailures: [] as string[]
+  };
+}
+
+function recordValidationFailure(diagnostics, message) {
+  diagnostics.validationFailureCount += 1;
+  if (diagnostics.validationFailures.length < 20) {
+    diagnostics.validationFailures.push(message);
+  }
+}
+
+function isFiniteNumber(value) {
+  return Number.isFinite(value) && Math.abs(value) < 1000000;
+}
+
+function validateNumber(diagnostics, label, value) {
+  if (!isFiniteNumber(value)) {
+    recordValidationFailure(diagnostics, `${label} is ${value}`);
+  }
+}
+
+function validateVector(diagnostics, label, vector) {
+  if (!vector) {
+    recordValidationFailure(diagnostics, `${label} is missing`);
+    return;
+  }
+
+  validateNumber(diagnostics, `${label}.x`, vector.x);
+  validateNumber(diagnostics, `${label}.y`, vector.y);
+  validateNumber(diagnostics, `${label}.z`, vector.z);
+}
+
+function validateSnapshot(snapshot, diagnostics, { includeTrails = false } = {}) {
+  validateNumber(diagnostics, 'snapshot.tick', snapshot?.tick);
+  for (const player of snapshot?.players ?? []) {
+    const label = `tick ${snapshot.tick} player ${player.slot}`;
+    validateVector(diagnostics, `${label} position`, player.position);
+    validateVector(diagnostics, `${label} supportNormal`, player.supportNormal);
+    validateNumber(diagnostics, `${label} rotationY`, player.rotationY);
+    validateNumber(diagnostics, `${label} health`, player.health);
+    validateNumber(diagnostics, `${label} impactPower`, player.impactPower);
+
+    for (const side of ['left', 'right']) {
+      const stalk = player.stalks?.[side];
+      validateVector(diagnostics, `${label} ${side} targetVector`, stalk?.targetVector);
+      validateVector(diagnostics, `${label} ${side} currentVector`, stalk?.currentVector);
+      validateVector(diagnostics, `${label} ${side} tipPosition`, stalk?.tipPosition);
+      validateVector(diagnostics, `${label} ${side} tipVelocity`, stalk?.tipVelocity);
+      for (const [nodeIndex, node] of (stalk?.nodes ?? []).entries()) {
+        validateVector(diagnostics, `${label} ${side} node ${nodeIndex}`, node);
+      }
+    }
+  }
+
+  for (const [eventIndex, event] of (snapshot?.events ?? []).entries()) {
+    if ('amount' in event) {
+      validateNumber(diagnostics, `tick ${snapshot.tick} event ${eventIndex} amount`, event.amount);
+    }
+    if (event.position) {
+      validateVector(diagnostics, `tick ${snapshot.tick} event ${eventIndex} position`, event.position);
+    }
+  }
+
+  if (includeTrails) {
+    for (const [cellIndex, cell] of (snapshot?.trailCells ?? []).entries()) {
+      validateNumber(diagnostics, `tick ${snapshot.tick} trail ${cellIndex}.x`, cell.x);
+      validateNumber(diagnostics, `tick ${snapshot.tick} trail ${cellIndex}.z`, cell.z);
+    }
+  }
 }
 
 function createPresentationActor(state) {
@@ -180,6 +451,7 @@ function buildProfileOptions(rawOptions: any = {}) {
     600
   );
   const stagePreset = rawOptions.stagePreset ?? DEFAULT_TERRAIN_CONFIG.preset;
+  const inputMode = normalizeInputMode(rawOptions.inputMode ?? rawOptions.input);
 
   return {
     botCount,
@@ -187,6 +459,7 @@ function buildProfileOptions(rawOptions: any = {}) {
     warmupSeconds,
     snapshotSampleEvery,
     stagePreset,
+    inputMode,
     includePresentation: rawOptions.includePresentation !== false
   };
 }
@@ -206,6 +479,7 @@ export function runArenaPerformanceProfile(rawOptions: any = {}) {
     tuning,
     terrainConfig: environment?.terrainConfig,
     arenaRadius: environment?.arenaRadius,
+    worldBounds: environment?.worldBounds,
     worldProps: environment?.worldProps
   });
   const botControllers = createBotControllers(participants, tuning);
@@ -233,11 +507,20 @@ export function runArenaPerformanceProfile(rawOptions: any = {}) {
     networkSnapshotBytes: [] as number[],
     fullSnapshotBytes: [] as number[]
   };
+  const inputCoverage = createInputCoverage();
+  const diagnostics = createDiagnostics();
   let snapshot: any = initialSnapshot;
 
   for (let tick = 0; tick < totalTicks; tick += 1) {
     const inputTiming = timeOperation(() => {
-      simulation.setPlayerInput(HUMAN_SLOT, createIdleInput());
+      const humanInput = createHeadlessArenaInput({
+        inputMode: options.inputMode,
+        simulation,
+        tick,
+        delta: MATCH_TICK_DURATION
+      });
+      recordInputCoverage(inputCoverage, humanInput);
+      simulation.setPlayerInput(HUMAN_SLOT, humanInput);
       for (const [botSlot, botController] of botControllers.entries()) {
         simulation.setPlayerInput(
           botSlot,
@@ -251,6 +534,7 @@ export function runArenaPerformanceProfile(rawOptions: any = {}) {
       ...stepTiming.value,
       worldProps: staticWorldProps
     };
+    validateSnapshot(snapshot, diagnostics, { includeTrails: tick % 60 === 0 });
 
     const viewTiming = options.includePresentation
       ? timeOperation(() => syncPresentationActors(actors, snapshot))
@@ -285,6 +569,7 @@ export function runArenaPerformanceProfile(rawOptions: any = {}) {
     scenario: {
       mode: 'arena',
       stagePreset: options.stagePreset,
+      inputMode: options.inputMode,
       botCount: options.botCount,
       playerCount: participants.length,
       seconds: options.seconds,
@@ -304,6 +589,8 @@ export function runArenaPerformanceProfile(rawOptions: any = {}) {
       networkJson: summarizeMetric(metrics.networkJsonMs),
       fullSnapshotJson: summarizeMetric(metrics.fullSnapshotJsonMs)
     },
+    inputCoverage,
+    diagnostics,
     byteSizes: {
       networkSnapshot: summarizeByteMetric(byteSamples.networkSnapshotBytes),
       fullSnapshot: summarizeByteMetric(byteSamples.fullSnapshotBytes)

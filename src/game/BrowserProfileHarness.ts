@@ -311,6 +311,13 @@ export function installBrowserProfileHarness(game) {
         state: getProfileState(game)
       };
     },
+    startAssetStudio(rawOptions: any = {}) {
+      const assetStudio = game.startAssetStudio(rawOptions);
+      return {
+        ...assetStudio,
+        state: getProfileState(game)
+      };
+    },
     installFrameProfiler,
     uninstallFrameProfiler,
     installInputDriver,

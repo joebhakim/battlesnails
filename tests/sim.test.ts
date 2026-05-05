@@ -92,6 +92,49 @@ test('wet trail boosts movement speed by roughly 500 percent and persists in sna
   assert.equal(typeof snapshot.trailCellSize, 'number');
 });
 
+test('powerup props mutate snail stats and leave the world snapshot', () => {
+  const simulation = new MatchSimulation({
+    players: [
+      { slot: 1, profile: 'human', connected: true, position: { x: 0, z: 6 }, rotationY: Math.PI },
+      { slot: 2, profile: 'human', connected: true, position: { x: 0, z: -60 }, rotationY: 0 }
+    ],
+    worldProps: [
+      {
+        id: 'test-dew',
+        kind: 'dew_bead',
+        displayName: 'Test Dew',
+        position: { x: 0, z: 6 },
+        bodyRadius: 1,
+        blocking: false,
+        climbable: false,
+        collisionShape: { type: 'sphere', radius: 1 },
+        powerup: { type: 'dew', amount: 5, label: 'Test Dew' }
+      },
+      {
+        id: 'test-grit',
+        kind: 'sharp_grit',
+        displayName: 'Test Grit',
+        position: { x: 20, z: 6 },
+        bodyRadius: 1,
+        blocking: false,
+        climbable: false,
+        collisionShape: { type: 'sphere', radius: 1 },
+        powerup: { type: 'grit', amount: 3, label: 'Test Grit' }
+      }
+    ]
+  });
+
+  simulation.step(MATCH_TICK_DURATION);
+
+  const snapshot = simulation.getSnapshot();
+  const player = snapshot.players.find((candidate) => candidate.slot === 1);
+  assert.equal(player.snailStats.dew, 5);
+  assert(player.snailStats.speedMultiplier > 1);
+  assert.equal(snapshot.worldProps.some((prop) => prop.id === 'test-dew'), false);
+  assert.equal(snapshot.worldProps.some((prop) => prop.id === 'test-grit'), true);
+  assert(snapshot.events.some((event) => event.type === 'powerup' && event.powerupType === 'dew'));
+});
+
 test('jump raises the player above ground in the shared simulation', () => {
   const simulation = new MatchSimulation();
   settleSimulation(simulation);
@@ -186,6 +229,120 @@ test('network snapshots omit authoritative stalk payloads', () => {
   assert.equal(Array.isArray(fullSnapshot.players[0].stalks.left.nodes), true);
   assert.equal('stalks' in networkSnapshot.players[0], false);
   assert(networkBytes < fullBytes * 0.45);
+});
+
+test('bird creatures are snapshotted without becoming lock-on targets', () => {
+  const simulation = new MatchSimulation({
+    players: [
+      { slot: 1, profile: 'human', connected: true, position: { x: 0, z: 0 }, rotationY: 0 }
+    ],
+    creatures: [
+      { id: 'bird-test', kind: 'bird', home: { x: 0, z: 0 }, cooldown: 30 }
+    ]
+  });
+  const snapshot = simulation.getSnapshot();
+  const networkSnapshot = simulation.getNetworkSnapshot();
+
+  assert.equal(snapshot.players.length, 1);
+  assert.equal(snapshot.creatures.length, 1);
+  assert.equal(snapshot.creatures[0].kind, 'bird');
+  assert.equal(networkSnapshot.creatures[0].id, 'bird-test');
+  assert.equal(simulation.findPreferredTarget(simulation.getPlayerState(1)), null);
+});
+
+test('predator bird swoop salts an exposed snail', () => {
+  const simulation = new MatchSimulation({
+    players: [
+      { slot: 1, profile: 'human', connected: true, position: { x: 0, z: 0 }, rotationY: 0 }
+    ],
+    creatures: [
+      {
+        id: 'bird-test',
+        kind: 'bird',
+        home: { x: 0, z: 0 },
+        shadowPosition: { x: 0, z: 0 },
+        phase: 'swoop',
+        phaseTimer: 1.09,
+        targetSlot: 1,
+        cooldown: 0,
+        altitude: 20
+      }
+    ]
+  });
+
+  simulation.step(MATCH_TICK_DURATION);
+  const snapshot = simulation.getSnapshot();
+
+  assert.equal(simulation.getPlayerState(1).health, 0);
+  assert.equal(snapshot.events.some((event) => event.type === 'bird_attack' && event.targetSlot === 1), true);
+});
+
+test('predator bird swoop misses when the snail is outside the impact shadow', () => {
+  const simulation = new MatchSimulation({
+    players: [
+      { slot: 1, profile: 'human', connected: true, position: { x: 0, z: 0 }, rotationY: 0 }
+    ],
+    creatures: [
+      {
+        id: 'bird-test',
+        kind: 'bird',
+        home: { x: 0, z: 0 },
+        shadowPosition: { x: 8, z: 0 },
+        phase: 'swoop',
+        phaseTimer: 1.09,
+        targetSlot: 1,
+        cooldown: 0,
+        altitude: 20
+      }
+    ]
+  });
+  const healthBefore = simulation.getPlayerState(1).health;
+
+  simulation.step(MATCH_TICK_DURATION);
+  const snapshot = simulation.getSnapshot();
+
+  assert.equal(simulation.getPlayerState(1).health, healthBefore);
+  assert.equal(snapshot.events.some((event) => event.type === 'bird_miss'), true);
+});
+
+test('predator bird swoop misses when the snail reaches cover', () => {
+  const simulation = new MatchSimulation({
+    players: [
+      { slot: 1, profile: 'human', connected: true, position: { x: 0, z: 0 }, rotationY: 0 }
+    ],
+    worldProps: [
+      {
+        id: 'cover-shrub',
+        kind: 'shrub',
+        position: { x: 0, z: 0 },
+        bodyRadius: 4,
+        blocking: false,
+        climbable: false,
+        collisionShape: { type: 'cylinder', radius: 4, halfHeight: 4 },
+        visual: { radius: 18, height: 12 }
+      }
+    ],
+    creatures: [
+      {
+        id: 'bird-test',
+        kind: 'bird',
+        home: { x: 0, z: 0 },
+        shadowPosition: { x: 0, z: 0 },
+        phase: 'swoop',
+        phaseTimer: 1.09,
+        targetSlot: 1,
+        cooldown: 0,
+        altitude: 20
+      }
+    ]
+  });
+  const healthBefore = simulation.getPlayerState(1).health;
+
+  simulation.step(MATCH_TICK_DURATION);
+  const snapshot = simulation.getSnapshot();
+
+  assert.equal(simulation.getPlayerState(1).health, healthBefore);
+  assert.equal(snapshot.events.some((event) => event.type === 'bird_miss'), true);
 });
 
 test('idle dual ropes sag under gravity in the shared simulation', () => {
@@ -806,6 +963,9 @@ function resolveDirectStalkHit(segmentRadius = null) {
 
   defender.position.set(0, 0, 0);
   defender.health = 600;
+  defender.grounded = true;
+  defender.supportKind = 'terrain';
+  defender.verticalVelocity = 0;
   stalk.held = true;
   if (segmentRadius !== null) {
     stalk.segmentRadius = segmentRadius;
@@ -853,7 +1013,54 @@ test('damage snapshots include floating indicator events at the impact site', ()
   assert.equal(event.position.z, 0);
 });
 
-test('tangent contact against a sphere does not deal damage', () => {
+test('bash damage knocks the target away from the impact vector', () => {
+  const { simulation, defender } = resolveDirectStalkHit();
+  const event = simulation.getSnapshot().events[0];
+
+  assert(event.knockback.x < -2.5);
+  assert(Math.abs(event.knockback.y) < 0.0001);
+  assert(Math.abs(event.knockback.z) < 0.0001);
+  assert(defender.position.x < -2.5);
+  assert.equal(defender.grounded, true);
+  assert.equal(defender.supportKind, 'terrain');
+});
+
+test('grounded vertical impact flips knockback upward', () => {
+  const simulation = new MatchSimulation();
+  const attacker = simulation.getPlayerState(1);
+  const defender = simulation.getPlayerState(2);
+  const stalk = attacker.stalks.left;
+
+  defender.position.set(0, 0, 0);
+  defender.health = 600;
+  defender.grounded = true;
+  defender.supportKind = 'terrain';
+  stalk.held = true;
+  stalk.nodes = [
+    new THREE.Vector3(0, 4, 0),
+    new THREE.Vector3(0, 2.4, 0),
+    new THREE.Vector3(0, 1.6, 0)
+  ];
+  stalk.previousNodes = [
+    new THREE.Vector3(0, 4, 0),
+    new THREE.Vector3(0, 3.4, 0),
+    new THREE.Vector3(0, 2.6, 0)
+  ];
+  stalk.incidentNodes = stalk.nodes.map((node) => node.clone());
+  stalk.incidentPreviousNodes = stalk.previousNodes.map((node) => node.clone());
+
+  simulation.resolveImpact(attacker, defender, MATCH_TICK_DURATION);
+
+  const event = simulation.getSnapshot().events[0];
+
+  assert(event.knockback.y > 1);
+  assert(defender.position.y > 1);
+  assert.equal(defender.grounded, false);
+  assert.equal(defender.supportKind, 'air');
+  assert(defender.verticalVelocity > 0);
+});
+
+test('tangent contact against a sphere deals scrape damage without bash', () => {
   const simulation = new MatchSimulation();
   const attacker = simulation.getPlayerState(1);
   const defender = simulation.getPlayerState(2);
@@ -877,8 +1084,17 @@ test('tangent contact against a sphere does not deal damage', () => {
 
   simulation.resolveImpact(attacker, defender, MATCH_TICK_DURATION);
 
-  assert.equal(simulation.getSnapshot().events.length, 0);
-  assert.equal(defender.health, healthBefore);
+  const scrapeSnapshot = simulation.getSnapshot();
+  const scrape = scrapeSnapshot.events[0];
+
+  assert.equal(scrapeSnapshot.events.length, 1);
+  assert(defender.health < healthBefore);
+  assert.equal(scrape.measurement, 'scrape');
+  assert.equal(scrape.bashDamage, 0);
+  assert(scrape.scrapeDamage > 0);
+  assert(scrape.scrapeImpulse > 0);
+  assert(Math.abs(scrape.impactSpeed) < 0.0001);
+  assert(scrape.tangentSpeed > 50);
 
   simulation.events = [];
   stalk.nodes = [
@@ -895,7 +1111,10 @@ test('tangent contact against a sphere does not deal damage', () => {
   stalk.incidentPreviousNodes = stalk.previousNodes.map((node) => node.clone());
   simulation.resolveImpact(attacker, defender, MATCH_TICK_DURATION);
 
-  assert.equal(simulation.getSnapshot().events.length, 1);
+  const bashSnapshot = simulation.getSnapshot();
+
+  assert.equal(bashSnapshot.events.length, 1);
+  assert.equal(bashSnapshot.events[0].measurement, 'bash');
 });
 
 test('shaft contact does not produce damage while eye is clear', () => {
@@ -925,7 +1144,7 @@ test('shaft contact does not produce damage while eye is clear', () => {
   assert.equal(defender.health, 600);
 });
 
-test('right eye sweep bashes once against a blocking cube face and ignores tangent sliding', () => {
+test('right eye sweep bashes once against a blocking cube face and reports scrape sliding', () => {
   const cubeHalfExtents = Object.freeze({ x: 0.75, y: 0.75, z: 0.75 });
   const simulation = new MatchSimulation({
     mode: 'test',
@@ -995,14 +1214,15 @@ test('right eye sweep bashes once against a blocking cube face and ignores tange
   }
 
   const bashEvents = events.filter((event) => event.bashDamage > 0);
+  const scrapeEvents = events.filter((event) => event.scrapeDamage > 0);
   const bash = bashEvents[0];
   const faceX = cube.position.x + cubeHalfExtents.x;
 
   assert.equal(events.some((event) => event.side !== 'right'), false);
-  assert.equal(events.length, 1);
+  assert(events.length >= 1);
   assert.equal(bashEvents.length, 1);
+  assert(scrapeEvents.length >= 1);
   assert(bash.bashDamage > 0.5);
-  assert.equal('scrapeDamage' in bash, false);
   assert(Math.abs(bash.position.x - faceX) < 0.0001);
   assert(bash.position.y >= cube.position.y - cubeHalfExtents.y);
   assert(bash.position.y <= cube.position.y + cubeHalfExtents.y);
