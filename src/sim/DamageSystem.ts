@@ -24,7 +24,7 @@ const BASH_KNOCKBACK_DISTANCE_SCALE = 0.035;
 const SCRAPE_KNOCKBACK_TRANSFER = 0.08;
 const MIN_BASH_KNOCKBACK_DISTANCE = 1.1;
 const MAX_KNOCKBACK_DISTANCE = 8.5;
-const GROUNDED_KNOCKBACK_VERTICAL_FLIP_SCALE = 0.65;
+const GROUNDED_UPWARD_KNOCKBACK_SCALE = 0.65;
 const AIRBORNE_KNOCKBACK_VERTICAL_SCALE = 0.45;
 const KNOCKBACK_VERTICAL_VELOCITY_SCALE = 0.18;
 const MAX_KNOCKBACK_VERTICAL_VELOCITY = 18;
@@ -92,6 +92,10 @@ function computeDamageKnockbackVector(
     impulseVector.addScaledVector(tangentVelocity.clone().normalize(), scrapeImpulse * SCRAPE_KNOCKBACK_TRANSFER);
   }
 
+  if (target.grounded && impulseVector.y < 0) {
+    impulseVector.y = 0;
+  }
+
   if (impulseVector.lengthSq() <= DAMAGE_EPSILON) {
     return new THREE.Vector3();
   }
@@ -104,8 +108,8 @@ function computeDamageKnockbackVector(
   );
   const knockback = impulseVector.normalize().multiplyScalar(distance);
 
-  if (target.grounded) {
-    knockback.y = Math.abs(knockback.y) * GROUNDED_KNOCKBACK_VERTICAL_FLIP_SCALE;
+  if (target.grounded && knockback.y > 0) {
+    knockback.y *= GROUNDED_UPWARD_KNOCKBACK_SCALE;
   } else {
     knockback.y *= AIRBORNE_KNOCKBACK_VERTICAL_SCALE;
   }

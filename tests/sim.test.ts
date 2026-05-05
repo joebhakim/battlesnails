@@ -1025,7 +1025,7 @@ test('bash damage knocks the target away from the impact vector', () => {
   assert.equal(defender.supportKind, 'terrain');
 });
 
-test('grounded vertical impact flips knockback upward', () => {
+test('grounded downward impact does not flip knockback upward', () => {
   const simulation = new MatchSimulation();
   const attacker = simulation.getPlayerState(1);
   const defender = simulation.getPlayerState(2);
@@ -1053,11 +1053,11 @@ test('grounded vertical impact flips knockback upward', () => {
 
   const event = simulation.getSnapshot().events[0];
 
-  assert(event.knockback.y > 1);
-  assert(defender.position.y > 1);
-  assert.equal(defender.grounded, false);
-  assert.equal(defender.supportKind, 'air');
-  assert(defender.verticalVelocity > 0);
+  assert(!event.knockback || event.knockback.y <= 0);
+  assert(Math.abs(defender.position.y) < 0.0001);
+  assert.equal(defender.grounded, true);
+  assert.equal(defender.supportKind, 'terrain');
+  assert.equal(defender.verticalVelocity, 0);
 });
 
 test('tangent contact against a sphere deals scrape damage without bash', () => {
