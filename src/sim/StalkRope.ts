@@ -1120,6 +1120,116 @@ export function simulateStalkRope({
   }
 }
 
+export function simulateStalkRopeXpbdLite({
+  nodes,
+  previousNodes,
+  incidentNodes = null,
+  incidentPreviousNodes = null,
+  rootWorld,
+  goalWorld,
+  delta,
+  segmentLength = STALK_SEGMENT_LENGTH,
+  gravity = STALK_GRAVITY,
+  damping = STALK_DAMPING,
+  goalPull = STALK_ACTIVE_PULL,
+  constraintIterations = 2,
+  compliance = 0.00008,
+  turgidity = 0,
+  collision = null
+}) {
+  if (nodes.length === 0 || previousNodes.length === 0) {
+    return;
+  }
+
+  const gravityStep = new THREE.Vector3(0, -gravity * delta * delta, 0);
+  const previousRoot = nodes[0].clone();
+  const collisionScratch = collision ? createCollisionScratch() : null;
+  const distanceLambdas = Array.from({ length: Math.max(0, nodes.length - 1) }, () => 0);
+  const safeDelta = Math.max(delta, 1 / 240);
+  const alpha = compliance / (safeDelta * safeDelta);
+  let incidentCaptured = false;
+  const captureIncidentNodes = () => {
+    if (incidentCaptured) {
+      return;
+    }
+
+    if (incidentNodes) {
+      copyNodesInto(incidentNodes, nodes);
+    }
+    if (incidentPreviousNodes) {
+      copyNodesInto(incidentPreviousNodes, previousNodes);
+    }
+    incidentCaptured = true;
+  };
+
+  previousNodes[0].copy(previousRoot);
+  nodes[0].copy(rootWorld);
+
+  for (let index = 1; index < nodes.length; index += 1) {
+    const current = nodes[index];
+    const previous = previousNodes[index];
+    const velocity = current.clone().sub(previous).multiplyScalar(damping);
+
+    previous.copy(current);
+    current.add(velocity);
+    current.add(gravityStep);
+  }
+
+  const pullAlpha = Math.min(1, goalPull * delta);
+  nodes[nodes.length - 1].lerp(goalWorld, pullAlpha);
+
+  for (let iteration = 0; iteration < constraintIterations; iteration += 1) {
+    nodes[0].copy(rootWorld);
+
+    for (let index = 0; index < nodes.length - 1; index += 1) {
+      const start = nodes[index];
+      const end = nodes[index + 1];
+      const deltaVector = end.clone().sub(start);
+      let distance = deltaVector.length();
+
+      if (distance === 0) {
+        deltaVector.copy(FORWARD);
+        distance = 1;
+      } else {
+        deltaVector.divideScalar(distance);
+      }
+
+      const startWeight = index === 0 ? 0 : 1;
+      const endWeight = 1;
+      const denominator = startWeight + endWeight + alpha;
+      if (denominator <= COLLISION_EPSILON) {
+        continue;
+      }
+
+      const constraint = distance - segmentLength;
+      const previousLambda = distanceLambdas[index] ?? 0;
+      const deltaLambda = (-constraint - alpha * previousLambda) / denominator;
+      distanceLambdas[index] = previousLambda + deltaLambda;
+
+      if (startWeight > 0) {
+        start.addScaledVector(deltaVector, -startWeight * deltaLambda);
+      }
+      end.addScaledVector(deltaVector, endWeight * deltaLambda);
+    }
+  }
+
+  nodes[0].copy(rootWorld);
+  applyTurgidityToNodes(nodes, previousNodes, rootWorld, goalWorld, turgidity);
+
+  if (collision) {
+    captureIncidentNodes();
+    applyStalkCollisionConstraints({
+      nodes,
+      previousNodes,
+      rootWorld,
+      ...collision,
+      scratch: collisionScratch
+    });
+  } else {
+    captureIncidentNodes();
+  }
+}
+
 export function buildStalkSegmentSamples(
   nodes,
   previousNodes,

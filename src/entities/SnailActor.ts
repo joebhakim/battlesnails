@@ -320,6 +320,7 @@ export class SnailActor {
       rootOffset: STALK_ROOT_OFFSETS[side].clone(),
       nodes: [] as THREE.Vector3[],
       previousNodes: [] as THREE.Vector3[],
+      renderNodes: [] as THREE.Vector3[],
       tipPosition: new THREE.Vector3(),
       previousTipPosition: new THREE.Vector3(),
       tipVelocity: new THREE.Vector3(),
@@ -473,12 +474,13 @@ export class SnailActor {
   renderStalk(stalk) {
     this.mesh.updateMatrixWorld(true);
     const inverseWorld = this.mesh.matrixWorld.clone().invert();
+    const renderNodes = this.getRenderStalkNodes(stalk);
 
     if (stalk.segmentInstances) {
       let visibleCount = 0;
       for (let index = 0; index < this.stalkSegmentCount; index += 1) {
-        const startLocal = stalk.nodes[index]?.clone().applyMatrix4(inverseWorld);
-        const endLocal = stalk.nodes[index + 1]?.clone().applyMatrix4(inverseWorld);
+        const startLocal = renderNodes[index]?.clone().applyMatrix4(inverseWorld);
+        const endLocal = renderNodes[index + 1]?.clone().applyMatrix4(inverseWorld);
 
         if (!startLocal || !endLocal) {
           continue;
@@ -503,8 +505,8 @@ export class SnailActor {
     } else {
       for (let index = 0; index < stalk.segments.length; index += 1) {
         const segment = stalk.segments[index];
-        const startLocal = stalk.nodes[index]?.clone().applyMatrix4(inverseWorld);
-        const endLocal = stalk.nodes[index + 1]?.clone().applyMatrix4(inverseWorld);
+        const startLocal = renderNodes[index]?.clone().applyMatrix4(inverseWorld);
+        const endLocal = renderNodes[index + 1]?.clone().applyMatrix4(inverseWorld);
 
         if (!startLocal || !endLocal) {
           segment.visible = false;
@@ -525,8 +527,8 @@ export class SnailActor {
       }
     }
 
-    const tipNode = stalk.nodes[stalk.nodes.length - 1];
-    const previousNode = stalk.nodes[stalk.nodes.length - 2] ?? tipNode;
+    const tipNode = renderNodes[renderNodes.length - 1];
+    const previousNode = renderNodes[renderNodes.length - 2] ?? tipNode;
     if (!tipNode || !previousNode) {
       return;
     }
@@ -542,6 +544,41 @@ export class SnailActor {
 
     stalk.eye.position.copy(tipLocal);
     stalk.eye.quaternion.setFromUnitVectors(LOCAL_FORWARD, eyeForward);
+  }
+
+  getRenderStalkNodes(stalk) {
+    const sourceNodes = stalk.nodes ?? [];
+    const targetCount = this.stalkSegmentCount + 1;
+    if (sourceNodes.length === targetCount || sourceNodes.length < 2) {
+      return sourceNodes;
+    }
+
+    const renderNodes = stalk.renderNodes ?? [];
+    renderNodes.length = targetCount;
+    const sourceLast = sourceNodes.length - 1;
+
+    for (let index = 0; index < targetCount; index += 1) {
+      const scaled = (index / Math.max(1, targetCount - 1)) * sourceLast;
+      const segment = Math.min(sourceLast - 1, Math.max(0, Math.floor(scaled)));
+      const t = scaled - segment;
+      const p0 = sourceNodes[Math.max(0, segment - 1)];
+      const p1 = sourceNodes[segment];
+      const p2 = sourceNodes[Math.min(sourceLast, segment + 1)];
+      const p3 = sourceNodes[Math.min(sourceLast, segment + 2)];
+      const t2 = t * t;
+      const t3 = t2 * t;
+      const node = renderNodes[index] ?? new THREE.Vector3();
+
+      node.set(
+        0.5 * ((2 * p1.x) + (-p0.x + p2.x) * t + (2 * p0.x - 5 * p1.x + 4 * p2.x - p3.x) * t2 + (-p0.x + 3 * p1.x - 3 * p2.x + p3.x) * t3),
+        0.5 * ((2 * p1.y) + (-p0.y + p2.y) * t + (2 * p0.y - 5 * p1.y + 4 * p2.y - p3.y) * t2 + (-p0.y + 3 * p1.y - 3 * p2.y + p3.y) * t3),
+        0.5 * ((2 * p1.z) + (-p0.z + p2.z) * t + (2 * p0.z - 5 * p1.z + 4 * p2.z - p3.z) * t2 + (-p0.z + 3 * p1.z - 3 * p2.z + p3.z) * t3)
+      );
+      renderNodes[index] = node;
+    }
+
+    stalk.renderNodes = renderNodes;
+    return renderNodes;
   }
 
   updateStalkVisualState() {
