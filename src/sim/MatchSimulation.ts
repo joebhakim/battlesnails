@@ -110,7 +110,35 @@ import {
 } from '../world/Terrain.js';
 import { clampPointToWorldBounds } from '../world/WorldBounds.js';
 
-export const MATCH_TICK_RATE = 60;
+export type StalkAuthorityMode = 'rope' | 'analytic' | 'human_rope';
+
+function isTruthyEnvValue(value) {
+  return value === '1' || value === 'true' || value === 'on' || value === 'yes';
+}
+
+function getEnvValue(viteKey: string, processKey: string) {
+  const viteValue = (import.meta as any).env?.[viteKey];
+  if (viteValue !== undefined) {
+    return String(viteValue).toLowerCase();
+  }
+
+  return typeof process !== 'undefined' && process.env?.[processKey] !== undefined
+    ? String(process.env[processKey]).toLowerCase()
+    : undefined;
+}
+
+function resolveDefaultTickRate() {
+  const explicitValue = getEnvValue('VITE_BATTLESNAILS_TICK_RATE', 'BATTLESNAILS_TICK_RATE');
+  const explicitRate = Number(explicitValue);
+  if (Number.isFinite(explicitRate) && explicitRate >= 30 && explicitRate <= 240) {
+    return explicitRate;
+  }
+
+  const target120Value = getEnvValue('VITE_BATTLESNAILS_120HZ', 'BATTLESNAILS_120HZ');
+  return target120Value && isTruthyEnvValue(target120Value) ? 120 : 60;
+}
+
+export const MATCH_TICK_RATE = resolveDefaultTickRate();
 export const MATCH_TICK_DURATION = 1 / MATCH_TICK_RATE;
 export const DEFAULT_MAX_HEALTH = DEFAULT_TUNING_CONFIG.playerMaxHealth;
 export const DEFAULT_BOT_MAX_HEALTH = DEFAULT_TUNING_CONFIG.botMaxHealth;
@@ -128,31 +156,43 @@ const TOP_DOWN_EPSILON = 0.000001;
 const FREE_TURN_RADIANS_PER_PIXEL = 0.004;
 const PLAYER_SPATIAL_CELL_SIZE = 16;
 const STALK_OBSTACLE_NODE_BOUNDS_MARGIN = 1.05;
-const STALK_FULL_FIDELITY_HUMAN_DISTANCE = 12;
+const STALK_FULL_FIDELITY_HUMAN_DISTANCE = 8;
+const STALK_FULL_FIDELITY_BOTS_PER_HUMAN = 2;
 const WORLD_UP = new THREE.Vector3(0, 1, 0);
 const STALK_FORWARD = new THREE.Vector3(0, 0, 1);
+
+export function normalizeStalkAuthorityMode(value: any = null): StalkAuthorityMode {
+  const normalized = String(value ?? '').toLowerCase().replace(/-/g, '_');
+  if (normalized === 'analytic' || normalized === 'fast' || normalized === '120' || normalized === '120hz') {
+    return 'analytic';
+  }
+
+  if (
+    normalized === 'human_rope' ||
+    normalized === 'humanrope' ||
+    normalized === 'hybrid' ||
+    normalized === 'hybrid_120' ||
+    normalized === 'bots_analytic'
+  ) {
+    return 'human_rope';
+  }
+
+  return 'rope';
+}
+
+function resolveDefaultStalkAuthorityMode(): StalkAuthorityMode {
+  const explicitMode = getEnvValue('VITE_BATTLESNAILS_STALK_AUTHORITY', 'BATTLESNAILS_STALK_AUTHORITY');
+  if (explicitMode) {
+    return normalizeStalkAuthorityMode(explicitMode);
+  }
+
+  const legacyAnalyticValue = getEnvValue('VITE_ANALYTIC_STALK_AUTHORITY', 'ANALYTIC_STALK_AUTHORITY');
+  return legacyAnalyticValue && !isFalseEnvValue(legacyAnalyticValue) ? 'analytic' : 'rope';
+}
 
 function isFalseEnvValue(value) {
   return value === '0' || value === 'false' || value === 'off' || value === 'no';
 }
-
-function isAnalyticStalkAuthorityEnabled() {
-  const viteValue = (import.meta as any).env?.VITE_ANALYTIC_STALK_AUTHORITY;
-  if (viteValue !== undefined) {
-    return !isFalseEnvValue(String(viteValue).toLowerCase());
-  }
-
-  const processValue = typeof process !== 'undefined'
-    ? process.env?.ANALYTIC_STALK_AUTHORITY
-    : undefined;
-  if (processValue !== undefined) {
-    return !isFalseEnvValue(String(processValue).toLowerCase());
-  }
-
-  return false;
-}
-
-const ANALYTIC_STALK_AUTHORITY = isAnalyticStalkAuthorityEnabled();
 
 function angleDifference(current, target) {
   return Math.atan2(Math.sin(target - current), Math.cos(target - current));
@@ -205,6 +245,29 @@ function createStalkFidelityMap(players) {
     player.profileName !== 'bot'
   ));
   const fullDistanceSquared = STALK_FULL_FIDELITY_HUMAN_DISTANCE * STALK_FULL_FIDELITY_HUMAN_DISTANCE;
+  const fullBotSlots = new Set();
+
+  for (const human of livingHumans) {
+    const nearestBots = players
+      .filter((player) => (
+        player.connected &&
+        player.health > 0 &&
+        !player.fixtureKind &&
+        player.profileName === 'bot'
+      ))
+      .map((bot) => ({
+        bot,
+        distanceSquared: bot.position.distanceToSquared(human.position)
+      }))
+      .filter((entry) => entry.distanceSquared <= fullDistanceSquared)
+      .sort((left, right) => left.distanceSquared - right.distanceSquared)
+      .slice(0, STALK_FULL_FIDELITY_BOTS_PER_HUMAN);
+
+    for (const entry of nearestBots) {
+      fullBotSlots.add(entry.bot.slot);
+    }
+  }
+
   const fidelity = new Map();
 
   for (const player of players) {
@@ -219,18 +282,7 @@ function createStalkFidelityMap(players) {
       continue;
     }
 
-    let nearestHumanDistanceSquared = Infinity;
-    for (const human of livingHumans) {
-      nearestHumanDistanceSquared = Math.min(
-        nearestHumanDistanceSquared,
-        player.position.distanceToSquared(human.position)
-      );
-    }
-
-    fidelity.set(
-      player.slot,
-      nearestHumanDistanceSquared <= fullDistanceSquared ? 'full' : 'terrain'
-    );
+    fidelity.set(player.slot, fullBotSlots.has(player.slot) ? 'full' : 'terrain');
   }
 
   return fidelity;
@@ -372,6 +424,7 @@ export class MatchSimulation {
   declare phase: any;
   declare players: Map<number, any>;
   declare profileTemplates: SimulationProfiles;
+  declare stalkAuthorityMode: StalkAuthorityMode;
   declare terrainConfig: TerrainConfig;
   declare tick: any;
   declare tickDuration: any;
@@ -392,6 +445,9 @@ export class MatchSimulation {
 
     this.tickRate = options.tickRate ?? MATCH_TICK_RATE;
     this.tickDuration = 1 / this.tickRate;
+    this.stalkAuthorityMode = normalizeStalkAuthorityMode(
+      options.stalkAuthorityMode ?? options.stalkAuthority ?? resolveDefaultStalkAuthorityMode()
+    );
     this.tuningConfig = normalizeTuningConfig(options.tuning ?? DEFAULT_TUNING_CONFIG);
     this.terrainConfig = options.terrainConfig
       ? normalizeTerrainConfig(options.terrainConfig)
@@ -445,6 +501,9 @@ export class MatchSimulation {
       connected: player.connected,
       fixtureKind: player.fixtureKind,
       displayName: player.displayName,
+      speakerKind: player.speakerKind,
+      portraitKey: player.portraitKey,
+      voiceSource: player.voiceSource,
       immortal: player.immortal,
       maxHealth: player.maxHealth,
       position: player.fixtureKind ? cloneVector(player.position) : player.startPoint ? { ...player.startPoint } : null,
@@ -537,7 +596,7 @@ export class MatchSimulation {
       players: Array.from(this.players.values())
         .sort((left, right) => left.slot - right.slot)
         .map((player) => serializeSnapshotPlayer(player, {
-          includeStalkNodes: !ANALYTIC_STALK_AUTHORITY
+          includeStalkNodes: !this.isPlayerAnalyticStalkAuthority(player)
         }))
     };
 
@@ -546,6 +605,22 @@ export class MatchSimulation {
     }
 
     return snapshot;
+  }
+
+  isPlayerAnalyticStalkAuthority(player) {
+    if (!player || player.fixtureKind || !player.stalks) {
+      return false;
+    }
+
+    if (this.stalkAuthorityMode === 'analytic') {
+      return true;
+    }
+
+    if (this.stalkAuthorityMode === 'human_rope') {
+      return player.profileName === 'bot';
+    }
+
+    return false;
   }
 
   getNetworkSnapshot({ includeStatic = true }: any = {}) {
@@ -683,7 +758,8 @@ export class MatchSimulation {
       }
 
       const fidelity = stalkFidelity.get(player.slot) ?? 'full';
-      const needsFullStalkObstacles = fidelity === 'full';
+      const analyticStalkAuthority = this.isPlayerAnalyticStalkAuthority(player);
+      const needsFullStalkObstacles = !analyticStalkAuthority && fidelity === 'full';
       const nearbyBodyPlayers = needsFullStalkObstacles
         ? queryPlayerSpatialIndex(
           playerSpatialIndex,
@@ -700,7 +776,7 @@ export class MatchSimulation {
       this.updateStalkRopes(player, delta, [
         ...playerBodyObstacles,
         ...stalkPropObstacles
-      ], { fidelity });
+      ], { fidelity, analyticStalkAuthority });
       player.bodyVelocity.copy(player.position).sub(player.previousPosition).divideScalar(Math.max(delta, 0.0001));
       updateCompositeTipState(player, delta);
       player.onTrail = player.health > 0 && this.isPlayerOnWetTrail(player);
@@ -850,7 +926,7 @@ export class MatchSimulation {
   }
 
   updateStalkRopes(player, delta, bodyObstacles = [], options: any = {}) {
-    if (ANALYTIC_STALK_AUTHORITY) {
+    if (options.analyticStalkAuthority ?? this.isPlayerAnalyticStalkAuthority(player)) {
       for (const [, stalk] of getStalkEntries(player)) {
         advanceAppliedStalkTarget(stalk, player.profile, delta);
 
@@ -1324,7 +1400,7 @@ export class MatchSimulation {
       delta,
       tick: this.tick,
       contactMemory: this.contactMemory,
-      analyticStalkAuthority: ANALYTIC_STALK_AUTHORITY,
+      analyticStalkAuthority: this.isPlayerAnalyticStalkAuthority(attacker),
       terrainConfig: this.terrainConfig,
       clampPlanarPosition: (player) => this.clampPlanarPosition(player),
       resolveWorldPropCollision: (player) => this.resolveWorldPropCollision(player)

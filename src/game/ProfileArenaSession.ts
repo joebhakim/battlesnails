@@ -1,9 +1,14 @@
 import { BotController } from '../sim/BotController.js';
 import { createArenaEnvironment } from '../sim/ArenaEnvironment.js';
 import { normalizePlayerInput } from '../protocol/InputProtocol.js';
-import { MATCH_TICK_DURATION, MatchSimulation } from '../sim/MatchSimulation.js';
+import {
+  MATCH_TICK_DURATION,
+  MatchSimulation,
+  normalizeStalkAuthorityMode
+} from '../sim/MatchSimulation.js';
 import { DEFAULT_TUNING_CONFIG, createBotControllerConfig, normalizeTuningConfig } from '../sim/Tuning.js';
 import { ARENA_TERRAIN_PRESET_OPTIONS, DEFAULT_TERRAIN_CONFIG } from '../world/Terrain.js';
+import { accumulateFixedStepTime, getFixedStepCount } from './FixedStepClock.js';
 
 const LOCAL_SLOT = 1;
 const DEFAULT_PROFILE_BOT_COUNT = 40;
@@ -19,12 +24,18 @@ function clampInteger(value, fallback, min, max) {
   return Math.min(max, Math.max(min, Math.floor(numericValue)));
 }
 
+function normalizeOptionalStalkAuthorityMode(rawOptions: any) {
+  const value = rawOptions.stalkAuthorityMode ?? rawOptions.stalkAuthority;
+  return value === undefined ? undefined : normalizeStalkAuthorityMode(value);
+}
+
 export function normalizeProfileArenaOptions(rawOptions: any = {}) {
   return {
     botCount: clampInteger(rawOptions.botCount ?? rawOptions.bots, DEFAULT_PROFILE_BOT_COUNT, 0, MAX_PROFILE_BOT_COUNT),
     stagePreset: VALID_STAGE_PRESETS.has(rawOptions.stagePreset)
       ? rawOptions.stagePreset
-      : DEFAULT_TERRAIN_CONFIG.preset
+      : DEFAULT_TERRAIN_CONFIG.preset,
+    stalkAuthorityMode: normalizeOptionalStalkAuthorityMode(rawOptions)
   };
 }
 
@@ -79,7 +90,8 @@ export class ProfileArenaSession {
       terrainConfig: environment?.terrainConfig,
       arenaRadius: environment?.arenaRadius,
       worldBounds: environment?.worldBounds,
-      worldProps: environment?.worldProps
+      worldProps: environment?.worldProps,
+      stalkAuthorityMode: this.options.stalkAuthorityMode
     });
 
     const botControllerConfig = createBotControllerConfig(this.tuningConfig);
@@ -96,8 +108,8 @@ export class ProfileArenaSession {
   }
 
   update(delta, localInput) {
-    this.accumulator += delta;
-    const steps = Math.max(1, Math.floor(this.accumulator / MATCH_TICK_DURATION));
+    this.accumulator = accumulateFixedStepTime(this.accumulator, delta, MATCH_TICK_DURATION);
+    const steps = getFixedStepCount(this.accumulator, MATCH_TICK_DURATION);
 
     if (this.simulation.phase !== 'running') {
       this.snapshot = {
@@ -105,6 +117,10 @@ export class ProfileArenaSession {
         worldProps: this.staticWorldProps
       };
       this.accumulator = 0;
+      return;
+    }
+
+    if (steps === 0) {
       return;
     }
 

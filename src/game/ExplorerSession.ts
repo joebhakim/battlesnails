@@ -12,6 +12,7 @@ import {
   createExplorerWorld
 } from '../world/ExplorerWorld.js';
 import { getTerrainHeight } from '../world/Terrain.js';
+import { accumulateFixedStepTime, getFixedStepCount } from './FixedStepClock.js';
 
 const FORAGE_DURATION = 180;
 const TRIAL_DURATION = 75;
@@ -691,8 +692,12 @@ export class ExplorerSession {
   }
 
   update(delta, localInput) {
-    this.accumulator += delta;
-    const steps = Math.max(1, Math.floor(this.accumulator / MATCH_TICK_DURATION));
+    this.accumulator = accumulateFixedStepTime(this.accumulator, delta, MATCH_TICK_DURATION);
+    const steps = getFixedStepCount(this.accumulator, MATCH_TICK_DURATION);
+    if (steps === 0) {
+      return;
+    }
+
     const dividedInput = normalizePlayerInput({
       ...localInput,
       lookX: localInput.lookX / steps,

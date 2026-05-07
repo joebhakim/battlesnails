@@ -111,12 +111,14 @@ Netlify serves Arena, The Hunt, debug modes, and the browser client. The multipl
 
 On-screen HUD:
 - Top left: player health.
+- Top center: proximity-chat portraits for nearby audible snails. Portraits use a cheap low-resolution secondary render of the speaking snail, not the whole world. In Test Mode, the Annoying Lecturer slowly chases the player and loops a public-domain JFK inaugural-address Ogg from Wikimedia Commons.
 - Top right: current enemy or opponent health.
 - Bottom left: left stalk top-down plane widget showing target point vs current point.
 - Bottom right: right stalk top-down plane widget showing target point vs current point.
 - Arena: stage and enemy setup options appear before the match starts.
 - The Hunt: choose NPC snail count and strength before entering the deterministic `Moss Atoll` expedition.
 - Test Mode and Simulator: hidden until the backtick key is pressed, then right-side tuning panels expose terrain, HP, movement, trail, combat, stalk, bot-AI tuning, and simulator search scope.
+- Test Mode: use `Arena Radius` to make a larger plane, or choose `Generated Forest Floor` from the terrain preset list to run the lab on the forest map with props.
 
 ## Gameplay Flow
 
@@ -333,6 +335,14 @@ npm run perf:arena -- --bots 40
 
 By default this runs a deterministic `15s` mixed-input soak: random movement, target navigation, lock-on, free turning, stalk swinging, reach-wheel pulses, and jump pulses. It also validates finite player/stalk/event/trail state while it runs, so this is the quick headless sanity check for movement and physics bugs. Use `--input idle` for the old idle-human profile, or `--input walk` for a simple forward-walk profile.
 
+For the 120 Hz / 16-snail experiment, run the same profile with the fixed tick doubled and analytic stalk authority enabled:
+
+```bash
+BATTLESNAILS_120HZ=1 npm run perf:arena -- --bots 15 --input stress --stalk-authority analytic
+```
+
+`--stalk-authority rope|human_rope|analytic` controls the authoritative stalk model in the profiler. `rope` is the current feel baseline, `human_rope` keeps the local/human snail on rope stalks while bots use cheap analytic stalks, and `analytic` is the high-throughput server-style target where combat uses compact stalk samples and rope motion is presentational.
+
 For CI, add thresholds so regressions fail the command:
 
 ```bash
@@ -345,6 +355,12 @@ Run the headless Chromium Arena draw-time profile:
 
 ```bash
 npm run perf:browser-arena -- --bots 40 --seconds 8 --warmup 1
+```
+
+For a 120 Hz viability estimate from a 60 Hz desktop, set the Vite env flag and use the projected 120 Hz metric:
+
+```bash
+VITE_BATTLESNAILS_120HZ=1 npm run perf:browser-arena -- --bots 15 --input random-lock --stalk-authority analytic --seconds 12 --warmup 2 --headful --no-gl-finish
 ```
 
 Run the same browser profiler against the dense Adventure world:
@@ -373,7 +389,7 @@ npm run preview -- --host 127.0.0.1
 npm run perf:browser -- --mode adventure --url http://127.0.0.1:4173/ --seconds 20 --warmup 3 --headful
 ```
 
-The browser profiler measures the live Three.js scene in Chromium. The primary draw metric is `renderer.render(...)` plus `gl.finish()`, and the report also includes effective FPS, update time, session tick time, draw calls, triangles, and scene mesh counts. Use `--width`, `--height`, `--device-scale-factor`, `--input idle|walk|roam`, `--scene-sample-every`, `--headful`, and optional CI thresholds such as `--max-render-p95-ms`, `--max-frame-p95-ms`, and `--min-fps`.
+The browser profiler measures the live Three.js scene in Chromium. The primary draw metric is `renderer.render(...)` plus `gl.finish()`, and the report also includes effective FPS, update time, session tick time, draw calls, triangles, scene mesh counts, and a `projected 120 Hz` estimate. Use `--width`, `--height`, `--device-scale-factor`, `--input idle|walk|roam|random-lock`, `--stalk-authority rope|human_rope|analytic`, `--scene-sample-every`, `--headful`, and optional CI thresholds such as `--max-render-p95-ms`, `--max-frame-p95-ms`, `--max-projected-120-p95-ms`, and `--min-fps`.
 
 Prefer `--headful` for matching the FPS you see while playing. Headless Chromium is useful for repeatable CI-style timing buckets, but some machines throttle headless `requestAnimationFrame`, so `effectiveFps` can be misleading even when measured update/render work is under budget. When that happens, compare `game frame`, `update`, `render + finish`, draw calls, triangles, and visible meshes against the baselines in `WORKING_MEMORY.md`.
 
@@ -458,6 +474,9 @@ Prefer `--headful` for matching the FPS you see while playing. Headless Chromium
 <summary>Audio</summary>
 
 - `src/audio/AudioController.ts`: optional procedural soundtrack driven by the music toggle.
+- `src/audio/SnailMusic.ts`: reusable sequence generation, envelope math, sample rendering, and WAV encoding for fast music iteration.
+- `npm run music:render -- --list` prints the available named snail-music studies: moisture liturgical, body against surface, chemotaxis folk, stalk counterpoint, salt horror, wet trail minimalism, micro-cathedral, homeostatic groove, comical noble slime, and nocturnal garden electronics.
+- `npm run music:play -- --song salt_horror --seconds 6 --seed snail-loop --out /tmp/snail.wav` renders and plays a deterministic snippet from the same shared music module.
 
 </details>
 

@@ -1683,6 +1683,7 @@ export function createPropMesh(prop) {
 
 export class WorldPropActor {
   declare body: any;
+  declare bodyRadius: any;
   declare id: any;
   declare kind: any;
   declare label: any;
@@ -1693,6 +1694,7 @@ export class WorldPropActor {
     const createLabel = options.createLabel ?? true;
     this.id = prop.id;
     this.kind = prop.kind;
+    this.bodyRadius = prop.bodyRadius ?? 0;
     this.mesh = new THREE.Group();
     this.body = createPropMesh(prop);
     this.mesh.add(this.body);
@@ -1708,6 +1710,7 @@ export class WorldPropActor {
   }
 
   applyPropState(prop) {
+    this.bodyRadius = prop.bodyRadius ?? this.bodyRadius ?? 0;
     this.mesh.position.set(prop.position.x, prop.position.y, prop.position.z);
     this.mesh.rotation.y = prop.rotationY ?? 0;
     this.mesh.visible = true;

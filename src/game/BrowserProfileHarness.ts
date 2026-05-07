@@ -1,7 +1,23 @@
 import { ExplorerSession } from './ExplorerSession.js';
 import { ProfileArenaSession, normalizeProfileArenaOptions } from './ProfileArenaSession.js';
+import { TestSession } from './TestSession.js';
 
 const DEFAULT_MAX_SAMPLES = 60000;
+
+function createVolatileStorage() {
+  const values = new Map<string, string>();
+  return {
+    getItem(key: string) {
+      return values.get(key) ?? null;
+    },
+    setItem(key: string, value: string) {
+      values.set(key, String(value));
+    },
+    removeItem(key: string) {
+      values.delete(key);
+    }
+  };
+}
 
 function countSceneObjects(scene) {
   const counts = {
@@ -307,6 +323,25 @@ export function installBrowserProfileHarness(game) {
         options: {
           seed: rawOptions.seed ?? null,
           npcCount: rawOptions.npcCount ?? 0
+        },
+        state: getProfileState(game)
+      };
+    },
+    startTest(rawOptions: any = {}) {
+      const session = new TestSession({ storage: createVolatileStorage() });
+      const nextTuning = {
+        ...session.getTuningConfig(),
+        terrainPreset: rawOptions.stagePreset ?? rawOptions.terrainPreset ?? session.getTuningConfig().terrainPreset,
+        botCount: rawOptions.botCount ?? rawOptions.bots ?? session.getTuningConfig().botCount,
+        arenaRadius: rawOptions.arenaRadius ?? session.getTuningConfig().arenaRadius
+      };
+      session.setTuningConfig(nextTuning);
+      game.enterSession(session);
+      return {
+        options: {
+          stagePreset: nextTuning.terrainPreset,
+          botCount: nextTuning.botCount,
+          arenaRadius: nextTuning.arenaRadius
         },
         state: getProfileState(game)
       };

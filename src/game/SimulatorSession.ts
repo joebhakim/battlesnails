@@ -23,6 +23,7 @@ import {
   normalizeDuelTuningConfig
 } from '../sim/Tuning.js';
 import { SeededRandom, createRandomSeed, normalizeSeed } from '../sim/SeededRandom.js';
+import { accumulateFixedStepTime, getFixedStepCount } from './FixedStepClock.js';
 
 export const SIMULATOR_TUNING_STORAGE_KEY = 'battlesnails:simulator-tuning-v4';
 
@@ -280,8 +281,9 @@ export class SimulatorSession {
       return;
     }
 
-    this.visibleAccumulator += delta;
-    while (this.visibleAccumulator >= MATCH_TICK_DURATION && runtime.simulation.phase === 'running') {
+    this.visibleAccumulator = accumulateFixedStepTime(this.visibleAccumulator, delta, MATCH_TICK_DURATION);
+    const steps = getFixedStepCount(this.visibleAccumulator, MATCH_TICK_DURATION);
+    for (let index = 0; index < steps && runtime.simulation.phase === 'running'; index += 1) {
       const observation = createVisionObservation(
         runtime.snapshot,
         this.localSlot,

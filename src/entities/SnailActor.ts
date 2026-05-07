@@ -855,6 +855,8 @@ export class SnailActor {
           }
         }
       }
+    } else if (this.stalkRenderFidelity === 'hidden') {
+      this.applyCompactStalkState(state, delta);
     } else {
       this.applySyntheticStalkState(state, delta);
     }
@@ -1049,6 +1051,57 @@ export class SnailActor {
         stalk.currentVector.copy(getBodyLocalDirection(rootToTip.normalize(), this.mesh.rotation.y));
       } else {
         stalk.currentVector.copy(stalk.targetVector);
+      }
+    }
+  }
+
+  applyCompactStalkState(state, delta = 0) {
+    for (const side of STALK_SIDE_KEYS) {
+      const stalk = this.stalks[side];
+      const incoming = state.stalks?.[side] ?? null;
+      const previousTipPosition = stalk.tipPosition.clone();
+
+      stalk.held = Boolean(incoming?.held);
+      stalk.impactPower = incoming?.impactPower ?? 0;
+      stalk.segmentRadius = incoming?.segmentRadius ?? this.stalkSegmentRadius;
+      stalk.targetYaw = incoming?.targetYaw ?? stalk.targetYaw;
+      stalk.targetPitch = incoming?.targetPitch ?? stalk.targetPitch;
+      stalk.targetReach = incoming?.targetReach ?? stalk.targetReach;
+      stalk.currentReach = incoming?.currentReach ?? stalk.targetReach;
+
+      if (incoming?.targetVector) {
+        stalk.targetVector.set(incoming.targetVector.x, incoming.targetVector.y, incoming.targetVector.z);
+      }
+
+      if (incoming?.currentVector) {
+        stalk.currentVector.set(incoming.currentVector.x, incoming.currentVector.y, incoming.currentVector.z);
+      } else {
+        stalk.currentVector.copy(stalk.targetVector);
+      }
+
+      if (incoming?.tipPosition) {
+        stalk.tipPosition.set(incoming.tipPosition.x, incoming.tipPosition.y, incoming.tipPosition.z);
+      } else {
+        const pose = this.getSyntheticStalkPose(side, state);
+        const rootWorld = getStalkRootWorldPosition(this.mesh.position, this.mesh.rotation.y, stalk.rootOffset);
+        const goalWorld = getStalkGoalWorldPositionFromDirection(
+          this.mesh.position,
+          this.mesh.rotation.y,
+          pose.vector ?? getLocalStalkDirection(pose.yaw, pose.pitch),
+          this.stalkLength * (pose.reach ?? 1),
+          stalk.rootOffset
+        );
+        stalk.tipPosition.copy(goalWorld);
+        if (rootWorld.distanceToSquared(goalWorld) > 0) {
+          stalk.currentVector.copy(getBodyLocalDirection(goalWorld.clone().sub(rootWorld).normalize(), this.mesh.rotation.y));
+        }
+      }
+
+      stalk.previousTipPosition.copy(previousTipPosition);
+      if (delta > 0) {
+        stalk.tipVelocity.copy(stalk.tipPosition).sub(stalk.previousTipPosition).divideScalar(delta);
+      } else {
+        stalk.tipVelocity.set(0, 0, 0);
       }
     }
   }

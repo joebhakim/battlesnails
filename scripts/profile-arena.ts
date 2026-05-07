@@ -118,7 +118,7 @@ function evaluateThresholds(result, args) {
 function printHumanSummary(result) {
   const { scenario, metrics, byteSizes, presentationObjects, finalState, inputCoverage, diagnostics } = result;
   console.log(`Arena performance profile: ${scenario.botCount} bots, ${scenario.seconds}s (${scenario.measuredTicks} measured ticks)`);
-  console.log(`stage ${scenario.stagePreset} · input ${scenario.inputMode} · presentation ${scenario.includePresentation ? 'on' : 'off'} · sample every ${scenario.snapshotSampleEvery} ticks`);
+  console.log(`stage ${scenario.stagePreset} · input ${scenario.inputMode} · stalk ${scenario.stalkAuthorityMode ?? 'rope'} · presentation ${scenario.includePresentation ? 'on' : 'off'} · sample every ${scenario.snapshotSampleEvery} ticks`);
   console.log('');
   console.log(`local frame:       ${formatMs(metrics.localFrame)}`);
   console.log(`input:             ${formatMs(metrics.input)}`);
@@ -152,6 +152,7 @@ const result = runArenaPerformanceProfile({
   snapshotSampleEvery: getNumber(args, 'snapshot-every'),
   stagePreset: getString(args, 'stage'),
   inputMode: getString(args, 'input'),
+  stalkAuthority: getString(args, 'stalk-authority'),
   includePresentation: !getBoolean(args, 'no-presentation')
 });
 const failures = evaluateThresholds(result, args);

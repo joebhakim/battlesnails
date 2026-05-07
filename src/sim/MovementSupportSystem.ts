@@ -222,6 +222,28 @@ function getCylinderPlanarContact(player: any, prop: any) {
 function getVisualMeshContact(player: any, prop: any, maximumDistance: number) {
   const mesh = getVisualCollisionMesh(prop);
   const localCenter = getYawLocalVector(player.position.clone().sub(prop.position), prop.rotationY ?? 0);
+  const bounds = mesh.bounds;
+  if (bounds) {
+    const dx = localCenter.x < bounds.min.x
+      ? bounds.min.x - localCenter.x
+      : localCenter.x > bounds.max.x
+        ? localCenter.x - bounds.max.x
+        : 0;
+    const dy = localCenter.y < bounds.min.y
+      ? bounds.min.y - localCenter.y
+      : localCenter.y > bounds.max.y
+        ? localCenter.y - bounds.max.y
+        : 0;
+    const dz = localCenter.z < bounds.min.z
+      ? bounds.min.z - localCenter.z
+      : localCenter.z > bounds.max.z
+        ? localCenter.z - bounds.max.z
+        : 0;
+    if ((dx * dx) + (dy * dy) + (dz * dz) > maximumDistance * maximumDistance) {
+      return null;
+    }
+  }
+
   const contact = findClosestTriangleContact(localCenter, mesh.triangles, maximumDistance);
   if (!contact) {
     return null;

@@ -1,5 +1,6 @@
 import {
   DEFAULT_TERRAIN_CONFIG,
+  EXPLORER_TERRAIN_PRESET_OPTIONS,
   TERRAIN_PRESET_OPTIONS,
   type TerrainConfig,
   type TerrainPreset,
@@ -25,6 +26,7 @@ export interface TuningConfig {
   terrainVerticalScale: number;
   terrainRippleAmplitude: number;
   terrainRippleFrequency: number;
+  arenaRadius: number;
   botCount: number;
   playerMaxHealth: number;
   botMaxHealth: number;
@@ -180,7 +182,21 @@ const RAW_TUNING_SCHEMA: readonly TuningSchemaEntry[] = Object.freeze([
     defaultValue: DEFAULT_TERRAIN_CONFIG.preset,
     structural: true,
     kind: 'choice',
-    options: TERRAIN_PRESET_OPTIONS
+    options: [
+      ...TERRAIN_PRESET_OPTIONS,
+      ...EXPLORER_TERRAIN_PRESET_OPTIONS
+    ]
+  },
+  {
+    id: 'arenaRadius',
+    label: 'Arena Radius',
+    section: TERRAIN_SECTION,
+    min: 10,
+    max: 320,
+    step: 1,
+    defaultValue: DEFAULT_TERRAIN_CONFIG.worldRadius,
+    structural: true,
+    kind: 'int'
   },
   {
     id: 'terrainCenterHeight',
@@ -839,7 +855,9 @@ export function createTerrainConfigFromTuning(config: Partial<TuningConfig> = DE
     horizontalScale: tuning.terrainHorizontalScale,
     verticalScale: tuning.terrainVerticalScale,
     rippleAmplitude: tuning.terrainRippleAmplitude,
-    rippleFrequency: tuning.terrainRippleFrequency
+    rippleFrequency: tuning.terrainRippleFrequency,
+    worldRadius: tuning.arenaRadius,
+    visualSize: Math.max(DEFAULT_TERRAIN_CONFIG.visualSize, tuning.arenaRadius * 2.4)
   });
 }
 
@@ -857,7 +875,7 @@ export function createSimulationProfiles(config: Partial<TuningConfig> = DEFAULT
   const sharedProfile = {
     groundHeight: tuning.aboveGroundHeight,
     spawnDropHeight: tuning.spawnDropHeight,
-    arenaRadius: 22,
+    arenaRadius: tuning.arenaRadius,
     bodyRadius: tuning.bodyRadius,
     jumpVelocity: tuning.jumpVelocity,
     gravity: tuning.bodyGravity,

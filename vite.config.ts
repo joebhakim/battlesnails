@@ -1,6 +1,12 @@
 import { defineConfig, type Plugin } from 'vite';
-import { readFileSync } from 'node:fs';
+import { createReadStream, existsSync, readFileSync, statSync } from 'node:fs';
 import { resolve } from 'path';
+
+const ANNOYING_LECTURER_SOURCE_PATH = '/home/joe/skunks/personal_stt_stack/jfk.wav';
+const ANNOYING_LECTURER_PUBLIC_DOMAIN_URL =
+  'https://commons.wikimedia.org/wiki/Special:Redirect/file/JFK_inaugural_address.ogg';
+const ANNOYING_LECTURER_DEV_ROUTE = '/dev-audio/annoying-lecturer-jfk.ogg';
+const ANNOYING_LECTURER_LEGACY_DEV_ROUTE = '/dev-audio/annoying-lecturer-jfk.wav';
 
 function readHttpsConfigFromEnv() {
   const keyPath = process.env.BATTLESNAILS_HTTPS_KEY ?? process.env.SSL_KEY_FILE;
@@ -75,10 +81,37 @@ function createLocalMultiplayerDevPlugin(): Plugin {
   };
 }
 
+function createLocalAudioAssetDevPlugin(): Plugin {
+  return {
+    name: 'battlesnails-local-audio-assets',
+    apply: 'serve' as const,
+    configureServer(viteServer: any) {
+      viteServer.middlewares.use(ANNOYING_LECTURER_DEV_ROUTE, (_request: any, response: any) => {
+        response.writeHead(302, { location: ANNOYING_LECTURER_PUBLIC_DOMAIN_URL });
+        response.end();
+      });
+
+      viteServer.middlewares.use(ANNOYING_LECTURER_LEGACY_DEV_ROUTE, (_request: any, response: any) => {
+        if (!existsSync(ANNOYING_LECTURER_SOURCE_PATH)) {
+          response.statusCode = 404;
+          response.end('Missing local lecturer audio asset.');
+          return;
+        }
+
+        const stat = statSync(ANNOYING_LECTURER_SOURCE_PATH);
+        response.setHeader('content-type', 'audio/wav');
+        response.setHeader('content-length', `${stat.size}`);
+        response.setHeader('cache-control', 'no-store');
+        createReadStream(ANNOYING_LECTURER_SOURCE_PATH).pipe(response);
+      });
+    }
+  };
+}
+
 const httpsConfig = readHttpsConfigFromEnv();
 
 export default defineConfig({
-  plugins: [createLocalMultiplayerDevPlugin()],
+  plugins: [createLocalAudioAssetDevPlugin(), createLocalMultiplayerDevPlugin()],
   server: {
     host: '0.0.0.0',
     open: true,

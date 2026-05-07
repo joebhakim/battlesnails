@@ -18,7 +18,9 @@
     "asset:suite": "node --import tsx scripts/screenshot-asset-suite.ts",
     "asset:jaccard": "node --import tsx scripts/measure-asset-collision-jaccard.ts",
     "probe:controls": "node --import tsx scripts/probe-controls.ts",
-    "map:explorer": "node --import tsx scripts/print-explorer-map.ts"
+    "map:explorer": "node --import tsx scripts/print-explorer-map.ts",
+    "music:render": "node --import tsx scripts/render-snail-music.ts",
+    "music:play": "node --import tsx scripts/render-snail-music.ts --play"
   },
   "devDependencies": {
     "@types/node": "^25.6.0",

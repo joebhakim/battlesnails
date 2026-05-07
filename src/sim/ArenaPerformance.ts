@@ -8,7 +8,8 @@ import { createArenaEnvironment } from './ArenaEnvironment.js';
 import { BotController } from './BotController.js';
 import {
   MATCH_TICK_DURATION,
-  MatchSimulation
+  MatchSimulation,
+  normalizeStalkAuthorityMode
 } from './MatchSimulation.js';
 import {
   DEFAULT_TUNING_CONFIG,
@@ -452,6 +453,10 @@ function buildProfileOptions(rawOptions: any = {}) {
   );
   const stagePreset = rawOptions.stagePreset ?? DEFAULT_TERRAIN_CONFIG.preset;
   const inputMode = normalizeInputMode(rawOptions.inputMode ?? rawOptions.input);
+  const rawStalkAuthorityMode = rawOptions.stalkAuthorityMode ?? rawOptions.stalkAuthority;
+  const stalkAuthorityMode = rawStalkAuthorityMode === undefined
+    ? undefined
+    : normalizeStalkAuthorityMode(rawStalkAuthorityMode);
 
   return {
     botCount,
@@ -460,6 +465,7 @@ function buildProfileOptions(rawOptions: any = {}) {
     snapshotSampleEvery,
     stagePreset,
     inputMode,
+    stalkAuthorityMode,
     includePresentation: rawOptions.includePresentation !== false
   };
 }
@@ -480,7 +486,8 @@ export function runArenaPerformanceProfile(rawOptions: any = {}) {
     terrainConfig: environment?.terrainConfig,
     arenaRadius: environment?.arenaRadius,
     worldBounds: environment?.worldBounds,
-    worldProps: environment?.worldProps
+    worldProps: environment?.worldProps,
+    stalkAuthorityMode: options.stalkAuthorityMode
   });
   const botControllers = createBotControllers(participants, tuning);
   const initialSnapshot = simulation.getSnapshot();
@@ -570,6 +577,7 @@ export function runArenaPerformanceProfile(rawOptions: any = {}) {
       mode: 'arena',
       stagePreset: options.stagePreset,
       inputMode: options.inputMode,
+      stalkAuthorityMode: simulation.stalkAuthorityMode,
       botCount: options.botCount,
       playerCount: participants.length,
       seconds: options.seconds,

@@ -16,6 +16,11 @@ import { CollisionDetection } from '../utils/CollisionDetection.js';
 import { UI } from '../utils/UI.js';
 import { Debug } from '../utils/Debug.js';
 import { AudioController } from '../audio/AudioController.js';
+import { ProximityVoiceController } from '../audio/ProximityVoiceController.js';
+import {
+  ANNOYING_LECTURER_SPEAKER_KIND,
+  buildProximitySpeakerEntries
+} from '../audio/ProximityChat.js';
 import {
   SINGLE_PLAYER_OPTIONS_SCHEMA,
   SinglePlayerSession,
@@ -32,6 +37,7 @@ import { SimulatorSession } from './SimulatorSession.js';
 import { TrailRenderer } from './TrailRenderer.js';
 import { DamageIndicators } from './DamageIndicators.js';
 import { startAssetStudio } from './AssetStudio.js';
+import { ProximityPortraitRenderer } from './ProximityPortraitRenderer.js';
 import { DEFAULT_BOT_MAX_HEALTH, DEFAULT_MAX_HEALTH } from '../sim/MatchSimulation.js';
 import { DEFAULT_TERRAIN_CONFIG } from '../world/Terrain.js';
 import {
@@ -46,6 +52,13 @@ const DEFAULT_FORWARD = new THREE.Vector3(0, 0, -1);
 const PERFORMANCE_SAMPLE_INTERVAL = 0.5;
 const REMOTE_BOT_STALK_RENDER_DISTANCE = 48;
 const NEARBY_POWERUP_RADIUS = 42;
+const INDIVIDUAL_WORLD_PROP_RENDER_DISTANCE = 190;
+const LECTURER_PLAYER_OVERRIDES = {
+  bodyColor: 0x67c5bd,
+  shellColor: 0x2f536a,
+  shellDamagedColor: 0x4f6b7e,
+  shellCriticalColor: 0x8f574f
+};
 
 const REMOTE_PLAYER_OVERRIDES = {
   position: new THREE.Vector3(0, 1, -6),
@@ -138,6 +151,8 @@ export class Game {
   declare lastFrameTime: any;
   declare latestSnapshotEvents: any;
   declare lastWorldPropsReference: any;
+  declare cachedPowerupWorldPropsReference: any;
+  declare cachedPowerupWorldProps: any;
   declare worldPropBatchSignature: any;
   declare performanceFrameCount: any;
   declare performanceLastSampleTick: any;
@@ -147,6 +162,8 @@ export class Game {
   declare mouseControls: any;
   declare mobileControls: any;
   declare playerSnail: any;
+  declare proximityPortraits: any;
+  declare proximityVoice: any;
   declare renderer: any;
   declare scene: any;
   declare trailRenderer: any;
@@ -174,11 +191,15 @@ export class Game {
     this.ui = null;
     this.debug = null;
     this.audio = null;
+    this.proximityPortraits = null;
+    this.proximityVoice = null;
 
     this.currentSession = null;
     this.currentOverlayKey = null;
     this.latestSnapshotEvents = [];
     this.lastWorldPropsReference = null;
+    this.cachedPowerupWorldPropsReference = null;
+    this.cachedPowerupWorldProps = [];
     this.worldPropBatchSignature = '';
     this.performanceFrameCount = 0;
     this.performanceLastSampleTime = performance.now();
@@ -203,6 +224,8 @@ export class Game {
     this.mobileControls = new MobileControls(document.getElementById('mobile-controls'));
     this.collisionDetection = new CollisionDetection();
     this.ui = new UI();
+    this.proximityPortraits = new ProximityPortraitRenderer();
+    this.proximityVoice = new ProximityVoiceController();
     this.damageIndicators = new DamageIndicators({
       container: this.container,
       camera: this.camera
@@ -263,6 +286,9 @@ export class Game {
     this.ui?.hideSimulatorPanel();
     this.mobileControls?.setEnabled(false);
     this.ui?.setMobileControlsVisible(false);
+    this.ui?.updateProximitySpeakers([]);
+    this.proximityPortraits?.clear();
+    this.proximityVoice?.stop();
   }
 
   animate() {
@@ -325,6 +351,9 @@ export class Game {
       this.ui?.updateSnailStats(null);
       this.ui?.updateTrialHud(null);
       this.ui?.updateNearbyItems([]);
+      this.ui?.updateProximitySpeakers([]);
+      this.proximityPortraits?.clear();
+      this.proximityVoice?.update([]);
       this.latestSnapshotEvents = [];
       this.damageIndicators?.clear();
       this.syncCreatureViews([], delta);
@@ -357,6 +386,7 @@ export class Game {
     );
     this.damageIndicators?.update(delta);
     this.updateHud(localState, focusState, snapshot);
+    this.updateProximityChat(localState, otherStates, delta);
     this.ui.updateStalkIndicators(localState?.stalks ?? null);
     this.updateTestPanel();
     this.updateSimulatorPanel();
@@ -414,7 +444,9 @@ export class Game {
     } else if (state.fixtureKind === 'snail') {
       actor = createSifuStatueActor(state);
     } else if (state.profileName === 'bot') {
-      actor = new NPCSnail();
+      actor = new NPCSnail(state.speakerKind === ANNOYING_LECTURER_SPEAKER_KIND
+        ? LECTURER_PLAYER_OVERRIDES
+        : undefined);
     } else {
       actor = new PlayerSnail(REMOTE_PLAYER_OVERRIDES);
     }
@@ -450,6 +482,7 @@ export class Game {
   syncWorldPropViews(worldProps, delta, localPlayerPosition = null) {
     if (worldProps === this.lastWorldPropsReference) {
       for (const actor of this.worldPropViews.values()) {
+        actor.mesh.visible = this.isIndividualWorldPropVisible(actor, localPlayerPosition);
         actor.update(delta, localPlayerPosition);
       }
       this.worldPropBatch?.update(localPlayerPosition);
@@ -506,6 +539,7 @@ export class Game {
       }
 
       actor.setBodyVisible(true);
+      actor.mesh.visible = this.isIndividualWorldPropVisible(actor, localPlayerPosition);
       actor.update(delta, localPlayerPosition);
     }
 
@@ -523,6 +557,32 @@ export class Game {
       this.scene.scene.add(this.worldPropBatch.mesh);
     }
     this.worldPropBatch?.update(localPlayerPosition);
+  }
+
+  isIndividualWorldPropVisible(actor, localPlayerPosition = null) {
+    if (!localPlayerPosition) {
+      return true;
+    }
+
+    const dx = actor.mesh.position.x - localPlayerPosition.x;
+    const dz = actor.mesh.position.z - localPlayerPosition.z;
+    const renderDistance = INDIVIDUAL_WORLD_PROP_RENDER_DISTANCE + (actor.bodyRadius ?? 0);
+    return (dx * dx) + (dz * dz) <= renderDistance * renderDistance;
+  }
+
+  getPowerupWorldProps(worldProps: any[] = []) {
+    if (worldProps === this.cachedPowerupWorldPropsReference) {
+      return this.cachedPowerupWorldProps;
+    }
+
+    this.cachedPowerupWorldPropsReference = worldProps;
+    this.cachedPowerupWorldProps = worldProps
+      .map((prop) => {
+        const powerup = getPowerupForProp(prop);
+        return powerup ? { prop, powerup } : null;
+      })
+      .filter(Boolean);
+    return this.cachedPowerupWorldProps;
   }
 
   syncCreatureViews(creatures, delta) {
@@ -618,12 +678,8 @@ export class Game {
       return [];
     }
 
-    return worldProps
-      .map((prop) => {
-        const powerup = getPowerupForProp(prop);
-        if (!powerup) {
-          return null;
-        }
+    return this.getPowerupWorldProps(worldProps)
+      .map(({ prop, powerup }) => {
 
         const dx = prop.position.x - localState.position.x;
         const dz = prop.position.z - localState.position.z;
@@ -644,6 +700,28 @@ export class Game {
       .filter(Boolean)
       .sort((left, right) => left.distance - right.distance)
       .slice(0, 5);
+  }
+
+  getProximitySpeakerColor(slot) {
+    const actor = this.otherActorViews.get(slot);
+    return this.getActorBodyColor(actor) ?? '#d7c58a';
+  }
+
+  updateProximityChat(localState, otherStates: any[] = [], delta = 0) {
+    const statesBySlot = new Map(otherStates.map((state) => [state.slot, state]));
+    const speakers = buildProximitySpeakerEntries(localState, otherStates).map((speaker) => ({
+      ...speaker,
+      bodyColor: this.getProximitySpeakerColor(speaker.slot)
+    }));
+
+    this.ui.updateProximitySpeakers(speakers);
+    this.proximityPortraits?.update(
+      speakers,
+      statesBySlot,
+      (slot) => this.ui.getProximityPortraitCanvas(slot),
+      delta
+    );
+    this.proximityVoice?.update(speakers);
   }
 
   updateHud(localState, focusState, snapshot: any = null) {
@@ -898,6 +976,9 @@ export class Game {
   resetViewActors() {
     this.trailRenderer?.reset();
     this.damageIndicators?.clear();
+    this.ui?.updateProximitySpeakers([]);
+    this.proximityPortraits?.clear();
+    this.proximityVoice?.stop();
     this.playerSnail.setVisible(false);
     delete this.playerSnail.mesh.userData.hasAppliedMatchState;
 
@@ -916,6 +997,8 @@ export class Game {
       this.worldPropBatch = null;
     }
     this.lastWorldPropsReference = null;
+    this.cachedPowerupWorldPropsReference = null;
+    this.cachedPowerupWorldProps = [];
     this.worldPropBatchSignature = '';
 
     for (const actor of this.creatureViews.values()) {

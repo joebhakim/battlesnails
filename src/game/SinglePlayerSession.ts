@@ -14,6 +14,7 @@ import {
   normalizeScenarioOptions
 } from '../sim/EncounterPresets.js';
 import { ARENA_TERRAIN_PRESET_OPTIONS } from '../world/Terrain.js';
+import { accumulateFixedStepTime, getFixedStepCount } from './FixedStepClock.js';
 
 export const SINGLE_PLAYER_OPTIONS_STORAGE_KEY = 'battlesnails:singleplayer-options-v1';
 export const SINGLE_PLAYER_TUNING_STORAGE_KEY = SINGLE_PLAYER_OPTIONS_STORAGE_KEY;
@@ -187,10 +188,14 @@ export class SinglePlayerSession {
   }
 
   update(delta, localInput) {
-    this.accumulator += delta;
-    const steps = Math.max(1, Math.floor(this.accumulator / MATCH_TICK_DURATION));
+    this.accumulator = accumulateFixedStepTime(this.accumulator, delta, MATCH_TICK_DURATION);
+    const steps = getFixedStepCount(this.accumulator, MATCH_TICK_DURATION);
 
     if (this.simulation.phase === 'running') {
+      if (steps === 0) {
+        return;
+      }
+
       const dividedInput = normalizePlayerInput({
         ...localInput,
         lookX: localInput.lookX / steps,

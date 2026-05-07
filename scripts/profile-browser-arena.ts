@@ -118,9 +118,16 @@ async function runBrowserArenaProfile(options) {
           seed: profileOptions.seed,
           npcCount: profileOptions.npcCount
         })
-        : profile.startArena({
+        : profileOptions.mode === 'test'
+          ? profile.startTest({
+            botCount: profileOptions.botCount,
+            stagePreset: profileOptions.stagePreset,
+            arenaRadius: profileOptions.arenaRadius
+          })
+          : profile.startArena({
           botCount: profileOptions.botCount,
-          stagePreset: profileOptions.stagePreset
+          stagePreset: profileOptions.stagePreset,
+          stalkAuthority: profileOptions.stalkAuthority
         });
       profile.installInputDriver({
         mode: profileOptions.inputMode
@@ -136,8 +143,10 @@ async function runBrowserArenaProfile(options) {
       botCount: options.botCount,
       npcCount: options.npcCount,
       stagePreset: options.stagePreset,
+      arenaRadius: options.arenaRadius,
       seed: options.seed,
       inputMode: options.inputMode,
+      stalkAuthority: options.stalkAuthority,
       glFinish: options.glFinish,
       sceneSampleEvery: options.sceneSampleEvery
     });

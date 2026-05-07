@@ -3,9 +3,11 @@ import assert from 'node:assert/strict';
 import * as THREE from 'three';
 
 import { TestSession } from '../src/game/TestSession.js';
+import { ANNOYING_LECTURER_SLOT, PROXIMITY_CHAT_MAX_DISTANCE } from '../src/audio/ProximityChat.js';
 import { MatchSimulation, MATCH_TICK_DURATION } from '../src/sim/MatchSimulation.js';
 import { TEST_PLAYGROUND_FIXTURES } from '../src/sim/TestFixtures.js';
 import { DEFAULT_TUNING_CONFIG, TUNING_STORAGE_KEY, normalizeTuningConfig } from '../src/sim/Tuning.js';
+import { EXPLORER_TERRAIN_PRESET } from '../src/world/Terrain.js';
 
 class MemoryStorage {
   declare store: any;
@@ -97,12 +99,13 @@ test('normalizeTuningConfig clamps and rounds slider values', () => {
 test('test mode structural bot count changes rebuild the local arena immediately', () => {
   const session = new TestSession({ storage: new MemoryStorage() });
 
-  assert.equal(session.getSnapshot().players.length, 2 + TEST_PLAYGROUND_FIXTURES.length);
+  assert.equal(session.getSnapshot().players.length, 3 + TEST_PLAYGROUND_FIXTURES.length);
+  assert(session.getSnapshot().players.some((player) => player.slot === ANNOYING_LECTURER_SLOT));
 
   const result = session.setTuningValue('botCount', 5);
 
   assert.equal(result.rebuilt, true);
-  assert.equal(session.getSnapshot().players.length, 6 + TEST_PLAYGROUND_FIXTURES.length);
+  assert.equal(session.getSnapshot().players.length, 7 + TEST_PLAYGROUND_FIXTURES.length);
   assert.equal(session.getTestPanelState().livingBots, 5);
 });
 
@@ -193,6 +196,70 @@ test('test mode terrain changes are structural and rebuild the arena snapshot', 
   assert.equal(result.rebuilt, true);
   assert.equal(session.getSnapshot().terrain.preset, 'sphere_dome');
   assert.equal(session.getSnapshot().terrain.centerHeight, 1.5);
+});
+
+test('test mode arena radius can expand the proximity playground', () => {
+  const session = new TestSession({ storage: new MemoryStorage() });
+
+  const result = session.setTuningConfig({
+    ...session.getTuningConfig(),
+    arenaRadius: 120
+  });
+
+  assert.equal(result.rebuilt, true);
+  assert.equal(session.getSnapshot().terrain.worldRadius, 120);
+
+  for (let index = 0; index < 180; index += 1) {
+    session.update(MATCH_TICK_DURATION, { moveX: 1 });
+  }
+
+  assert(session.getLocalPlayerState().position.x > 22);
+});
+
+test('test mode generated forest floor uses forest terrain and props', () => {
+  const session = new TestSession({ storage: new MemoryStorage() });
+
+  const result = session.setTuningConfig({
+    ...session.getTuningConfig(),
+    terrainPreset: EXPLORER_TERRAIN_PRESET
+  });
+
+  const snapshot = session.getSnapshot();
+  assert.equal(result.rebuilt, true);
+  assert.equal(snapshot.terrain.preset, EXPLORER_TERRAIN_PRESET);
+  assert(snapshot.worldProps.length > 0);
+  assert(Math.abs(session.getLocalPlayerState().position.z) > 60);
+
+  const staticWorldProps = snapshot.worldProps;
+  session.update(MATCH_TICK_DURATION, {});
+  assert.equal(session.getSnapshot().worldProps, staticWorldProps);
+});
+
+test('test mode lecturer is slow enough to leave proximity range in a large arena', () => {
+  const session = new TestSession({ storage: new MemoryStorage() });
+  session.setTuningConfig({
+    ...session.getTuningConfig(),
+    arenaRadius: 240
+  });
+
+  const initialLocal = session.getLocalPlayerState();
+  const initialLecturer = session.getOtherPlayerStates().find((player) => player.slot === ANNOYING_LECTURER_SLOT);
+  const awayX = initialLocal.position.x - initialLecturer.position.x;
+  const awayZ = initialLocal.position.z - initialLecturer.position.z;
+  const distance = Math.hypot(awayX, awayZ);
+  const input = { moveX: awayX / distance, moveZ: awayZ / distance };
+
+  for (let index = 0; index < 1200; index += 1) {
+    session.update(MATCH_TICK_DURATION, input);
+  }
+
+  const local = session.getLocalPlayerState();
+  const lecturer = session.getOtherPlayerStates().find((player) => player.slot === ANNOYING_LECTURER_SLOT);
+  const lecturerDistance = Math.hypot(
+    lecturer.position.x - local.position.x,
+    lecturer.position.z - local.position.z
+  );
+  assert(lecturerDistance > PROXIMITY_CHAT_MAX_DISTANCE);
 });
 
 test('test mode keeps spawned enemies static for lab work', () => {

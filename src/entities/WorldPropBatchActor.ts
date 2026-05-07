@@ -5,6 +5,8 @@ import { createPropMesh } from './WorldPropActor.js';
 
 const BATCH_CHUNK_SIZE = 340;
 const GROUND_DETAIL_DISTANCE = 165;
+const CLUTTER_DETAIL_DISTANCE = 225;
+const TREE_DETAIL_DISTANCE = 330;
 const INDIVIDUAL_RENDER_KINDS = new Set([
   'dew_bead',
   'dew_pool',
@@ -18,6 +20,14 @@ const GROUND_COVER_KINDS = new Set([
   'moss_mat',
   'dirt_stick_patch',
   'rock_floor_patch'
+]);
+const TREE_LOD_KINDS = new Set([
+  'deciduous_tree',
+  'conifer_tree'
+]);
+const ALWAYS_RENDER_KINDS = new Set([
+  'giant_tree',
+  'rock_spire'
 ]);
 
 function hashText(text) {
@@ -65,6 +75,50 @@ function createGroundFarMaterial() {
     flatShading: true,
     side: THREE.DoubleSide
   });
+}
+
+function createFarTreeObject(prop) {
+  const radius = prop.visual?.trunkRadius ?? prop.visual?.radius ?? prop.collisionShape?.radius ?? 4;
+  const canopyRadius = prop.visual?.canopyRadius ?? radius * 4;
+  const height = prop.visual?.height ?? (prop.collisionShape?.halfHeight ?? 16) * 2;
+  const treeType = prop.visual?.treeType ?? 'deciduous';
+  const group = new THREE.Group();
+  const trunkMaterial = new THREE.MeshStandardMaterial({
+    color: 0x4b3828,
+    roughness: 0.98,
+    metalness: 0.02,
+    flatShading: true
+  });
+  const canopyMaterial = new THREE.MeshStandardMaterial({
+    color: treeType === 'conifer' ? 0x234a35 : 0x355f36,
+    roughness: 0.96,
+    metalness: 0.02,
+    flatShading: true
+  });
+  const trunk = new THREE.Mesh(
+    new THREE.CylinderGeometry(radius * 0.86, radius, height * 0.88, 5),
+    trunkMaterial
+  );
+  group.add(trunk);
+
+  if (treeType === 'conifer') {
+    const canopy = new THREE.Mesh(
+      new THREE.ConeGeometry(canopyRadius * 0.92, height * 0.72, 7),
+      canopyMaterial
+    );
+    canopy.position.y = height * 0.16;
+    group.add(canopy);
+  } else {
+    const canopy = new THREE.Mesh(
+      new THREE.IcosahedronGeometry(canopyRadius * 0.9, 0),
+      canopyMaterial
+    );
+    canopy.position.y = height * 0.34;
+    canopy.scale.y = 1.15;
+    group.add(canopy);
+  }
+
+  return group;
 }
 
 function getMeshMaterial(mesh) {
@@ -181,6 +235,22 @@ function getGroundCoverFootprint(prop) {
   ];
 }
 
+function getBatchVisibilityMode(prop) {
+  if (GROUND_COVER_KINDS.has(prop.kind)) {
+    return 'groundDetail';
+  }
+
+  if (TREE_LOD_KINDS.has(prop.kind)) {
+    return 'treeDetail';
+  }
+
+  if (ALWAYS_RENDER_KINDS.has(prop.kind)) {
+    return 'always';
+  }
+
+  return 'clutterDetail';
+}
+
 function createSimplifiedGroundCoverGeometry(prop) {
   const points = getGroundCoverFootprint(prop);
   if (points.length < 3) {
@@ -290,14 +360,36 @@ export class WorldPropBatchActor {
     if (!record) {
       record = {
         center: new THREE.Vector3(position.x, position.y, position.z),
+        bounds: new THREE.Box3(),
         detailMeshes: [],
-        farMeshes: []
+        farMeshes: [],
+        clutterDetailMeshes: [],
+        treeDetailMeshes: [],
+        treeFarMeshes: []
       };
       this.chunkRecords.set(chunkKey, record);
     } else {
       record.center.lerp(new THREE.Vector3(position.x, position.y, position.z), 0.18);
     }
     return record;
+  }
+
+  addDistanceMesh(record, visibilityMode, mesh) {
+    if (mesh.geometry?.boundingBox) {
+      record.bounds.union(mesh.geometry.boundingBox);
+    }
+
+    if (visibilityMode === 'groundDetail') {
+      record.detailMeshes.push(mesh);
+    } else if (visibilityMode === 'groundFar') {
+      record.farMeshes.push(mesh);
+    } else if (visibilityMode === 'clutterDetail') {
+      record.clutterDetailMeshes.push(mesh);
+    } else if (visibilityMode === 'treeDetail') {
+      record.treeDetailMeshes.push(mesh);
+    } else if (visibilityMode === 'treeFar') {
+      record.treeFarMeshes.push(mesh);
+    }
   }
 
   getBucket(buckets, key, materialFactory, chunkKey, position, visibilityMode) {
@@ -320,7 +412,7 @@ export class WorldPropBatchActor {
 
     for (const { prop, actor = null } of entries) {
       const chunkKey = getChunkKey(prop.position);
-      const isGroundCover = GROUND_COVER_KINDS.has(prop.kind);
+      const detailVisibilityMode = getBatchVisibilityMode(prop);
       const body = actor?.body ?? createPropMesh(prop);
       const root = actor?.mesh ?? body;
 
@@ -344,7 +436,7 @@ export class WorldPropBatchActor {
         }
 
         const materialKey = getBatchMaterialKey(material);
-        const visibilityMode = isGroundCover ? 'groundDetail' : 'always';
+        const visibilityMode = detailVisibilityMode;
         const key = `${visibilityMode}:${chunkKey}:${materialKey}`;
         const bucket = this.getBucket(
           buckets,
@@ -369,7 +461,7 @@ export class WorldPropBatchActor {
         disposeObjectResources(body);
       }
 
-      if (isGroundCover) {
+      if (GROUND_COVER_KINDS.has(prop.kind)) {
         const geometry = createSimplifiedGroundCoverGeometry(prop);
         if (geometry) {
           const key = `groundFar:${chunkKey}`;
@@ -383,6 +475,34 @@ export class WorldPropBatchActor {
           );
           bucket.geometries.push(geometry);
         }
+      }
+
+      if (TREE_LOD_KINDS.has(prop.kind)) {
+        const farTree = createFarTreeObject(prop);
+        farTree.position.set(prop.position.x, prop.position.y, prop.position.z);
+        farTree.rotation.y = prop.rotationY ?? 0;
+        farTree.updateWorldMatrix(true, true);
+        farTree.traverse((node: any) => {
+          if (!node.isMesh || !node.geometry) {
+            return;
+          }
+
+          const material = getMeshMaterial(node);
+          const materialKey = getBatchMaterialKey(material);
+          const bucket = this.getBucket(
+            buckets,
+            `treeFar:${chunkKey}:${materialKey}`,
+            () => createBatchMaterial(material),
+            chunkKey,
+            prop.position,
+            'treeFar'
+          );
+          const geometry = normalizeGeometryForBatch(node, material);
+          if (geometry) {
+            bucket.geometries.push(geometry);
+          }
+        });
+        disposeObjectResources(farTree);
       }
     }
 
@@ -404,29 +524,73 @@ export class WorldPropBatchActor {
       mesh.receiveShadow = false;
       mesh.frustumCulled = true;
       this.mesh.add(mesh);
-      if (bucket.visibilityMode === 'groundDetail' || bucket.visibilityMode === 'groundFar') {
+      if (
+        bucket.visibilityMode === 'groundDetail' ||
+        bucket.visibilityMode === 'groundFar' ||
+        bucket.visibilityMode === 'clutterDetail' ||
+        bucket.visibilityMode === 'treeDetail' ||
+        bucket.visibilityMode === 'treeFar'
+      ) {
         const record = this.getChunkRecord(bucket.chunkKey, bucket.position);
-        if (bucket.visibilityMode === 'groundDetail') {
-          record.detailMeshes.push(mesh);
-        } else {
-          record.farMeshes.push(mesh);
-        }
+        this.addDistanceMesh(record, bucket.visibilityMode, mesh);
       }
       this.batchMeshCount += 1;
     }
   }
 
+  getDistanceSqToRecord(record, localPlayerPosition) {
+    if (!localPlayerPosition) {
+      return 0;
+    }
+
+    if (!record.bounds?.isEmpty?.()) {
+      const dx = localPlayerPosition.x < record.bounds.min.x
+        ? record.bounds.min.x - localPlayerPosition.x
+        : localPlayerPosition.x > record.bounds.max.x
+          ? localPlayerPosition.x - record.bounds.max.x
+          : 0;
+      const dz = localPlayerPosition.z < record.bounds.min.z
+        ? record.bounds.min.z - localPlayerPosition.z
+        : localPlayerPosition.z > record.bounds.max.z
+          ? localPlayerPosition.z - record.bounds.max.z
+          : 0;
+      return dx * dx + dz * dz;
+    }
+
+    const dx = record.center.x - localPlayerPosition.x;
+    const dz = record.center.z - localPlayerPosition.z;
+    return dx * dx + dz * dz;
+  }
+
   update(localPlayerPosition = null) {
     const detailDistanceSq = GROUND_DETAIL_DISTANCE * GROUND_DETAIL_DISTANCE;
+    const clutterDistanceSq = CLUTTER_DETAIL_DISTANCE * CLUTTER_DETAIL_DISTANCE;
+    const treeDistanceSq = TREE_DETAIL_DISTANCE * TREE_DETAIL_DISTANCE;
     for (const record of this.chunkRecords.values()) {
+      const distanceSq = this.getDistanceSqToRecord(record, localPlayerPosition);
       const showDetail = localPlayerPosition
-        ? record.center.distanceToSquared(localPlayerPosition) <= detailDistanceSq
+        ? distanceSq <= detailDistanceSq
+        : true;
+      const showClutterDetail = localPlayerPosition
+        ? distanceSq <= clutterDistanceSq
+        : true;
+      const showTreeDetail = localPlayerPosition
+        ? distanceSq <= treeDistanceSq
         : true;
       for (const mesh of record.detailMeshes) {
         mesh.visible = showDetail;
       }
       for (const mesh of record.farMeshes) {
         mesh.visible = !showDetail;
+      }
+      for (const mesh of record.clutterDetailMeshes) {
+        mesh.visible = showClutterDetail;
+      }
+      for (const mesh of record.treeDetailMeshes) {
+        mesh.visible = showTreeDetail;
+      }
+      for (const mesh of record.treeFarMeshes) {
+        mesh.visible = !showTreeDetail;
       }
     }
   }

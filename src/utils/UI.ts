@@ -188,6 +188,9 @@ export class UI {
   declare playerHealthBarFill: any;
   declare playerHealthValue: any;
   declare playerLabel: any;
+  declare proximityChat: any;
+  declare proximityChatList: any;
+  declare proximitySpeakerCards: any;
   declare statCalcium: any;
   declare statDamage: any;
   declare statDew: any;
@@ -258,6 +261,8 @@ export class UI {
     this.trialObjective = document.getElementById('trial-objective');
     this.nearbyItems = document.getElementById('nearby-items');
     this.nearbyItemsList = document.getElementById('nearby-items-list');
+    this.proximityChat = document.getElementById('proximity-chat');
+    this.proximityChatList = document.getElementById('proximity-chat-list');
     this.instructions = document.getElementById('controls-hint');
     this.startMenu = document.getElementById('start-menu');
     this.startMenuTitle = this.startMenu.querySelector('h1');
@@ -317,6 +322,7 @@ export class UI {
     this.singlePlayerSetupSchema = [];
     this.singlePlayerSetupOnStart = null;
     this.singlePlayerSetupOnBack = null;
+    this.proximitySpeakerCards = new Map();
     this.setDeveloperModesVisible(false);
 
     this.drawStalkIndicator(this.leftStalkIndicator, null);
@@ -422,6 +428,89 @@ export class UI {
       row.append(name, distance);
       return row;
     }));
+  }
+
+  updateProximitySpeakers(speakers: any[] = []) {
+    if (!this.proximityChatList) {
+      return;
+    }
+
+    if (!speakers.length) {
+      this.proximityChat?.classList.add('is-empty');
+      this.proximityChatList.replaceChildren();
+      this.proximitySpeakerCards.clear();
+      return;
+    }
+
+    this.proximityChat?.classList.remove('is-empty');
+    const desiredSlots = new Set(speakers.map((speaker) => speaker.slot));
+    for (const [slot, refs] of this.proximitySpeakerCards.entries()) {
+      if (desiredSlots.has(slot)) {
+        continue;
+      }
+
+      refs.card.remove();
+      this.proximitySpeakerCards.delete(slot);
+    }
+
+    for (const speaker of speakers) {
+      let refs = this.proximitySpeakerCards.get(speaker.slot);
+      if (!refs) {
+        refs = this.createProximitySpeakerCard(speaker);
+        this.proximitySpeakerCards.set(speaker.slot, refs);
+      }
+
+      refs.card.className = `proximity-speaker proximity-speaker--${speaker.portraitKey ?? 'snail'}`;
+      refs.card.dataset.slot = `${speaker.slot}`;
+      refs.card.dataset.portraitKey = speaker.portraitKey ?? 'snail';
+      refs.card.style.setProperty('--speaker-color', speaker.bodyColor ?? '#d7c58a');
+      refs.card.style.setProperty('--speaker-volume', `${Math.max(0, Math.min(1, speaker.volume ?? 0)) * 100}%`);
+      refs.name.textContent = speaker.name ?? 'Snail';
+      refs.distance.textContent = `${Math.round(speaker.distance ?? 0)}u`;
+      this.proximityChatList.appendChild(refs.card);
+    }
+  }
+
+  createProximitySpeakerCard(speaker: any = {}) {
+    const card = document.createElement('div');
+    card.className = `proximity-speaker proximity-speaker--${speaker.portraitKey ?? 'snail'}`;
+    card.dataset.slot = `${speaker.slot}`;
+    card.dataset.portraitKey = speaker.portraitKey ?? 'snail';
+    card.style.setProperty('--speaker-color', speaker.bodyColor ?? '#d7c58a');
+    card.style.setProperty('--speaker-volume', `${Math.max(0, Math.min(1, speaker.volume ?? 0)) * 100}%`);
+
+    const portrait = document.createElement('div');
+    portrait.className = 'proximity-speaker__portrait';
+    portrait.setAttribute('aria-hidden', 'true');
+    const canvas = document.createElement('canvas');
+    canvas.className = 'proximity-speaker__canvas';
+    canvas.width = 192;
+    canvas.height = 116;
+    portrait.append(canvas);
+
+    const meta = document.createElement('div');
+    meta.className = 'proximity-speaker__meta';
+    const name = document.createElement('strong');
+    name.textContent = speaker.name ?? 'Snail';
+    const distance = document.createElement('span');
+    distance.textContent = `${Math.round(speaker.distance ?? 0)}u`;
+    const meter = document.createElement('div');
+    meter.className = 'proximity-speaker__meter';
+    const meterFill = document.createElement('span');
+    meter.append(meterFill);
+    meta.append(name, distance, meter);
+
+    card.append(portrait, meta);
+    return {
+      card,
+      canvas,
+      name,
+      distance
+    };
+  }
+
+  getProximityPortraitCanvas(slot) {
+    return this.proximitySpeakerCards.get(slot)?.canvas ?? null;
   }
 
   formatHealthValue(value) {

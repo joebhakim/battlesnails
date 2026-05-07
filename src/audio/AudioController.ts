@@ -1,6 +1,16 @@
 /**
  * Controller for audio and music in the game
  */
+import {
+  SNAIL_MUSIC_AVAILABLE_NOTES,
+  SNAIL_MUSIC_DEFAULT_ATTACK_TIME,
+  SNAIL_MUSIC_DEFAULT_NOTE_DURATION,
+  SNAIL_MUSIC_DEFAULT_RELEASE_TIME,
+  SNAIL_MUSIC_NOTE_TO_FREQ,
+  createSnailMusicTonePlan,
+  generateSnailMusicSequence
+} from './SnailMusic.js';
+
 export class AudioController {
   declare attackTime: any;
   declare audioContext: any;
@@ -28,35 +38,21 @@ export class AudioController {
     this.mainGainNode.gain.value = 0.5; // 50% volume
     this.mainGainNode.connect(this.audioContext.destination);
 
-    this.noteToFreq = {
-      'C3': 130.81,
-      'C#3': 138.59,
-      'D3': 146.83,
-      'D#3': 155.56,
-      'E3': 164.81,
-      'F3': 174.61,
-      'F#3': 185.00,
-      'G3': 196.00,
-      'G#3': 207.65,
-      'A3': 220.00,
-      'A#3': 233.08,
-      'B3': 246.94,
-      'C4': 261.63,
-    };
+    this.noteToFreq = SNAIL_MUSIC_NOTE_TO_FREQ;
 
     // Available notes for random sequence generation
-    this.availableNotes = Object.keys(this.noteToFreq);
+    this.availableNotes = SNAIL_MUSIC_AVAILABLE_NOTES;
 
     // Music sequence configuration
-    this.noteDuration = 0.5; // Duration of each note in seconds
+    this.noteDuration = SNAIL_MUSIC_DEFAULT_NOTE_DURATION; // Duration of each note in seconds
     this.notes = this.generateRandomSequence(); // Generate initial random sequence
     this.currentNoteIndex = 0;
     this.isPlaying = false;
     this.noteTimerId = null;
 
     // Use a small attack/release time to avoid clicks
-    this.attackTime = 0.05; // 50ms attack time
-    this.releaseTime = 0.05; // 50ms release time
+    this.attackTime = SNAIL_MUSIC_DEFAULT_ATTACK_TIME; // 50ms attack time
+    this.releaseTime = SNAIL_MUSIC_DEFAULT_RELEASE_TIME; // 50ms release time
 
     // Create a compressor to smooth out transitions
     this.compressor = this.audioContext.createDynamicsCompressor();
@@ -77,36 +73,12 @@ export class AudioController {
    * @returns {string[]} An array of note names
    */
   generateRandomSequence(length: number | null = null) {
-    // If no length specified, choose a random length between 4 and 8
-    if (length === null) {
-      length = Math.floor(Math.random() * 5) + 4; // 4 to 8 notes
-    }
-
-    const sequence: { note: string; duration: number }[] = [];
-
-    // Generate sequence with some musical rules
-    for (let i = 0; i < length; i++) {
-      let noteIndex;
-
-      if (i === 0) {
-        // First note is completely random from available notes
-        noteIndex = Math.floor(Math.random() * this.availableNotes.length);
-      } else {
-        // Subsequent notes are more likely to be close to the previous note
-        // to create a more musical sequence
-        const prevNoteIndex = this.availableNotes.indexOf(sequence[i - 1].note);
-        const maxJump = 3; // Maximum jump in either direction
-
-        // Generate a random jump between -maxJump and +maxJump
-        const jump = Math.floor(Math.random() * (maxJump * 2 + 1)) - maxJump;
-
-        // Calculate new index and wrap around if needed
-        noteIndex = (prevNoteIndex + jump + this.availableNotes.length) % this.availableNotes.length;
-      }
-
-      const duration = Math.random() < 0.5 ? this.noteDuration : this.noteDuration * 0.5;
-      sequence.push({ note: this.availableNotes[noteIndex], duration });
-    }
+    const sequence = generateSnailMusicSequence({
+      length,
+      random: Math.random,
+      availableNotes: this.availableNotes,
+      noteDuration: this.noteDuration
+    });
 
     console.log("New music sequence generated:", sequence.map(n => `${n.note}(${n.duration}s)`));
     return sequence;
@@ -198,13 +170,17 @@ export class AudioController {
    * @param {number} duration - The duration of the tone in seconds
    */
   playTone(frequency, duration) {
+    const tonePlan = createSnailMusicTonePlan(frequency, duration, {
+      attackTime: this.attackTime,
+      releaseTime: this.releaseTime
+    });
     // Get the current time
     const currentTime = this.audioContext.currentTime;
 
     // Create oscillator
     const oscillator = this.audioContext.createOscillator();
-    oscillator.type = 'sine'; // Could also be square, sawtooth, triangle
-    oscillator.frequency.value = frequency;
+    oscillator.type = tonePlan.oscillatorType; // Could also be square, sawtooth, triangle
+    oscillator.frequency.value = tonePlan.frequency;
 
     // Create a gain node for this specific note
     const noteGainNode = this.audioContext.createGain();
@@ -218,16 +194,16 @@ export class AudioController {
     noteGainNode.gain.setValueAtTime(0, currentTime);
 
     // Fade in - attack
-    noteGainNode.gain.linearRampToValueAtTime(1, currentTime + this.attackTime);
+    noteGainNode.gain.linearRampToValueAtTime(1, currentTime + tonePlan.attackTime);
 
     // Fade out - release (start a bit before the note ends)
-    const releaseStart = currentTime + duration - this.releaseTime;
+    const releaseStart = currentTime + tonePlan.duration - tonePlan.releaseTime;
     noteGainNode.gain.setValueAtTime(1, releaseStart);
-    noteGainNode.gain.linearRampToValueAtTime(0, currentTime + duration);
+    noteGainNode.gain.linearRampToValueAtTime(0, currentTime + tonePlan.duration);
 
     // Start the oscillator
     oscillator.start(currentTime);
-    oscillator.stop(currentTime + duration);
+    oscillator.stop(currentTime + tonePlan.duration);
 
     // Clean up after stopping
     oscillator.onended = function () {
@@ -243,4 +219,4 @@ export class AudioController {
   setVolume(volume) {
     this.mainGainNode.gain.value = Math.max(0, Math.min(1, volume));
   }
-} 
+}
