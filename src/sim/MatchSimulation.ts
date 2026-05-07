@@ -20,6 +20,8 @@ import {
   getStalkGoalWorldPositionFromDirection,
   getStalkRootWorldPosition,
   getTipWorldPosition,
+  copyNodesInto,
+  createInitialStalkNodes,
   simulateStalkRope
 } from './StalkRope.js';
 import {
@@ -110,7 +112,7 @@ import {
 } from '../world/Terrain.js';
 import { clampPointToWorldBounds } from '../world/WorldBounds.js';
 
-export type StalkAuthorityMode = 'rope' | 'analytic' | 'human_rope';
+export type StalkAuthorityMode = 'rope' | 'analytic' | 'human_rope' | 'rope_lite_pbd';
 export type SimulationProfileLevel = 'off' | 'basic' | 'detailed';
 
 function isTruthyEnvValue(value) {
@@ -162,6 +164,7 @@ const STALK_FULL_FIDELITY_BOTS_PER_HUMAN = 2;
 const WORLD_PROP_FULL_PHYSICS_HUMAN_DISTANCE = 18;
 const WORLD_PROP_FULL_PHYSICS_BOTS_PER_HUMAN = 5;
 const WORLD_PROP_REDUCED_PHYSICS_INTERVAL = 6;
+const ROPE_LITE_SEGMENT_COUNT = 4;
 const WORLD_UP = new THREE.Vector3(0, 1, 0);
 const STALK_FORWARD = new THREE.Vector3(0, 0, 1);
 
@@ -192,6 +195,14 @@ export function normalizeStalkAuthorityMode(value: any = null): StalkAuthorityMo
     normalized === 'bots_analytic'
   ) {
     return 'human_rope';
+  }
+
+  if (
+    normalized === 'rope_lite_pbd' ||
+    normalized === 'ropelite_pbd' ||
+    normalized === 'pbd_lite'
+  ) {
+    return 'rope_lite_pbd';
   }
 
   return 'rope';
@@ -476,6 +487,25 @@ function getAnalyticStalkSample(stalk, delta, eyeRadius = STALK_SEGMENT_RADIUS *
     direction: direction.lengthSq() > TOP_DOWN_EPSILON ? direction : STALK_FORWARD.clone(),
     length: movement.length()
   };
+}
+
+function isBotLiteStalkAuthority(mode: StalkAuthorityMode, player: any) {
+  return mode === 'rope_lite_pbd' && player?.profileName === 'bot';
+}
+
+function ensureLiteStalkNodes(stalk, rootWorld, goalWorld, segmentCount = ROPE_LITE_SEGMENT_COUNT) {
+  const nodeCount = segmentCount + 1;
+  if (stalk.nodes.length === nodeCount && stalk.previousNodes.length === nodeCount) {
+    return;
+  }
+
+  const nodes = createInitialStalkNodes(rootWorld, goalWorld, segmentCount);
+  copyNodesInto(stalk.nodes, nodes);
+  copyNodesInto(stalk.previousNodes, nodes);
+  copyNodesInto(stalk.incidentNodes, nodes);
+  copyNodesInto(stalk.incidentPreviousNodes, nodes);
+  stalk.tipPosition.copy(nodes[nodes.length - 1]);
+  stalk.previousTipPosition.copy(stalk.tipPosition);
 }
 
 export class MatchSimulation {
@@ -1163,7 +1193,8 @@ export class MatchSimulation {
     }
 
     const fidelity = options.fidelity ?? 'full';
-    const fullFidelity = fidelity === 'full';
+    const usePbdLite = isBotLiteStalkAuthority(this.stalkAuthorityMode, player);
+    const fullFidelity = fidelity === 'full' && !usePbdLite;
     const collisionBodyObstacles = getStalkBodyObstacles(player, bodyObstacles);
     const terrainHeightAt = (x, z) => getTerrainHeight(x, z, this.terrainConfig);
 
@@ -1180,6 +1211,9 @@ export class MatchSimulation {
         stalk.rootOffset
       );
       const rootWorld = getStalkRootWorldPosition(player.position, player.rotationY, stalk.rootOffset);
+      if (usePbdLite) {
+        ensureLiteStalkNodes(stalk, rootWorld, goalWorld);
+      }
       const stalkCollisionObstacles = this.timeDetailedProfileBucket('stalkObstacleFilter', () => filterStalkCollisionObstacles(
         stalk,
         rootWorld,
@@ -1195,7 +1229,9 @@ export class MatchSimulation {
         rootWorld,
         goalWorld,
         delta,
-        segmentLength: player.profile.stalkTotalLength / player.profile.stalkSegmentCount,
+        segmentLength: player.profile.stalkTotalLength / (
+          usePbdLite ? ROPE_LITE_SEGMENT_COUNT : player.profile.stalkSegmentCount
+        ),
         gravity: player.profile.stalkGravity,
         damping: player.profile.stalkDamping,
         goalPull: stalk.held ? player.profile.stalkDrivePull : player.profile.stalkIdlePull,
