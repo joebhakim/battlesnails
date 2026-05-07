@@ -656,6 +656,7 @@ export function selectBestWorldSupport({
   speed,
   delta,
   contacts = [],
+  includeWorldProps = true,
   getNearbyWorldProps
 }: {
   player: any;
@@ -664,6 +665,7 @@ export function selectBestWorldSupport({
   speed: number;
   delta: number;
   contacts?: any[];
+  includeWorldProps?: boolean;
   getNearbyWorldProps: (position: THREE.Vector3, radius: number) => any[];
 }) {
   const terrainHeight = getPlayerGroundHeight(player, terrainConfig);
@@ -679,6 +681,10 @@ export function selectBestWorldSupport({
   if (waterSupport && waterSupport.priority > bestSupport.priority) {
     bestSupport = waterSupport;
   }
+  if (!includeWorldProps) {
+    return bestSupport;
+  }
+
   const contactByPropId = new Map(contacts.map((contact) => [contact.prop.id, contact]));
 
   const supportProps = getNearbyWorldProps(

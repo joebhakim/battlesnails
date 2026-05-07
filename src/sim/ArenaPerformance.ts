@@ -9,6 +9,7 @@ import { BotController } from './BotController.js';
 import {
   MATCH_TICK_DURATION,
   MatchSimulation,
+  normalizeSimulationProfileLevel,
   normalizeStalkAuthorityMode
 } from './MatchSimulation.js';
 import {
@@ -87,6 +88,40 @@ function summarizeByteMetric(samples) {
     p95Bytes: Math.round(percentile(sorted, 0.95)),
     maxBytes: Math.round(sorted[sorted.length - 1] ?? 0)
   };
+}
+
+function summarizeMetricMap(samplesByKey) {
+  const summaries = {};
+  for (const [key, samples] of samplesByKey.entries()) {
+    summaries[key] = summarizeMetric(samples);
+  }
+  return summaries;
+}
+
+function recordSimulationProfileSamples(samples, bucketSamples, countSamples) {
+  for (const sample of samples ?? []) {
+    for (const [bucket, value] of Object.entries(sample?.buckets ?? {})) {
+      if (!Number.isFinite(value)) {
+        continue;
+      }
+
+      if (!bucketSamples.has(bucket)) {
+        bucketSamples.set(bucket, []);
+      }
+      bucketSamples.get(bucket).push(value);
+    }
+
+    for (const [counter, value] of Object.entries(sample?.counts ?? {})) {
+      if (!Number.isFinite(value)) {
+        continue;
+      }
+
+      if (!countSamples.has(counter)) {
+        countSamples.set(counter, []);
+      }
+      countSamples.get(counter).push(value);
+    }
+  }
 }
 
 function timeOperation(callback) {
@@ -457,6 +492,9 @@ function buildProfileOptions(rawOptions: any = {}) {
   const stalkAuthorityMode = rawStalkAuthorityMode === undefined
     ? undefined
     : normalizeStalkAuthorityMode(rawStalkAuthorityMode);
+  const simulationProfileLevel = normalizeSimulationProfileLevel(
+    rawOptions.simulationProfileLevel ?? rawOptions.simProfileLevel ?? rawOptions.simProfile
+  );
 
   return {
     botCount,
@@ -466,6 +504,7 @@ function buildProfileOptions(rawOptions: any = {}) {
     stagePreset,
     inputMode,
     stalkAuthorityMode,
+    simulationProfileLevel,
     includePresentation: rawOptions.includePresentation !== false
   };
 }
@@ -487,7 +526,8 @@ export function runArenaPerformanceProfile(rawOptions: any = {}) {
     arenaRadius: environment?.arenaRadius,
     worldBounds: environment?.worldBounds,
     worldProps: environment?.worldProps,
-    stalkAuthorityMode: options.stalkAuthorityMode
+    stalkAuthorityMode: options.stalkAuthorityMode,
+    simulationProfileLevel: options.simulationProfileLevel
   });
   const botControllers = createBotControllers(participants, tuning);
   const initialSnapshot = simulation.getSnapshot();
@@ -514,6 +554,8 @@ export function runArenaPerformanceProfile(rawOptions: any = {}) {
     networkSnapshotBytes: [] as number[],
     fullSnapshotBytes: [] as number[]
   };
+  const simulationProfileBucketSamples = new Map<string, number[]>();
+  const simulationProfileCountSamples = new Map<string, number[]>();
   const inputCoverage = createInputCoverage();
   const diagnostics = createDiagnostics();
   let snapshot: any = initialSnapshot;
@@ -537,6 +579,7 @@ export function runArenaPerformanceProfile(rawOptions: any = {}) {
     });
 
     const stepTiming = timeOperation(() => simulation.step(MATCH_TICK_DURATION, { includeWorldProps: false }));
+    const stepProfileSamples = simulation.drainSimulationProfileSamples();
     snapshot = {
       ...stepTiming.value,
       worldProps: staticWorldProps
@@ -555,6 +598,11 @@ export function runArenaPerformanceProfile(rawOptions: any = {}) {
     metrics.simulationStepMs.push(stepTiming.elapsedMs);
     metrics.presentationSyncMs.push(viewTiming.elapsedMs);
     metrics.localFrameMs.push(inputTiming.elapsedMs + stepTiming.elapsedMs + viewTiming.elapsedMs);
+    recordSimulationProfileSamples(
+      stepProfileSamples,
+      simulationProfileBucketSamples,
+      simulationProfileCountSamples
+    );
 
     const measuredIndex = tick - warmupTicks;
     if (measuredIndex % options.snapshotSampleEvery !== 0) {
@@ -586,6 +634,7 @@ export function runArenaPerformanceProfile(rawOptions: any = {}) {
       measuredTicks,
       tickDurationMs: round(MATCH_TICK_DURATION * 1000),
       snapshotSampleEvery: options.snapshotSampleEvery,
+      simulationProfileLevel: options.simulationProfileLevel,
       includePresentation: options.includePresentation
     },
     metrics: {
@@ -595,7 +644,11 @@ export function runArenaPerformanceProfile(rawOptions: any = {}) {
       localFrame: summarizeMetric(metrics.localFrameMs),
       networkSnapshot: summarizeMetric(metrics.networkSnapshotMs),
       networkJson: summarizeMetric(metrics.networkJsonMs),
-      fullSnapshotJson: summarizeMetric(metrics.fullSnapshotJsonMs)
+      fullSnapshotJson: summarizeMetric(metrics.fullSnapshotJsonMs),
+      simulationProfile: {
+        buckets: summarizeMetricMap(simulationProfileBucketSamples),
+        counts: summarizeMetricMap(simulationProfileCountSamples)
+      }
     },
     inputCoverage,
     diagnostics,

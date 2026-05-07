@@ -5,6 +5,7 @@ const DEFAULT_WIDTH = 1280;
 const DEFAULT_HEIGHT = 720;
 const DEFAULT_DEVICE_SCALE_FACTOR = 1;
 const DEFAULT_SCENE_SAMPLE_EVERY = 10;
+const DEFAULT_SIMULATION_PROFILE_LEVEL = 'off';
 
 function normalizeBrowserProfileMode(value) {
   if (value === 'adventure' || value === 'explorer' || value === 'explore') {
@@ -16,6 +17,19 @@ function normalizeBrowserProfileMode(value) {
   }
 
   return 'arena';
+}
+
+function normalizeSimulationProfileLevel(value) {
+  const normalized = String(value ?? DEFAULT_SIMULATION_PROFILE_LEVEL).toLowerCase().replace(/-/g, '_');
+  if (normalized === 'basic' || normalized === 'coarse' || normalized === '1') {
+    return 'basic';
+  }
+
+  if (normalized === 'detailed' || normalized === 'detail' || normalized === 'full' || normalized === '2') {
+    return 'detailed';
+  }
+
+  return 'off';
 }
 
 function clampInteger(value, fallback, min, max) {
@@ -154,6 +168,9 @@ export function parseBrowserArenaArgs(argv) {
     height: clampInteger(getNumber(args, 'height'), DEFAULT_HEIGHT, 240, 4320),
     deviceScaleFactor: clampNumber(getNumber(args, 'device-scale-factor'), DEFAULT_DEVICE_SCALE_FACTOR, 0.5, 4),
     sceneSampleEvery: clampInteger(getNumber(args, 'scene-sample-every'), DEFAULT_SCENE_SAMPLE_EVERY, 1, 600),
+    simulationProfileLevel: normalizeSimulationProfileLevel(
+      getString(args, 'sim-profile', getString(args, 'sim-profile-level', DEFAULT_SIMULATION_PROFILE_LEVEL))
+    ),
     thresholds: {
       maxRenderP95Ms: getNumber(args, 'max-render-p95-ms'),
       maxFrameP95Ms: getNumber(args, 'max-frame-p95-ms'),
@@ -176,6 +193,44 @@ function getNestedSampleValues(samples, containerKey, key) {
   return samples
     .map((sample) => sample?.[containerKey]?.[key])
     .filter((value) => Number.isFinite(value));
+}
+
+function summarizeProfileBucketSamples(samples, valuePath) {
+  const bucketKeys = new Set<string>();
+  for (const sample of samples) {
+    const values = valuePath(sample);
+    for (const key of Object.keys(values ?? {})) {
+      bucketKeys.add(key);
+    }
+  }
+
+  const summaries = {};
+  for (const key of [...bucketKeys].sort()) {
+    summaries[key] = summarizeMetric(samples
+      .map((sample) => valuePath(sample)?.[key])
+      .filter((value) => Number.isFinite(value)));
+  }
+
+  return summaries;
+}
+
+function summarizeProfileCountSamples(samples, valuePath) {
+  const countKeys = new Set<string>();
+  for (const sample of samples) {
+    const values = valuePath(sample);
+    for (const key of Object.keys(values ?? {})) {
+      countKeys.add(key);
+    }
+  }
+
+  const summaries = {};
+  for (const key of [...countKeys].sort()) {
+    summaries[key] = summarizeCount(samples
+      .map((sample) => valuePath(sample)?.[key])
+      .filter((value) => Number.isFinite(value)));
+  }
+
+  return summaries;
 }
 
 function getEffectiveFps(samples) {
@@ -238,6 +293,7 @@ export function createBrowserArenaProfileResult({ options, samples, finalState, 
       headless: !options.headful,
       gl: options.gl,
       sceneSampleEvery: options.sceneSampleEvery,
+      simulationProfileLevel: options.simulationProfileLevel ?? DEFAULT_SIMULATION_PROFILE_LEVEL,
       viewport: {
         width: options.width,
         height: options.height,
@@ -272,6 +328,12 @@ export function createBrowserArenaProfileResult({ options, samples, finalState, 
     },
     simulationCadence: {
       ticksAdvanced: summarizeCount(getSampleValues(samples, 'ticksAdvanced'))
+    },
+    simulationProfile: {
+      level: options.simulationProfileLevel ?? DEFAULT_SIMULATION_PROFILE_LEVEL,
+      ticks: summarizeCount(getNestedSampleValues(samples, 'simulationProfile', 'ticks')),
+      buckets: summarizeProfileBucketSamples(samples, (sample) => sample?.simulationProfile?.buckets),
+      counts: summarizeProfileCountSamples(samples, (sample) => sample?.simulationProfile?.counts)
     },
     sceneCounts: {
       objects: summarizeCount(getNestedSampleValues(samples, 'sceneCounts', 'objectCount')),
@@ -319,6 +381,58 @@ function formatMs(metric) {
   return `avg ${metric.averageMs} ms · p95 ${metric.p95Ms} ms · max ${metric.maxMs} ms`;
 }
 
+function formatProfileBucketLines(result) {
+  const buckets = result.simulationProfile?.buckets ?? {};
+  const keys = Object.keys(buckets);
+  if (keys.length === 0) {
+    return [];
+  }
+
+  const preferredOrder = [
+    'total',
+    'setup',
+    'input',
+    'worldPropCollision',
+    'worldPropSupport',
+    'powerupCollection',
+    'supportApply',
+    'combatInput',
+    'broadphase',
+    'bodyCollision',
+    'stalks',
+    'stalkPropObstacleQuery',
+    'stalkObstacleFilter',
+    'stalkRopeSim',
+    'damage',
+    'creatures',
+    'snapshot'
+  ];
+  const orderedKeys = [
+    ...preferredOrder.filter((key) => key in buckets),
+    ...keys.filter((key) => !preferredOrder.includes(key)).sort()
+  ];
+
+  const lines = [
+    '',
+    `sim profile (${result.simulationProfile.level}, frame totals):`
+  ];
+  for (const key of orderedKeys) {
+    lines.push(`  ${key.padEnd(22)} ${formatMs(buckets[key])}`);
+  }
+
+  const counts = result.simulationProfile?.counts ?? {};
+  const countKeys = Object.keys(counts);
+  if (countKeys.length > 0) {
+    lines.push('sim profile counts/frame:');
+    for (const key of countKeys.sort()) {
+      const metric = counts[key];
+      lines.push(`  ${key.padEnd(22)} avg ${metric.average} · p95 ${metric.p95} · max ${metric.max}`);
+    }
+  }
+
+  return lines;
+}
+
 export function formatBrowserArenaProfile(result, failures: string[] = []) {
   const modeLabel = result.scenario.mode === 'browser-adventure'
     ? 'Adventure'
@@ -335,7 +449,7 @@ export function formatBrowserArenaProfile(result, failures: string[] = []) {
       : `bots ${result.scenario.botCount}`;
   const lines = [
     `Browser ${modeLabel} profile: ${result.scenario.seconds}s (${result.samples} frames)`,
-    `${stageOrSeed} · ${population} · input ${result.scenario.inputMode ?? 'idle'} · stalk ${result.scenario.stalkAuthority ?? 'default'} · viewport ${result.scenario.viewport.width}x${result.scenario.viewport.height}@${result.scenario.viewport.deviceScaleFactor} · gl.finish ${result.scenario.glFinish ? 'on' : 'off'}`,
+    `${stageOrSeed} · ${population} · input ${result.scenario.inputMode ?? 'idle'} · stalk ${result.scenario.stalkAuthority ?? 'default'} · sim profile ${result.scenario.simulationProfileLevel ?? 'off'} · viewport ${result.scenario.viewport.width}x${result.scenario.viewport.height}@${result.scenario.viewport.deviceScaleFactor} · gl.finish ${result.scenario.glFinish ? 'on' : 'off'}`,
     '',
     `fps:               ${result.frameRate.effectiveFps} effective · interval ${formatMs(result.frameRate.interval)} · >50ms ${result.frameRate.longFramesOver50Ms}`,
     `update:            ${formatMs(result.metrics.update)}`,
@@ -353,6 +467,8 @@ export function formatBrowserArenaProfile(result, failures: string[] = []) {
     `scene meshes:      avg ${result.sceneCounts.meshes.average} · visible avg ${result.sceneCounts.visibleMeshes.average}`,
     `final:             ${result.finalState?.snapshot?.phase ?? 'unknown'} · tick ${result.finalState?.snapshot?.tick ?? 'n/a'} · living ${result.finalState?.snapshot?.livingPlayers ?? 'n/a'} · props ${result.finalState?.snapshot?.worldProps ?? 'n/a'}`
   ];
+
+  lines.push(...formatProfileBucketLines(result));
 
   if (failures.length > 0) {
     lines.push('', 'Performance thresholds failed:');

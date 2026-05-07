@@ -8,7 +8,8 @@ test('arena performance profile reports finite headless frame buckets', () => {
     botCount: 2,
     seconds: 0.2,
     warmupSeconds: 0.05,
-    snapshotSampleEvery: 2
+    snapshotSampleEvery: 2,
+    simulationProfileLevel: 'basic'
   });
 
   assert.equal(profile.scenario.mode, 'arena');
@@ -19,6 +20,8 @@ test('arena performance profile reports finite headless frame buckets', () => {
   assert(profile.metrics.localFrame.samples > 0);
   assert(Number.isFinite(profile.metrics.localFrame.averageMs));
   assert(Number.isFinite(profile.metrics.simulationStep.averageMs));
+  assert.equal(profile.scenario.simulationProfileLevel, 'basic');
+  assert(profile.metrics.simulationProfile.buckets['total'].samples > 0);
   assert(Number.isFinite(profile.metrics.presentationSync.averageMs));
   assert(profile.byteSizes.fullSnapshot.averageBytes > profile.byteSizes.networkSnapshot.averageBytes);
   assert.equal(profile.diagnostics.validationFailureCount, 0);

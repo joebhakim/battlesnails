@@ -3,6 +3,20 @@ import { ProfileArenaSession, normalizeProfileArenaOptions } from './ProfileAren
 import { TestSession } from './TestSession.js';
 
 const DEFAULT_MAX_SAMPLES = 60000;
+const DEFAULT_SIMULATION_PROFILE_LEVEL = 'off';
+
+function normalizeSimulationProfileLevel(value: any = DEFAULT_SIMULATION_PROFILE_LEVEL) {
+  const normalized = String(value ?? DEFAULT_SIMULATION_PROFILE_LEVEL).toLowerCase().replace(/-/g, '_');
+  if (normalized === 'basic' || normalized === 'coarse' || normalized === '1') {
+    return 'basic';
+  }
+
+  if (normalized === 'detailed' || normalized === 'detail' || normalized === 'full' || normalized === '2') {
+    return 'detailed';
+  }
+
+  return 'off';
+}
 
 function createVolatileStorage() {
   const values = new Map<string, string>();
@@ -54,6 +68,49 @@ function getRendererStats(renderer) {
   };
 }
 
+function aggregateSimulationProfileSamples(profileSamples: any[] = []) {
+  if (profileSamples.length === 0) {
+    return null;
+  }
+
+  const buckets = {};
+  const counts = {};
+  for (const sample of profileSamples) {
+    for (const [bucket, value] of Object.entries(sample?.buckets ?? {})) {
+      if (Number.isFinite(value)) {
+        buckets[bucket] = (buckets[bucket] ?? 0) + value;
+      }
+    }
+    for (const [counter, value] of Object.entries(sample?.counts ?? {})) {
+      if (Number.isFinite(value)) {
+        counts[counter] = (counts[counter] ?? 0) + value;
+      }
+    }
+  }
+
+  return {
+    level: profileSamples[profileSamples.length - 1]?.level ?? null,
+    ticks: profileSamples.length,
+    buckets,
+    counts
+  };
+}
+
+function setSessionSimulationProfileLevel(session, level) {
+  const simulation = session?.simulation;
+  if (!simulation?.setSimulationProfileLevel) {
+    return;
+  }
+
+  if (simulation.getSimulationProfileLevel?.() !== level) {
+    simulation.setSimulationProfileLevel(level);
+  }
+}
+
+function drainSessionSimulationProfileSamples(session) {
+  return session?.simulation?.drainSimulationProfileSamples?.() ?? [];
+}
+
 function getProfileState(game) {
   const snapshot = game.currentSession?.getSnapshot?.() ?? null;
   const renderer = game.renderer?.renderer ?? null;
@@ -85,6 +142,7 @@ export function installBrowserProfileHarness(game) {
   let latestViewSyncMs = 0;
   let latestTicksAdvanced = 0;
   let latestDeltaSeconds = 0;
+  let latestSimulationProfile: any = null;
   let lastRenderTimestampMs = null;
   let latestSceneCounts = countSceneObjects(game.scene?.scene);
   let frameIndex = 0;
@@ -104,6 +162,7 @@ export function installBrowserProfileHarness(game) {
     latestViewSyncMs = 0;
     latestTicksAdvanced = 0;
     latestDeltaSeconds = 0;
+    latestSimulationProfile = null;
     lastRenderTimestampMs = null;
     frameIndex = 0;
   }
@@ -209,7 +268,8 @@ export function installBrowserProfileHarness(game) {
     const options = {
       glFinish: rawOptions.glFinish !== false,
       maxSamples: Math.max(1, Math.floor(Number(rawOptions.maxSamples) || DEFAULT_MAX_SAMPLES)),
-      sceneSampleEvery: Math.max(1, Math.floor(Number(rawOptions.sceneSampleEvery) || 10))
+      sceneSampleEvery: Math.max(1, Math.floor(Number(rawOptions.sceneSampleEvery) || 10)),
+      simulationProfileLevel: normalizeSimulationProfileLevel(rawOptions.simulationProfileLevel ?? rawOptions.simProfileLevel)
     };
     const originalUpdate = game.update;
     const originalRender = game.renderer.render;
@@ -217,6 +277,10 @@ export function installBrowserProfileHarness(game) {
     game.update = function profileUpdate(delta) {
       const start = performance.now();
       const session = game.currentSession;
+      setSessionSimulationProfileLevel(session, options.simulationProfileLevel);
+      if (options.simulationProfileLevel !== 'off') {
+        drainSessionSimulationProfileSamples(session);
+      }
       const tickBefore = session?.getSnapshot?.()?.tick ?? null;
       let sessionUpdateMs = 0;
       let restoreSessionUpdate: any = null;
@@ -249,6 +313,9 @@ export function installBrowserProfileHarness(game) {
           ? Math.max(0, tickAfter - tickBefore)
           : 0;
         latestDeltaSeconds = delta;
+        latestSimulationProfile = options.simulationProfileLevel === 'off'
+          ? null
+          : aggregateSimulationProfileSamples(drainSessionSimulationProfileSamples(session));
       }
     };
 
@@ -285,6 +352,7 @@ export function installBrowserProfileHarness(game) {
         finishOnlyMs: renderEnd - renderCpuEnd,
         gameFrameMs: latestUpdateMs + (renderEnd - renderStart),
         rafIntervalMs,
+        simulationProfile: latestSimulationProfile,
         rendererStats: getRendererStats(renderer),
         sceneCounts: latestSceneCounts
       });
@@ -328,7 +396,10 @@ export function installBrowserProfileHarness(game) {
       };
     },
     startTest(rawOptions: any = {}) {
-      const session = new TestSession({ storage: createVolatileStorage() });
+      const session = new TestSession({
+        storage: createVolatileStorage(),
+        stalkAuthority: rawOptions.stalkAuthority ?? rawOptions.stalkAuthorityMode
+      });
       const nextTuning = {
         ...session.getTuningConfig(),
         terrainPreset: rawOptions.stagePreset ?? rawOptions.terrainPreset ?? session.getTuningConfig().terrainPreset,
@@ -341,7 +412,8 @@ export function installBrowserProfileHarness(game) {
         options: {
           stagePreset: nextTuning.terrainPreset,
           botCount: nextTuning.botCount,
-          arenaRadius: nextTuning.arenaRadius
+          arenaRadius: nextTuning.arenaRadius,
+          stalkAuthority: rawOptions.stalkAuthority ?? rawOptions.stalkAuthorityMode ?? null
         },
         state: getProfileState(game)
       };

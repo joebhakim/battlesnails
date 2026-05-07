@@ -122,7 +122,8 @@ async function runBrowserArenaProfile(options) {
           ? profile.startTest({
             botCount: profileOptions.botCount,
             stagePreset: profileOptions.stagePreset,
-            arenaRadius: profileOptions.arenaRadius
+            arenaRadius: profileOptions.arenaRadius,
+            stalkAuthority: profileOptions.stalkAuthority
           })
           : profile.startArena({
           botCount: profileOptions.botCount,
@@ -134,7 +135,8 @@ async function runBrowserArenaProfile(options) {
       });
       profile.installFrameProfiler({
         glFinish: profileOptions.glFinish,
-        sceneSampleEvery: profileOptions.sceneSampleEvery
+        sceneSampleEvery: profileOptions.sceneSampleEvery,
+        simulationProfileLevel: profileOptions.simulationProfileLevel
       });
       profile.resetSamples();
       return result;
@@ -148,7 +150,8 @@ async function runBrowserArenaProfile(options) {
       inputMode: options.inputMode,
       stalkAuthority: options.stalkAuthority,
       glFinish: options.glFinish,
-      sceneSampleEvery: options.sceneSampleEvery
+      sceneSampleEvery: options.sceneSampleEvery,
+      simulationProfileLevel: options.simulationProfileLevel
     });
 
     await delay(options.warmupSeconds * 1000);

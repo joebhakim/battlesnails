@@ -49,6 +49,44 @@ function formatKb(metric) {
   return `avg ${averageKb} KB · p95 ${p95Kb} KB · max ${maxKb} KB`;
 }
 
+function printSimulationProfile(metrics) {
+  const buckets = metrics.simulationProfile?.buckets ?? {};
+  const keys = Object.keys(buckets);
+  if (keys.length === 0) {
+    return;
+  }
+
+  const preferredOrder = [
+    'total',
+    'setup',
+    'input',
+    'worldPropCollision',
+    'worldPropSupport',
+    'powerupCollection',
+    'supportApply',
+    'combatInput',
+    'broadphase',
+    'bodyCollision',
+    'stalks',
+    'stalkPropObstacleQuery',
+    'stalkObstacleFilter',
+    'stalkRopeSim',
+    'damage',
+    'creatures',
+    'snapshot'
+  ];
+  const orderedKeys = [
+    ...preferredOrder.filter((key) => key in buckets),
+    ...keys.filter((key) => !preferredOrder.includes(key)).sort()
+  ];
+
+  console.log('');
+  console.log('simulation profile buckets:');
+  for (const key of orderedKeys) {
+    console.log(`  ${key.padEnd(22)} ${formatMs(buckets[key])}`);
+  }
+}
+
 function checkThreshold(failures, label, actual, limit) {
   if (!Number.isFinite(limit)) {
     return;
@@ -118,7 +156,7 @@ function evaluateThresholds(result, args) {
 function printHumanSummary(result) {
   const { scenario, metrics, byteSizes, presentationObjects, finalState, inputCoverage, diagnostics } = result;
   console.log(`Arena performance profile: ${scenario.botCount} bots, ${scenario.seconds}s (${scenario.measuredTicks} measured ticks)`);
-  console.log(`stage ${scenario.stagePreset} · input ${scenario.inputMode} · stalk ${scenario.stalkAuthorityMode ?? 'rope'} · presentation ${scenario.includePresentation ? 'on' : 'off'} · sample every ${scenario.snapshotSampleEvery} ticks`);
+  console.log(`stage ${scenario.stagePreset} · input ${scenario.inputMode} · stalk ${scenario.stalkAuthorityMode ?? 'rope'} · sim profile ${scenario.simulationProfileLevel ?? 'off'} · presentation ${scenario.includePresentation ? 'on' : 'off'} · sample every ${scenario.snapshotSampleEvery} ticks`);
   console.log('');
   console.log(`local frame:       ${formatMs(metrics.localFrame)}`);
   console.log(`input:             ${formatMs(metrics.input)}`);
@@ -130,6 +168,7 @@ function printHumanSummary(result) {
     console.log('');
     console.log(`presentation objects: ${presentationObjects.actors} actors · ${presentationObjects.meshCount} meshes · ${presentationObjects.visibleMeshCount} visible meshes`);
   }
+  printSimulationProfile(metrics);
   if (inputCoverage) {
     console.log('');
     console.log(`input coverage: movement ${inputCoverage.movementTicks}/${inputCoverage.totalTicks} ticks · lock-on ${inputCoverage.lockOnTicks} · stalk ${inputCoverage.stalkHeldTicks} · jumps ${inputCoverage.jumpPresses} · reach ${inputCoverage.reachTicks}`);
@@ -153,6 +192,7 @@ const result = runArenaPerformanceProfile({
   stagePreset: getString(args, 'stage'),
   inputMode: getString(args, 'input'),
   stalkAuthority: getString(args, 'stalk-authority'),
+  simulationProfileLevel: getString(args, 'sim-profile', getString(args, 'sim-profile-level')),
   includePresentation: !getBoolean(args, 'no-presentation')
 });
 const failures = evaluateThresholds(result, args);

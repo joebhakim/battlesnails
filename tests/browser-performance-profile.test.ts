@@ -51,6 +51,7 @@ test('browser arena profile arguments default to gl.finish and stable viewport',
   assert.equal(options.width, 1280);
   assert.equal(options.height, 720);
   assert.equal(options.deviceScaleFactor, 1);
+  assert.equal(parseBrowserArenaArgs(['--sim-profile', 'detailed']).simulationProfileLevel, 'detailed');
 });
 
 test('browser arena profile report summarizes draw and frame metrics', () => {
@@ -93,6 +94,48 @@ test('browser arena profile report summarizes draw and frame metrics', () => {
   assert.equal(result.rendererStats.drawCalls.max, 200);
   assert.equal(result.rendererStats.triangles.max, 50000);
   assert.equal(result.finalState.snapshot.tick, 120);
+});
+
+test('browser arena profile report summarizes optional simulation buckets', () => {
+  const result = createBrowserArenaProfileResult({
+    options: {
+      botCount: 2,
+      stagePreset: 'plane',
+      seconds: 1,
+      warmupSeconds: 0.1,
+      glFinish: false,
+      gl: 'default',
+      width: 1280,
+      height: 720,
+      deviceScaleFactor: 1,
+      simulationProfileLevel: 'detailed'
+    },
+    samples: [
+      createSample(1, {
+        simulationProfile: {
+          level: 'detailed',
+          ticks: 1,
+          buckets: { total: 2, input: 0.8, worldPropSupport: 0.4 },
+          counts: { worldPropPhysicsFullPlayers: 3 }
+        }
+      }),
+      createSample(2, {
+        simulationProfile: {
+          level: 'detailed',
+          ticks: 1,
+          buckets: { total: 3, input: 1.2, worldPropSupport: 0.6 },
+          counts: { worldPropPhysicsFullPlayers: 4 }
+        }
+      })
+    ],
+    finalState: { snapshot: { phase: 'running', tick: 60 } },
+    startedFromUrl: 'http://127.0.0.1:5173/?profile=1'
+  });
+
+  assert.equal(result.scenario.simulationProfileLevel, 'detailed');
+  assert.equal(result.simulationProfile.buckets['total'].p95Ms, 3);
+  assert.equal(result.simulationProfile.buckets['worldPropSupport'].averageMs, 0.5);
+  assert.equal(result.simulationProfile.counts['worldPropPhysicsFullPlayers'].max, 4);
 });
 
 test('browser arena profile thresholds report failures', () => {

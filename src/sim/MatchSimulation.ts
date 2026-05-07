@@ -111,6 +111,7 @@ import {
 import { clampPointToWorldBounds } from '../world/WorldBounds.js';
 
 export type StalkAuthorityMode = 'rope' | 'analytic' | 'human_rope';
+export type SimulationProfileLevel = 'off' | 'basic' | 'detailed';
 
 function isTruthyEnvValue(value) {
   return value === '1' || value === 'true' || value === 'on' || value === 'yes';
@@ -158,8 +159,24 @@ const PLAYER_SPATIAL_CELL_SIZE = 16;
 const STALK_OBSTACLE_NODE_BOUNDS_MARGIN = 1.05;
 const STALK_FULL_FIDELITY_HUMAN_DISTANCE = 8;
 const STALK_FULL_FIDELITY_BOTS_PER_HUMAN = 2;
+const WORLD_PROP_FULL_PHYSICS_HUMAN_DISTANCE = 18;
+const WORLD_PROP_FULL_PHYSICS_BOTS_PER_HUMAN = 5;
+const WORLD_PROP_REDUCED_PHYSICS_INTERVAL = 6;
 const WORLD_UP = new THREE.Vector3(0, 1, 0);
 const STALK_FORWARD = new THREE.Vector3(0, 0, 1);
+
+export function normalizeSimulationProfileLevel(value: any = 'off'): SimulationProfileLevel {
+  const normalized = String(value ?? 'off').toLowerCase().replace(/-/g, '_');
+  if (normalized === 'basic' || normalized === 'coarse' || normalized === '1') {
+    return 'basic';
+  }
+
+  if (normalized === 'detailed' || normalized === 'detail' || normalized === 'full' || normalized === '2') {
+    return 'detailed';
+  }
+
+  return 'off';
+}
 
 export function normalizeStalkAuthorityMode(value: any = null): StalkAuthorityMode {
   const normalized = String(value ?? '').toLowerCase().replace(/-/g, '_');
@@ -283,6 +300,57 @@ function createStalkFidelityMap(players) {
     }
 
     fidelity.set(player.slot, fullBotSlots.has(player.slot) ? 'full' : 'terrain');
+  }
+
+  return fidelity;
+}
+
+function createWorldPropPhysicsFidelityMap(players) {
+  const livingHumans = players.filter((player) => (
+    player.connected &&
+    player.health > 0 &&
+    !player.fixtureKind &&
+    player.profileName !== 'bot'
+  ));
+  const fullDistanceSquared = WORLD_PROP_FULL_PHYSICS_HUMAN_DISTANCE * WORLD_PROP_FULL_PHYSICS_HUMAN_DISTANCE;
+  const fullBotSlots = new Set();
+
+  for (const human of livingHumans) {
+    const nearestBots = players
+      .filter((player) => (
+        player.connected &&
+        player.health > 0 &&
+        !player.fixtureKind &&
+        player.profileName === 'bot'
+      ))
+      .map((bot) => ({
+        bot,
+        distanceSquared: bot.position.distanceToSquared(human.position)
+      }))
+      .filter((entry) => entry.distanceSquared <= fullDistanceSquared)
+      .sort((left, right) => left.distanceSquared - right.distanceSquared)
+      .slice(0, WORLD_PROP_FULL_PHYSICS_BOTS_PER_HUMAN);
+
+    for (const entry of nearestBots) {
+      fullBotSlots.add(entry.bot.slot);
+    }
+  }
+
+  const fidelity = new Map();
+
+  for (const player of players) {
+    if (
+      !player.connected ||
+      player.health <= 0 ||
+      player.fixtureKind ||
+      player.profileName !== 'bot' ||
+      livingHumans.length === 0
+    ) {
+      fidelity.set(player.slot, 'full');
+      continue;
+    }
+
+    fidelity.set(player.slot, fullBotSlots.has(player.slot) ? 'full' : 'reduced');
   }
 
   return fidelity;
@@ -424,6 +492,9 @@ export class MatchSimulation {
   declare phase: any;
   declare players: Map<number, any>;
   declare profileTemplates: SimulationProfiles;
+  declare activeStepProfile: any;
+  declare simulationProfileLevel: SimulationProfileLevel;
+  declare simulationProfileSamples: any[];
   declare stalkAuthorityMode: StalkAuthorityMode;
   declare terrainConfig: TerrainConfig;
   declare tick: any;
@@ -445,6 +516,11 @@ export class MatchSimulation {
 
     this.tickRate = options.tickRate ?? MATCH_TICK_RATE;
     this.tickDuration = 1 / this.tickRate;
+    this.simulationProfileLevel = normalizeSimulationProfileLevel(
+      options.simulationProfileLevel ?? options.simProfileLevel ?? options.profileLevel
+    );
+    this.simulationProfileSamples = [];
+    this.activeStepProfile = null;
     this.stalkAuthorityMode = normalizeStalkAuthorityMode(
       options.stalkAuthorityMode ?? options.stalkAuthority ?? resolveDefaultStalkAuthorityMode()
     );
@@ -491,6 +567,61 @@ export class MatchSimulation {
       );
       this.players.set(player.slot, player);
       this.inputs.set(player.slot, { ...DEFAULT_INPUT });
+    }
+  }
+
+  setSimulationProfileLevel(level: any = 'off') {
+    this.simulationProfileLevel = normalizeSimulationProfileLevel(level);
+    this.simulationProfileSamples = [];
+    this.activeStepProfile = null;
+  }
+
+  setProfileLevel(level: any = 'off') {
+    this.setSimulationProfileLevel(level);
+  }
+
+  getSimulationProfileLevel() {
+    return this.simulationProfileLevel;
+  }
+
+  drainSimulationProfileSamples() {
+    if (this.simulationProfileSamples.length === 0) {
+      return [];
+    }
+
+    const samples = this.simulationProfileSamples;
+    this.simulationProfileSamples = [];
+    return samples;
+  }
+
+  addProfileBucket(bucket, elapsedMs) {
+    const profile = this.activeStepProfile;
+    if (!profile || !Number.isFinite(elapsedMs)) {
+      return;
+    }
+
+    profile.buckets[bucket] = (profile.buckets[bucket] ?? 0) + elapsedMs;
+  }
+
+  addProfileCount(counter, amount = 1) {
+    const profile = this.activeStepProfile;
+    if (!profile || !Number.isFinite(amount)) {
+      return;
+    }
+
+    profile.counts[counter] = (profile.counts[counter] ?? 0) + amount;
+  }
+
+  timeDetailedProfileBucket(bucket, callback) {
+    if (this.activeStepProfile?.level !== 'detailed') {
+      return callback();
+    }
+
+    const start = performance.now();
+    try {
+      return callback();
+    } finally {
+      this.addProfileBucket(bucket, performance.now() - start);
     }
   }
 
@@ -660,151 +791,192 @@ export class MatchSimulation {
   }
 
   step(delta = this.tickDuration, snapshotOptions: any = {}) {
-    if (this.phase !== 'running') {
+    const profileLevel = this.simulationProfileLevel;
+    const profileEnabled = profileLevel !== 'off';
+    const profile: any = profileEnabled
+      ? { level: profileLevel, tick: this.tick, buckets: {}, counts: {} }
+      : null;
+    const profileStart = profileEnabled ? performance.now() : 0;
+    let profileMarker = profileStart;
+    const markProfileBucket = profileEnabled
+      ? (bucket) => {
+        const now = performance.now();
+        profile.buckets[bucket] = (profile.buckets[bucket] ?? 0) + (now - profileMarker);
+        profileMarker = now;
+      }
+      : null;
+
+    this.activeStepProfile = profile?.level === 'detailed' ? profile : null;
+
+    try {
+      if (this.phase !== 'running') {
+        this.events = [];
+        const snapshot = this.getSnapshot(snapshotOptions);
+        markProfileBucket?.('snapshot');
+        return snapshot;
+      }
+
       this.events = [];
-      return this.getSnapshot(snapshotOptions);
-    }
+      const orderedPlayers = Array.from(this.players.values()).sort((left, right) => left.slot - right.slot);
+      const worldPropPhysicsFidelity = createWorldPropPhysicsFidelityMap(orderedPlayers);
 
-    this.events = [];
-    const orderedPlayers = Array.from(this.players.values()).sort((left, right) => left.slot - right.slot);
+      for (const player of orderedPlayers) {
+        player.previousPosition.copy(player.position);
+        player.previousEyeTipPosition.copy(player.eyeTipPosition);
+        player.impactPower = 0;
 
-    for (const player of orderedPlayers) {
-      player.previousPosition.copy(player.position);
-      player.previousEyeTipPosition.copy(player.eyeTipPosition);
-      player.impactPower = 0;
-
-      for (const [, stalk] of getStalkEntries(player)) {
-        stalk.previousTipPosition.copy(stalk.tipPosition);
-        stalk.impactPower = 0;
-      }
-    }
-
-    for (const player of orderedPlayers) {
-      if (!player.connected || player.health <= 0) {
-        player.onTrail = false;
-        player.controlMode = player.fixtureKind ? 'static' : 'idle';
         for (const [, stalk] of getStalkEntries(player)) {
-          stalk.held = false;
-        }
-        continue;
-      }
-
-      if (player.fixtureKind) {
-        player.controlMode = 'static';
-        player.controlIntensity = 0;
-        player.lockOnHeld = false;
-        continue;
-      }
-
-      const target = this.findPreferredTarget(player, {
-        preferHumans: player.profileName === 'bot'
-      });
-      const input = this.inputs.get(player.slot) ?? DEFAULT_INPUT;
-      this.applyInput(player, target, input, delta);
-    }
-
-    const playerSpatialIndex = createPlayerSpatialIndex(orderedPlayers);
-    const stalkFidelity = createStalkFidelityMap(orderedPlayers);
-    const maximumBodyRadius = getMaximumPlayerBodyRadius(orderedPlayers);
-    const resolvedBodyPairs = new Set();
-    for (let leftIndex = 0; leftIndex < orderedPlayers.length; leftIndex += 1) {
-      const player = orderedPlayers[leftIndex];
-      if (!player.connected || player.health <= 0) {
-        continue;
-      }
-
-      const bodyCandidates = queryPlayerSpatialIndex(
-        playerSpatialIndex,
-        player.position,
-        player.bodyRadius + maximumBodyRadius
-      );
-      for (const candidate of bodyCandidates) {
-        if (candidate.slot === player.slot) {
-          continue;
-        }
-
-        const leftSlot = Math.min(player.slot, candidate.slot);
-        const rightSlot = Math.max(player.slot, candidate.slot);
-        const pairKey = `${leftSlot}:${rightSlot}`;
-        if (resolvedBodyPairs.has(pairKey)) {
-          continue;
-        }
-
-        resolvedBodyPairs.add(pairKey);
-        this.resolveBodyCollision(player, candidate);
-      }
-    }
-
-    for (const player of orderedPlayers) {
-      if (!player.connected) {
-        player.onTrail = false;
-        continue;
-      }
-
-      if (player.fixtureKind) {
-        player.bodyVelocity.copy(player.position).sub(player.previousPosition).divideScalar(Math.max(delta, 0.0001));
-        player.onTrail = false;
-        continue;
-      }
-
-      if (player.health > 0) {
-        this.depositTrailForPlayer(player);
-      } else {
-        player.onTrail = false;
-        for (const [, stalk] of getStalkEntries(player)) {
-          stalk.held = false;
+          stalk.previousTipPosition.copy(stalk.tipPosition);
           stalk.impactPower = 0;
         }
       }
+      markProfileBucket?.('setup');
 
-      const fidelity = stalkFidelity.get(player.slot) ?? 'full';
-      const analyticStalkAuthority = this.isPlayerAnalyticStalkAuthority(player);
-      const needsFullStalkObstacles = !analyticStalkAuthority && fidelity === 'full';
-      const nearbyBodyPlayers = needsFullStalkObstacles
-        ? queryPlayerSpatialIndex(
-          playerSpatialIndex,
-          player.position,
-          getStalkObstacleBroadphaseRadius(player) + maximumBodyRadius
-        )
-        : [];
-      const playerBodyObstacles = needsFullStalkObstacles ? createBodyObstacles(nearbyBodyPlayers) : [];
-      const stalkPropObstacles = needsFullStalkObstacles
-        ? createWorldPropObstacles(
-          this.getNearbyWorldProps(player.position, getStalkObstacleBroadphaseRadius(player))
-        )
-        : [];
-      this.updateStalkRopes(player, delta, [
-        ...playerBodyObstacles,
-        ...stalkPropObstacles
-      ], { fidelity, analyticStalkAuthority });
-      player.bodyVelocity.copy(player.position).sub(player.previousPosition).divideScalar(Math.max(delta, 0.0001));
-      updateCompositeTipState(player, delta);
-      player.onTrail = player.health > 0 && this.isPlayerOnWetTrail(player);
-    }
-
-    for (const attacker of orderedPlayers) {
-      if (!attacker.connected || attacker.health <= 0) {
-        continue;
-      }
-
-      const targetCandidates = queryPlayerSpatialIndex(
-        playerSpatialIndex,
-        attacker.position,
-        getStalkObstacleBroadphaseRadius(attacker) + maximumBodyRadius + 0.5
-      );
-      for (const target of targetCandidates) {
-        if (attacker.slot === target.slot) {
+      for (const player of orderedPlayers) {
+        if (!player.connected || player.health <= 0) {
+          player.onTrail = false;
+          player.controlMode = player.fixtureKind ? 'static' : 'idle';
+          for (const [, stalk] of getStalkEntries(player)) {
+            stalk.held = false;
+          }
           continue;
         }
 
-        this.resolveImpact(attacker, target, delta);
+        if (player.fixtureKind) {
+          player.controlMode = 'static';
+          player.controlIntensity = 0;
+          player.lockOnHeld = false;
+          continue;
+        }
+
+        const target = this.findPreferredTarget(player, {
+          preferHumans: player.profileName === 'bot'
+        });
+        const input = this.inputs.get(player.slot) ?? DEFAULT_INPUT;
+        this.applyInput(player, target, input, delta, {
+          worldPropPhysics: worldPropPhysicsFidelity.get(player.slot) ?? 'full'
+        });
+      }
+      markProfileBucket?.('input');
+
+      const playerSpatialIndex = createPlayerSpatialIndex(orderedPlayers);
+      const stalkFidelity = createStalkFidelityMap(orderedPlayers);
+      const maximumBodyRadius = getMaximumPlayerBodyRadius(orderedPlayers);
+      markProfileBucket?.('broadphase');
+
+      const resolvedBodyPairs = new Set();
+      for (let leftIndex = 0; leftIndex < orderedPlayers.length; leftIndex += 1) {
+        const player = orderedPlayers[leftIndex];
+        if (!player.connected || player.health <= 0) {
+          continue;
+        }
+
+        const bodyCandidates = queryPlayerSpatialIndex(
+          playerSpatialIndex,
+          player.position,
+          player.bodyRadius + maximumBodyRadius
+        );
+        for (const candidate of bodyCandidates) {
+          if (candidate.slot === player.slot) {
+            continue;
+          }
+
+          const leftSlot = Math.min(player.slot, candidate.slot);
+          const rightSlot = Math.max(player.slot, candidate.slot);
+          const pairKey = `${leftSlot}:${rightSlot}`;
+          if (resolvedBodyPairs.has(pairKey)) {
+            continue;
+          }
+
+          resolvedBodyPairs.add(pairKey);
+          this.resolveBodyCollision(player, candidate);
+        }
+      }
+      markProfileBucket?.('bodyCollision');
+
+      for (const player of orderedPlayers) {
+        if (!player.connected) {
+          player.onTrail = false;
+          continue;
+        }
+
+        if (player.fixtureKind) {
+          player.bodyVelocity.copy(player.position).sub(player.previousPosition).divideScalar(Math.max(delta, 0.0001));
+          player.onTrail = false;
+          continue;
+        }
+
+        if (player.health > 0) {
+          this.depositTrailForPlayer(player);
+        } else {
+          player.onTrail = false;
+          for (const [, stalk] of getStalkEntries(player)) {
+            stalk.held = false;
+            stalk.impactPower = 0;
+          }
+        }
+
+        const fidelity = stalkFidelity.get(player.slot) ?? 'full';
+        const analyticStalkAuthority = this.isPlayerAnalyticStalkAuthority(player);
+        const needsFullStalkObstacles = !analyticStalkAuthority && fidelity === 'full';
+        const nearbyBodyPlayers = needsFullStalkObstacles
+          ? queryPlayerSpatialIndex(
+            playerSpatialIndex,
+            player.position,
+            getStalkObstacleBroadphaseRadius(player) + maximumBodyRadius
+          )
+          : [];
+        const playerBodyObstacles = needsFullStalkObstacles ? createBodyObstacles(nearbyBodyPlayers) : [];
+        const stalkPropObstacles = needsFullStalkObstacles
+          ? this.timeDetailedProfileBucket('stalkPropObstacleQuery', () => createWorldPropObstacles(
+            this.getNearbyWorldProps(player.position, getStalkObstacleBroadphaseRadius(player))
+          ))
+          : [];
+        this.updateStalkRopes(player, delta, [
+          ...playerBodyObstacles,
+          ...stalkPropObstacles
+        ], { fidelity, analyticStalkAuthority });
+        player.bodyVelocity.copy(player.position).sub(player.previousPosition).divideScalar(Math.max(delta, 0.0001));
+        updateCompositeTipState(player, delta);
+        player.onTrail = player.health > 0 && this.isPlayerOnWetTrail(player);
+      }
+      markProfileBucket?.('stalks');
+
+      for (const attacker of orderedPlayers) {
+        if (!attacker.connected || attacker.health <= 0) {
+          continue;
+        }
+
+        const targetCandidates = queryPlayerSpatialIndex(
+          playerSpatialIndex,
+          attacker.position,
+          getStalkObstacleBroadphaseRadius(attacker) + maximumBodyRadius + 0.5
+        );
+        for (const target of targetCandidates) {
+          if (attacker.slot === target.slot) {
+            continue;
+          }
+
+          this.resolveImpact(attacker, target, delta);
+        }
+      }
+      markProfileBucket?.('damage');
+
+      this.updateCreatures(delta);
+      this.evaluateEndState();
+      this.tick += 1;
+      markProfileBucket?.('creatures');
+
+      const snapshot = this.getSnapshot(snapshotOptions);
+      markProfileBucket?.('snapshot');
+      return snapshot;
+    } finally {
+      this.activeStepProfile = null;
+      if (profileEnabled) {
+        profile.buckets.total = performance.now() - profileStart;
+        this.simulationProfileSamples.push(profile);
       }
     }
-
-    this.updateCreatures(delta);
-    this.evaluateEndState();
-    this.tick += 1;
-    return this.getSnapshot(snapshotOptions);
   }
 
   endMatch(winnerSlot, reason) {
@@ -831,7 +1003,7 @@ export class MatchSimulation {
     }
   }
 
-  applyInput(player, target, input, delta) {
+  applyInput(player, target, input, delta, options: any = {}) {
     const normalizedInput = normalizeProtocolPlayerInput(input);
     const movement = new THREE.Vector3(normalizedInput.moveX, 0, normalizedInput.moveZ);
     if (movement.lengthSq() > 1) {
@@ -846,11 +1018,33 @@ export class MatchSimulation {
       (this.isPlayerOnWetTrail(player) ? this.trailSpeedMultiplier : 1);
     player.position.addScaledVector(movement, speed * delta);
     this.clampPlanarPosition(player);
-    const propContacts = this.resolveWorldPropCollision(player);
-    this.collectNearbyPowerups(player);
+    const worldPropPhysics = options.worldPropPhysics ?? 'full';
+    const runWorldPropPhysics = worldPropPhysics === 'full' ||
+      ((this.tick + player.slot) % WORLD_PROP_REDUCED_PHYSICS_INTERVAL === 0);
+    if (worldPropPhysics === 'full') {
+      this.addProfileCount('worldPropPhysicsFullPlayers');
+    } else if (runWorldPropPhysics) {
+      this.addProfileCount('worldPropPhysicsReducedRuns');
+    } else {
+      this.addProfileCount('worldPropPhysicsReducedSkips');
+    }
+
+    const propContacts = runWorldPropPhysics
+      ? this.timeDetailedProfileBucket('worldPropCollision', () => this.resolveWorldPropCollision(player))
+      : [];
+    if (runWorldPropPhysics) {
+      this.timeDetailedProfileBucket('powerupCollection', () => this.collectNearbyPowerups(player));
+    }
 
     const terrainHeight = getPlayerGroundHeight(player, this.terrainConfig);
-    const support = this.getBestWorldSupport(player, movement, speed, delta, propContacts);
+    const support = this.timeDetailedProfileBucket('worldPropSupport', () => this.getBestWorldSupport(
+      player,
+      movement,
+      speed,
+      delta,
+      propContacts,
+      { includeWorldProps: runWorldPropPhysics }
+    ));
     const supportHeight = Math.max(terrainHeight, support?.height ?? terrainHeight);
 
     const startedJump = normalizedInput.jumpPressed && player.grounded;
@@ -864,7 +1058,10 @@ export class MatchSimulation {
     }
 
     if (!startedJump) {
-      const useTerrainGrounding = this.applySupport(player, support, terrainHeight, speed, delta);
+      const useTerrainGrounding = this.timeDetailedProfileBucket(
+        'supportApply',
+        () => this.applySupport(player, support, terrainHeight, speed, delta)
+      );
 
       if (useTerrainGrounding) {
         if (player.grounded) {
@@ -918,7 +1115,7 @@ export class MatchSimulation {
       this.resolveWorldPropInteraction(player);
     }
 
-    this.applyCombatInput(player, normalizedInput, delta);
+    this.timeDetailedProfileBucket('combatInput', () => this.applyCombatInput(player, normalizedInput, delta));
   }
 
   applyCombatInput(player, input, delta) {
@@ -983,14 +1180,14 @@ export class MatchSimulation {
         stalk.rootOffset
       );
       const rootWorld = getStalkRootWorldPosition(player.position, player.rotationY, stalk.rootOffset);
-      const stalkCollisionObstacles = filterStalkCollisionObstacles(
+      const stalkCollisionObstacles = this.timeDetailedProfileBucket('stalkObstacleFilter', () => filterStalkCollisionObstacles(
         stalk,
         rootWorld,
         goalWorld,
         fullFidelity ? collisionBodyObstacles : []
-      );
+      ));
 
-      simulateStalkRope({
+      this.timeDetailedProfileBucket('stalkRopeSim', () => simulateStalkRope({
         nodes: stalk.nodes,
         previousNodes: stalk.previousNodes,
         incidentNodes: stalk.incidentNodes,
@@ -1011,7 +1208,7 @@ export class MatchSimulation {
           includeSegmentMidpoints: fullFidelity,
           iterations: fullFidelity ? undefined : 0
         }
-      });
+      }));
 
       stalk.tipPosition.copy(getTipWorldPosition(stalk.nodes));
       if (delta > 0) {
@@ -1050,7 +1247,7 @@ export class MatchSimulation {
     return isCircleOnTrail(this.wetTrailCells, player.position, contactRadius, this.trailCellSize);
   }
 
-  getBestWorldSupport(player, movement, speed, delta, contacts = []) {
+  getBestWorldSupport(player, movement, speed, delta, contacts = [], options: any = {}) {
     return selectBestWorldSupport({
       player,
       terrainConfig: this.terrainConfig,
@@ -1058,6 +1255,7 @@ export class MatchSimulation {
       speed,
       delta,
       contacts,
+      includeWorldProps: options.includeWorldProps !== false,
       getNearbyWorldProps: (position, radius) => this.getNearbyWorldProps(position, radius)
     });
   }

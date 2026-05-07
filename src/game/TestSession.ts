@@ -1,5 +1,9 @@
 import { normalizePlayerInput } from '../protocol/InputProtocol.js';
-import { MatchSimulation, MATCH_TICK_DURATION } from '../sim/MatchSimulation.js';
+import {
+  MatchSimulation,
+  MATCH_TICK_DURATION,
+  normalizeStalkAuthorityMode
+} from '../sim/MatchSimulation.js';
 import {
   ANNOYING_LECTURER_DISPLAY_NAME,
   ANNOYING_LECTURER_SLOT,
@@ -127,6 +131,7 @@ export class TestSession {
   declare mode: any;
   declare simulation: any;
   declare snapshot: any;
+  declare stalkAuthorityMode: any;
   declare staticWorldProps: any[];
   declare storage: any;
   constructor(options: any = {}) {
@@ -134,6 +139,9 @@ export class TestSession {
     this.localSlot = 1;
     this.accumulator = 0;
     this.storage = getSafeStorage(options.storage);
+    this.stalkAuthorityMode = options.stalkAuthorityMode || options.stalkAuthority
+      ? normalizeStalkAuthorityMode(options.stalkAuthorityMode ?? options.stalkAuthority)
+      : undefined;
     this.tuningConfig = loadStoredTuningConfig(this.storage);
     this.snapshot = null;
     this.staticWorldProps = [];
@@ -173,7 +181,8 @@ export class TestSession {
       arenaRadius: testWorld.arenaRadius,
       worldBounds: testWorld.worldBounds,
       worldProps: testWorld.worldProps,
-      creatures: testWorld.creatures
+      creatures: testWorld.creatures,
+      stalkAuthorityMode: this.stalkAuthorityMode
     });
 
     this.snapshot = this.simulation.getSnapshot();
