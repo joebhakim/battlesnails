@@ -1120,6 +1120,108 @@ export function simulateStalkRope({
   }
 }
 
+export function simulateStalkRopeDftl({
+  nodes,
+  previousNodes,
+  incidentNodes = null,
+  incidentPreviousNodes = null,
+  rootWorld,
+  goalWorld,
+  delta,
+  segmentLength = STALK_SEGMENT_LENGTH,
+  gravity = STALK_GRAVITY,
+  damping = STALK_DAMPING,
+  goalPull = STALK_ACTIVE_PULL,
+  turgidity = 0,
+  bendResistance = 0.42,
+  velocityCorrection = 0.82,
+  collision = null
+}) {
+  if (nodes.length === 0 || previousNodes.length === 0) {
+    return;
+  }
+
+  const gravityStep = new THREE.Vector3(0, -gravity * delta * delta, 0);
+  const previousRoot = nodes[0].clone();
+  const collisionScratch = collision ? createCollisionScratch() : null;
+  let incidentCaptured = false;
+  const captureIncidentNodes = () => {
+    if (incidentCaptured) {
+      return;
+    }
+
+    if (incidentNodes) {
+      copyNodesInto(incidentNodes, nodes);
+    }
+    if (incidentPreviousNodes) {
+      copyNodesInto(incidentPreviousNodes, previousNodes);
+    }
+    incidentCaptured = true;
+  };
+
+  previousNodes[0].copy(previousRoot);
+  nodes[0].copy(rootWorld);
+
+  for (let index = 1; index < nodes.length; index += 1) {
+    const current = nodes[index];
+    const previous = previousNodes[index];
+    const velocity = current.clone().sub(previous).multiplyScalar(damping);
+
+    previous.copy(current);
+    current.add(velocity);
+    current.add(gravityStep);
+  }
+
+  const pullAlpha = Math.min(1, goalPull * delta);
+  nodes[nodes.length - 1].lerp(goalWorld, pullAlpha);
+  nodes[0].copy(rootWorld);
+
+  for (let index = 1; index < nodes.length; index += 1) {
+    const parent = nodes[index - 1];
+    const child = nodes[index];
+    const before = child.clone();
+    const deltaVector = child.clone().sub(parent);
+    let distance = deltaVector.length();
+
+    if (distance === 0) {
+      deltaVector.copy(FORWARD);
+      distance = 1;
+    }
+
+    child.copy(parent).addScaledVector(deltaVector, segmentLength / distance);
+    previousNodes[index].addScaledVector(child.clone().sub(before), velocityCorrection);
+
+    if (index >= 2 && bendResistance > 0) {
+      const grandparent = nodes[index - 2];
+      const bendVector = child.clone().sub(grandparent);
+      const bendDistance = bendVector.length();
+      const minimumBendDistance = segmentLength * 2 * bendResistance;
+      if (bendDistance > 0 && bendDistance < minimumBendDistance) {
+        const beforeBend = child.clone();
+        child.copy(grandparent).addScaledVector(bendVector, minimumBendDistance / bendDistance);
+        previousNodes[index].addScaledVector(child.clone().sub(beforeBend), velocityCorrection);
+      }
+    }
+  }
+
+  if (collision) {
+    captureIncidentNodes();
+    applyStalkCollisionConstraints({
+      nodes,
+      previousNodes,
+      rootWorld,
+      ...collision,
+      scratch: collisionScratch
+    });
+  }
+
+  nodes[0].copy(rootWorld);
+  applyTurgidityToNodes(nodes, previousNodes, rootWorld, goalWorld, turgidity);
+  if (!collision) {
+    captureIncidentNodes();
+  }
+}
+
 export function buildStalkSegmentSamples(
   nodes,
   previousNodes,
