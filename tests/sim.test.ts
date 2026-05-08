@@ -1322,6 +1322,22 @@ test('multiplayer win state ignores surviving bots once one human remains', () =
   assert.equal(simulation.getSnapshot().winnerSlot, 1);
 });
 
+test('multiplayer forest test mode keeps running after knockouts for local testing', () => {
+  const simulation = new MatchSimulation({
+    mode: 'multiplayer_forest_test',
+    players: [
+      { slot: 1, profile: 'human', connected: true },
+      { slot: 2, profile: 'human', connected: true }
+    ]
+  });
+
+  simulation.getPlayerState(2).health = 0;
+  simulation.step(MATCH_TICK_DURATION);
+
+  assert.equal(simulation.getSnapshot().phase, 'running');
+  assert.equal(simulation.getSnapshot().winnerSlot, null);
+});
+
 test('bot controller produces dual-stalk hold states when in range', () => {
   const simulation = new MatchSimulation({
     players: [

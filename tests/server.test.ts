@@ -61,7 +61,7 @@ class TestClient {
   }
 }
 
-test('multiplayer server auto-pairs two clients into an online plane room by default', async () => {
+test('multiplayer server auto-pairs two clients into an online forest test room by default', async () => {
   const server = createLocalMultiplayerServer({ port: 0 });
   await server.start();
   const port = server.getPort();
@@ -82,17 +82,20 @@ test('multiplayer server auto-pairs two clients into an online plane room by def
 
   assert.equal(welcomeA.slot, 1);
   assert.equal(welcomeB.slot, 2);
-  assert.equal(welcomeA.options.matchMode, MULTIPLAYER_MATCH_MODE.ONLINE_TEST_PLANE);
-  assert.equal(welcomeA.options.stagePreset, 'plane');
-  assert.equal(matchStartA.options.matchMode, MULTIPLAYER_MATCH_MODE.ONLINE_TEST_PLANE);
-  assert.equal(matchStartA.options.stagePreset, 'plane');
+  assert.equal(welcomeA.options.matchMode, MULTIPLAYER_MATCH_MODE.ONLINE_FOREST_TEST);
+  assert.equal(welcomeA.options.stagePreset, EXPLORER_TERRAIN_PRESET);
+  assert.equal(matchStartA.options.matchMode, MULTIPLAYER_MATCH_MODE.ONLINE_FOREST_TEST);
+  assert.equal(matchStartA.options.stagePreset, EXPLORER_TERRAIN_PRESET);
   assert.equal(matchStartA.snapshot.phase, 'running');
   assert.equal(matchStartB.snapshot.players.length, 2);
   assert.equal('stalks' in matchStartA.snapshot.players[0], false);
   assert.equal(Array.isArray(matchStartA.snapshot.trailCells), true);
   assert.equal(typeof matchStartA.snapshot.trailCellSize, 'number');
-  assert.equal(matchStartA.snapshot.terrain?.preset, 'plane');
+  assert.equal(matchStartA.snapshot.terrain?.preset, EXPLORER_TERRAIN_PRESET);
   assert.equal(matchStartA.snapshot.players.filter((player) => player.profileName === 'bot').length, 0);
+  assert(matchStartA.snapshot.players.every((player) => player.immortal));
+  assert(matchStartA.snapshot.worldProps.length > 0);
+  assert(matchStartA.snapshot.creatures.length > 0);
   assert.equal(matchStartA.snapshot.players.find((player) => player.slot === 1)?.maxHealth, DEFAULT_TUNING_CONFIG.playerMaxHealth);
 
   const dynamicSnapshot = await clientA.nextMessageOfType('snapshot');

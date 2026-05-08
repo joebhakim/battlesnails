@@ -33,6 +33,10 @@ export function evaluateMatchEndState({ mode, players }: any) {
     return null;
   }
 
+  if (mode === 'multiplayer_forest_test') {
+    return null;
+  }
+
   const allPlayers: any[] = Array.from(players.values());
   const livingPlayers = getLivingPlayers(allPlayers);
   const livingHumans = livingPlayers.filter((player) => player.profileName !== 'bot');

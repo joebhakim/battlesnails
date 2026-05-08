@@ -858,7 +858,7 @@ export class Game {
   showMultiplayerSetup() {
     this.ui.showModeSetup({
       title: 'Online Multiplayer',
-      copy: 'Join the two-snail flat-plane test room.',
+      copy: 'Join the two-snail generated forest test room.',
       schema: [],
       values: DEFAULT_MULTIPLAYER_OPTIONS,
       startLabel: 'Join Online',

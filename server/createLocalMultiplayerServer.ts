@@ -6,6 +6,7 @@ import { createTrailCellKey } from '../src/protocol/SnapshotProtocol.js';
 import { BotController } from '../src/sim/BotController.js';
 import { createArenaEnvironment } from '../src/sim/ArenaEnvironment.js';
 import {
+  isForestTestMultiplayerMode,
   isArenaMultiplayerMode,
   MULTIPLAYER_MATCH_MODE,
   normalizeMultiplayerOptions
@@ -205,8 +206,50 @@ export function createLocalMultiplayerServer(options: LocalMultiplayerServerOpti
     };
   }
 
+  function createForestTestMatchConfig(normalizedOptions: any) {
+    const world = createExplorerWorld();
+    const secondStart = createAdventureSecondStart(world);
+
+    return {
+      options: normalizedOptions,
+      mode: 'multiplayer_forest_test',
+      players: [
+        {
+          slot: 1,
+          profile: 'human',
+          connected: true,
+          immortal: true,
+          position: {
+            x: world.playerStart.x,
+            z: world.playerStart.z
+          },
+          rotationY: world.playerStart.rotationY
+        },
+        {
+          slot: 2,
+          profile: 'human',
+          connected: true,
+          immortal: true,
+          position: {
+            x: secondStart.x,
+            z: secondStart.z
+          },
+          rotationY: secondStart.rotationY
+        }
+      ],
+      terrainConfig: world.terrainConfig,
+      arenaRadius: world.worldBounds.radius,
+      worldProps: world.props,
+      creatures: world.creatures
+    };
+  }
+
   function createMatchConfig() {
     const normalizedOptions = normalizeMultiplayerOptions(roomOptions);
+
+    if (isForestTestMultiplayerMode(normalizedOptions)) {
+      return createForestTestMatchConfig(normalizedOptions);
+    }
 
     if (isArenaMultiplayerMode(normalizedOptions)) {
       const environment = createArenaEnvironment(normalizedOptions);
