@@ -361,11 +361,11 @@ function createPolygonPrismCollisionVolumeGeometry(points, halfHeight) {
   return geometry;
 }
 
-function createCollisionGeometry(prop) {
+function createCollisionGeometry(prop, lod = 'near') {
   const shape = prop.collisionShape ?? {};
 
   if (isVisualMeshCollisionShape(shape)) {
-    return createVisualMeshCollisionGeometry(prop);
+    return createVisualMeshCollisionGeometry(prop, { lod });
   }
 
   if (shape.type === 'sphere') {
@@ -487,7 +487,7 @@ function createRockLikeCollisionGeometry(prop, shape) {
   return null;
 }
 
-function createCollisionOverlay(prop) {
+function createCollisionOverlay(prop, lod = 'near') {
   const fillMaterial = new THREE.MeshBasicMaterial({
     color: 0x18dfff,
     transparent: true,
@@ -516,7 +516,7 @@ function createCollisionOverlay(prop) {
       }
     }
   } else {
-    const geometry = createRockLikeCollisionGeometry(prop, prop.collisionShape ?? {}) ?? createCollisionGeometry(prop);
+    const geometry = createRockLikeCollisionGeometry(prop, prop.collisionShape ?? {}) ?? createCollisionGeometry(prop, lod);
     const mesh = new THREE.Mesh(geometry, fillMaterial);
     const edges = new THREE.LineSegments(new THREE.EdgesGeometry(geometry), lineMaterial);
     mesh.renderOrder = 30;
@@ -544,7 +544,9 @@ export function startAssetStudio(game, rawOptions: any = {}) {
   const prop = createStudioProp(selection.prop, options);
   const localPlayerPosition = getLodAnchor(prop, options.lod);
   const renderMode = shouldRenderWorldPropIndividually(prop)
-    ? 'individual'
+    ? options.lod === 'far'
+      ? 'individual-far-proxy'
+      : 'individual'
     : options.lod === 'far'
       ? 'batched-far'
       : 'batched-near';
@@ -577,7 +579,7 @@ export function startAssetStudio(game, rawOptions: any = {}) {
     hideWorldPropLabels(game);
   }
 
-  const collisionOverlay = options.collision ? createCollisionOverlay(prop) : null;
+  const collisionOverlay = options.collision ? createCollisionOverlay(prop, options.lod) : null;
   if (collisionOverlay) {
     game.scene.scene.add(collisionOverlay);
   }

@@ -131,6 +131,8 @@ export class Game {
   declare otherActorViews: any;
   declare worldPropViews: any;
   declare worldPropBatch: any;
+  declare individualWorldPropsReference: any;
+  declare individualWorldProps: any;
   declare creatureViews: any;
   declare audio: any;
   declare assetStudioRestore: any;
@@ -183,6 +185,8 @@ export class Game {
     this.otherActorViews = new Map();
     this.worldPropViews = new Map();
     this.worldPropBatch = null;
+    this.individualWorldPropsReference = null;
+    this.individualWorldProps = [];
     this.creatureViews = new Map();
     this.mouseControls = null;
     this.mobileControls = null;
@@ -479,24 +483,73 @@ export class Game {
     }
   }
 
+  getIndividualWorldProps(worldProps: any[] = []) {
+    if (worldProps === this.individualWorldPropsReference) {
+      return this.individualWorldProps;
+    }
+
+    this.individualWorldPropsReference = worldProps;
+    this.individualWorldProps = worldProps.filter((prop) => shouldRenderWorldPropIndividually(prop));
+    return this.individualWorldProps;
+  }
+
+  isIndividualWorldPropStateVisible(prop, localPlayerPosition = null) {
+    if (!localPlayerPosition) {
+      return true;
+    }
+
+    const dx = prop.position.x - localPlayerPosition.x;
+    const dz = prop.position.z - localPlayerPosition.z;
+    const renderDistance = INDIVIDUAL_WORLD_PROP_RENDER_DISTANCE + (prop.bodyRadius ?? 0);
+    return (dx * dx) + (dz * dz) <= renderDistance * renderDistance;
+  }
+
+  syncIndividualWorldPropViews(worldProps, delta, localPlayerPosition = null) {
+    const desiredIds = new Set();
+    for (const prop of this.getIndividualWorldProps(worldProps)) {
+      if (!this.isIndividualWorldPropStateVisible(prop, localPlayerPosition)) {
+        continue;
+      }
+
+      desiredIds.add(prop.id);
+      let actor = this.worldPropViews.get(prop.id);
+      if (!actor) {
+        actor = new WorldPropActor(prop, { createLabel: false });
+        this.worldPropViews.set(prop.id, actor);
+        this.scene.scene.add(actor.mesh);
+      } else {
+        actor.applyPropState(prop);
+      }
+
+      actor.setBodyVisible(true);
+      actor.mesh.visible = true;
+      actor.update(delta, localPlayerPosition);
+    }
+
+    for (const [id, actor] of this.worldPropViews.entries()) {
+      if (desiredIds.has(id)) {
+        continue;
+      }
+
+      this.scene.scene.remove(actor.mesh);
+      this.worldPropViews.delete(id);
+    }
+  }
+
   syncWorldPropViews(worldProps, delta, localPlayerPosition = null) {
     if (worldProps === this.lastWorldPropsReference) {
-      for (const actor of this.worldPropViews.values()) {
-        actor.mesh.visible = this.isIndividualWorldPropVisible(actor, localPlayerPosition);
-        actor.update(delta, localPlayerPosition);
-      }
+      this.syncIndividualWorldPropViews(worldProps, delta, localPlayerPosition);
       this.worldPropBatch?.update(localPlayerPosition);
       return;
     }
 
     this.lastWorldPropsReference = worldProps;
-    const desiredIndividualIds = new Set();
     const batchEntries = [];
     const batchSignatureParts = [];
 
     for (const prop of worldProps) {
       if (shouldRenderWorldPropIndividually(prop)) {
-        desiredIndividualIds.add(prop.id);
+        batchEntries.push({ prop, farOnly: true });
         continue;
       }
 
@@ -514,34 +567,7 @@ export class Game {
     }
 
     const nextBatchSignature = batchSignatureParts.join('|');
-
-    for (const [id, actor] of this.worldPropViews.entries()) {
-      if (desiredIndividualIds.has(id)) {
-        continue;
-      }
-
-      this.scene.scene.remove(actor.mesh);
-      this.worldPropViews.delete(id);
-    }
-
-    for (const prop of worldProps) {
-      if (!shouldRenderWorldPropIndividually(prop)) {
-        continue;
-      }
-
-      let actor = this.worldPropViews.get(prop.id);
-      if (!actor) {
-        actor = new WorldPropActor(prop, { createLabel: false });
-        this.worldPropViews.set(prop.id, actor);
-        this.scene.scene.add(actor.mesh);
-      } else {
-        actor.applyPropState(prop);
-      }
-
-      actor.setBodyVisible(true);
-      actor.mesh.visible = this.isIndividualWorldPropVisible(actor, localPlayerPosition);
-      actor.update(delta, localPlayerPosition);
-    }
+    this.syncIndividualWorldPropViews(worldProps, delta, localPlayerPosition);
 
     if (nextBatchSignature !== this.worldPropBatchSignature) {
       if (this.worldPropBatch) {
@@ -997,6 +1023,8 @@ export class Game {
       this.worldPropBatch = null;
     }
     this.lastWorldPropsReference = null;
+    this.individualWorldPropsReference = null;
+    this.individualWorldProps = [];
     this.cachedPowerupWorldPropsReference = null;
     this.cachedPowerupWorldProps = [];
     this.worldPropBatchSignature = '';

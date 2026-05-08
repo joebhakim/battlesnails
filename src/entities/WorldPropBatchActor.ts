@@ -4,6 +4,7 @@ import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js
 import { createPropMesh } from './WorldPropActor.js';
 
 const BATCH_CHUNK_SIZE = 340;
+const FAR_BATCH_CHUNK_SIZE = 760;
 const GROUND_DETAIL_DISTANCE = 165;
 const CLUTTER_DETAIL_DISTANCE = 225;
 const TREE_DETAIL_DISTANCE = 330;
@@ -44,8 +45,16 @@ function hashUnit(seed, index) {
   return value - Math.floor(value);
 }
 
-function getChunkKey(position) {
-  return `${Math.floor(position.x / BATCH_CHUNK_SIZE)},${Math.floor(position.z / BATCH_CHUNK_SIZE)}`;
+function getChunkKey(position, chunkSize = BATCH_CHUNK_SIZE) {
+  return `${Math.floor(position.x / chunkSize)},${Math.floor(position.z / chunkSize)}`;
+}
+
+function getVisibilityChunkKey(position, visibilityMode) {
+  if (visibilityMode === 'groundFar' || visibilityMode === 'treeFar' || visibilityMode === 'clutterFar') {
+    return `far:${getChunkKey(position, FAR_BATCH_CHUNK_SIZE)}`;
+  }
+
+  return `detail:${getChunkKey(position)}`;
 }
 
 function getBatchMaterialKey(material) {
@@ -116,6 +125,214 @@ function createFarTreeObject(prop) {
     canopy.position.y = height * 0.34;
     canopy.scale.y = 1.15;
     group.add(canopy);
+  }
+
+  return group;
+}
+
+function createFarMaterial(color, roughness = 0.96) {
+  return new THREE.MeshStandardMaterial({
+    color,
+    roughness,
+    metalness: 0.02,
+    flatShading: true
+  });
+}
+
+function getFarRadius(prop) {
+  return Math.max(
+    0.08,
+    prop.visual?.radius ??
+      prop.visual?.capRadius ??
+      prop.visual?.collisionRadius ??
+      prop.collisionShape?.radius ??
+      prop.collisionShape?.meshRadius ??
+      prop.bodyRadius ??
+      1
+  );
+}
+
+function getFarLength(prop) {
+  const shape = prop.collisionShape ?? {};
+  const shapeLength = Number.isFinite(shape.halfExtents?.x) ? shape.halfExtents.x * 2 : null;
+  return Math.max(
+    0.12,
+    prop.visual?.length ??
+      shapeLength ??
+      getFarRadius(prop) * 2
+  );
+}
+
+function getFarWidth(prop) {
+  const shape = prop.collisionShape ?? {};
+  const shapeWidth = Number.isFinite(shape.halfExtents?.z) ? shape.halfExtents.z * 2 : null;
+  return Math.max(
+    0.08,
+    prop.visual?.width ??
+      shapeWidth ??
+      getFarRadius(prop) * 1.2
+  );
+}
+
+function getFarHeight(prop) {
+  const shape = prop.collisionShape ?? {};
+  return Math.max(
+    0.08,
+    prop.visual?.height ??
+      ((shape.halfHeight ?? shape.radius ?? prop.bodyRadius ?? getFarRadius(prop)) * 2)
+  );
+}
+
+function createFarEllipsoid(radius, height, color, roughness = 0.96) {
+  const mesh = new THREE.Mesh(
+    new THREE.IcosahedronGeometry(radius, 0),
+    createFarMaterial(color, roughness)
+  );
+  mesh.scale.y = Math.max(0.18, height / Math.max(0.001, radius * 2));
+  return mesh;
+}
+
+function createFarHorizontalCylinder(length, radius, color, radialSegments = 5) {
+  const mesh = new THREE.Mesh(
+    new THREE.CylinderGeometry(radius, radius, length, radialSegments),
+    createFarMaterial(color, 0.98)
+  );
+  mesh.rotation.z = Math.PI / 2;
+  return mesh;
+}
+
+function createFarClutterObject(prop) {
+  const radius = getFarRadius(prop);
+  const height = getFarHeight(prop);
+  const group = new THREE.Group();
+
+  switch (prop.kind) {
+    case 'ant_trail': {
+      const road = new THREE.Mesh(
+        new THREE.BoxGeometry(getFarLength(prop), Math.max(0.025, height * 0.18), getFarWidth(prop)),
+        createFarMaterial(0x2c211b, 0.99)
+      );
+      group.add(road);
+      break;
+    }
+    case 'bamboo_stick':
+      group.add(createFarHorizontalCylinder(getFarLength(prop), Math.max(radius, 0.08), 0x8f9857, 5));
+      break;
+    case 'fallen_branch':
+    case 'root_branch':
+    case 'rotting_log':
+    case 'twig':
+      group.add(createFarHorizontalCylinder(getFarLength(prop), Math.max(radius, 0.08), prop.visual?.color ?? 0x4a3020, 5));
+      break;
+    case 'dew_bead':
+      group.add(createFarEllipsoid(radius, radius * 1.7, 0xa6e7ff, 0.35));
+      break;
+    case 'dew_pool': {
+      const pool = new THREE.Mesh(
+        new THREE.CylinderGeometry(radius, radius * 0.94, Math.max(0.035, height), 8),
+        createFarMaterial(0x7fdcff, 0.35)
+      );
+      group.add(pool);
+      break;
+    }
+    case 'forest_rock':
+    case 'gravel':
+    case 'rock':
+    case 'rock_cluster':
+    case 'talus_rock':
+      group.add(new THREE.Mesh(
+        new THREE.DodecahedronGeometry(radius, 0),
+        createFarMaterial(prop.visual?.color ?? 0x686761, 0.98)
+      ));
+      break;
+    case 'lichen_tower': {
+      const trunk = new THREE.Mesh(
+        new THREE.CylinderGeometry(radius * 0.68, radius, height, 5),
+        createFarMaterial(prop.visual?.color ?? 0xa7b86a, 0.97)
+      );
+      const cap = createFarEllipsoid(radius * 1.25, radius * 1.15, 0xd2d89a, 0.94);
+      cap.position.y = height * 0.46;
+      group.add(trunk, cap);
+      break;
+    }
+    case 'moss_cushion': {
+      const cushion = createFarEllipsoid(radius, radius * 0.68, 0x4d8f4f, 0.99);
+      cushion.position.y = -radius * 0.16;
+      group.add(cushion);
+      break;
+    }
+    case 'mushroom': {
+      const capRadius = prop.visual?.capRadius ?? radius;
+      const stemHeight = prop.visual?.stemHeight ?? height * 0.72;
+      const capThickness = prop.visual?.capThickness ?? Math.max(0.08, capRadius * 0.35);
+      const stem = new THREE.Mesh(
+        new THREE.CylinderGeometry(capRadius * 0.16, capRadius * 0.22, stemHeight, 5),
+        createFarMaterial(0xd8c7a0, 0.94)
+      );
+      stem.position.y = -height * 0.22;
+      const cap = createFarEllipsoid(capRadius, capThickness, prop.visual?.color ?? 0xb64d48, 0.84);
+      cap.position.y = height * 0.28;
+      group.add(stem, cap);
+      break;
+    }
+    case 'salt_cone': {
+      const cone = new THREE.Mesh(
+        new THREE.ConeGeometry(radius, height, 6),
+        createFarMaterial(0xe8e3cc, 0.82)
+      );
+      group.add(cone);
+      break;
+    }
+    case 'sharp_grit':
+      group.add(new THREE.Mesh(
+        new THREE.TetrahedronGeometry(radius * 1.25, 0),
+        createFarMaterial(prop.visual?.color ?? 0xc8bd98, 0.9)
+      ));
+      break;
+    case 'shell_shard': {
+      const shard = new THREE.Mesh(
+        new THREE.BoxGeometry(getFarLength(prop), Math.max(0.025, height * 0.5), getFarWidth(prop)),
+        createFarMaterial(prop.visual?.color ?? 0xd6c8a2, 0.86)
+      );
+      shard.rotation.z = 0.16;
+      group.add(shard);
+      break;
+    }
+    case 'shrub': {
+      const trunk = new THREE.Mesh(
+        new THREE.CylinderGeometry(radius * 0.045, radius * 0.075, height * 0.62, 4),
+        createFarMaterial(0x45301f, 0.98)
+      );
+      trunk.position.y = -height * 0.14;
+      const leafA = createFarEllipsoid(radius * 0.72, height * 0.46, prop.visual?.color ?? 0x4f6f39, 0.95);
+      leafA.position.set(-radius * 0.12, height * 0.18, 0);
+      const leafB = createFarEllipsoid(radius * 0.58, height * 0.38, 0x5b773d, 0.95);
+      leafB.position.set(radius * 0.32, height * 0.04, radius * 0.14);
+      group.add(trunk, leafA, leafB);
+      break;
+    }
+    case 'soft_food': {
+      const food = new THREE.Mesh(
+        new THREE.CylinderGeometry(radius, radius * 0.86, Math.max(0.05, height), 7),
+        createFarMaterial(prop.visual?.color ?? 0x9f6b38, 0.98)
+      );
+      group.add(food);
+      break;
+    }
+    case 'sprout': {
+      const stem = new THREE.Mesh(
+        new THREE.CylinderGeometry(radius * 0.7, radius * 1.2, height, 4),
+        createFarMaterial(0x35632e, 0.94)
+      );
+      const leaf = createFarEllipsoid(Math.max(radius * 3.2, height * 0.14), Math.max(radius, height * 0.05), prop.visual?.color ?? 0x4f8b3d, 0.92);
+      leaf.position.y = height * 0.32;
+      leaf.rotation.z = 0.52;
+      group.add(stem, leaf);
+      break;
+    }
+    default:
+      group.add(createFarEllipsoid(radius, height, prop.visual?.color ?? 0x777777, 0.96));
+      break;
   }
 
   return group;
@@ -282,7 +499,15 @@ function createSimplifiedGroundCoverGeometry(prop) {
       : prop.position.y + center.y + relief * 0.12 + jitter;
     positions.push(x, y, z);
     const color = (palette[Math.floor(hashUnit(seed + 31, vertexIndex) * palette.length)] ?? palette[0]).clone();
-    color.offsetHSL(0, 0, (hashUnit(seed + 53, vertexIndex) - 0.5) * 0.1);
+    const grain = (
+      Math.sin(x * 0.071 + z * 0.113 + seed * 0.0009) * 0.55 +
+      Math.cos(x * 0.137 - z * 0.059 + vertexIndex * 1.73) * 0.45
+    );
+    color.offsetHSL(
+      (hashUnit(seed + 67, vertexIndex) - 0.5) * 0.018,
+      0.04 + hashUnit(seed + 73, vertexIndex) * 0.08,
+      grain * 0.075 + (hashUnit(seed + 53, vertexIndex) - 0.5) * 0.14
+    );
     colors.push(color.r, color.g, color.b);
   }
 
@@ -365,7 +590,8 @@ export class WorldPropBatchActor {
         farMeshes: [],
         clutterDetailMeshes: [],
         treeDetailMeshes: [],
-        treeFarMeshes: []
+        treeFarMeshes: [],
+        clutterFarMeshes: []
       };
       this.chunkRecords.set(chunkKey, record);
     } else {
@@ -389,6 +615,8 @@ export class WorldPropBatchActor {
       record.treeDetailMeshes.push(mesh);
     } else if (visibilityMode === 'treeFar') {
       record.treeFarMeshes.push(mesh);
+    } else if (visibilityMode === 'clutterFar') {
+      record.clutterFarMeshes.push(mesh);
     }
   }
 
@@ -410,60 +638,63 @@ export class WorldPropBatchActor {
   rebuild(entries) {
     const buckets = new Map();
 
-    for (const { prop, actor = null } of entries) {
-      const chunkKey = getChunkKey(prop.position);
+    for (const { prop, actor = null, farOnly = false } of entries) {
       const detailVisibilityMode = getBatchVisibilityMode(prop);
-      const body = actor?.body ?? createPropMesh(prop);
+      const body = farOnly ? null : actor?.body ?? createPropMesh(prop);
       const root = actor?.mesh ?? body;
 
-      if (actor) {
-        root.updateWorldMatrix(true, true);
-      } else {
-        root.position.set(prop.position.x, prop.position.y, prop.position.z);
-        root.rotation.y = prop.rotationY ?? 0;
-        root.updateWorldMatrix(true, true);
+      if (body) {
+        if (actor) {
+          root.updateWorldMatrix(true, true);
+        } else {
+          root.position.set(prop.position.x, prop.position.y, prop.position.z);
+          root.rotation.y = prop.rotationY ?? 0;
+          root.updateWorldMatrix(true, true);
+        }
+
+        body.traverse((node) => {
+          if (!node.isMesh || !node.geometry) {
+            return;
+          }
+
+          const material = getMeshMaterial(node);
+          if (!material || material.transparent || material.opacity < 0.999) {
+            this.skippedMeshCount += 1;
+            return;
+          }
+
+          const materialKey = getBatchMaterialKey(material);
+          const visibilityMode = detailVisibilityMode;
+          const chunkKey = getVisibilityChunkKey(prop.position, visibilityMode);
+          const key = `${visibilityMode}:${chunkKey}:${materialKey}`;
+          const bucket = this.getBucket(
+            buckets,
+            key,
+            () => createBatchMaterial(material),
+            chunkKey,
+            prop.position,
+            visibilityMode
+          );
+
+          const geometry = normalizeGeometryForBatch(node, material);
+          if (!geometry) {
+            this.skippedMeshCount += 1;
+            return;
+          }
+
+          bucket.geometries.push(geometry);
+          this.sourceMeshCount += 1;
+        });
+
+        if (!actor) {
+          disposeObjectResources(body);
+        }
       }
 
-      body.traverse((node) => {
-        if (!node.isMesh || !node.geometry) {
-          return;
-        }
-
-        const material = getMeshMaterial(node);
-        if (!material || material.transparent || material.opacity < 0.999) {
-          this.skippedMeshCount += 1;
-          return;
-        }
-
-        const materialKey = getBatchMaterialKey(material);
-        const visibilityMode = detailVisibilityMode;
-        const key = `${visibilityMode}:${chunkKey}:${materialKey}`;
-        const bucket = this.getBucket(
-          buckets,
-          key,
-          () => createBatchMaterial(material),
-          chunkKey,
-          prop.position,
-          visibilityMode
-        );
-
-        const geometry = normalizeGeometryForBatch(node, material);
-        if (!geometry) {
-          this.skippedMeshCount += 1;
-          return;
-        }
-
-        bucket.geometries.push(geometry);
-        this.sourceMeshCount += 1;
-      });
-
-      if (!actor) {
-        disposeObjectResources(body);
-      }
-
-      if (GROUND_COVER_KINDS.has(prop.kind)) {
+      if (!farOnly && GROUND_COVER_KINDS.has(prop.kind)) {
         const geometry = createSimplifiedGroundCoverGeometry(prop);
         if (geometry) {
+          const chunkKey = getVisibilityChunkKey(prop.position, 'groundFar');
           const key = `groundFar:${chunkKey}`;
           const bucket = this.getBucket(
             buckets,
@@ -477,7 +708,7 @@ export class WorldPropBatchActor {
         }
       }
 
-      if (TREE_LOD_KINDS.has(prop.kind)) {
+      if (!farOnly && TREE_LOD_KINDS.has(prop.kind)) {
         const farTree = createFarTreeObject(prop);
         farTree.position.set(prop.position.x, prop.position.y, prop.position.z);
         farTree.rotation.y = prop.rotationY ?? 0;
@@ -489,6 +720,7 @@ export class WorldPropBatchActor {
 
           const material = getMeshMaterial(node);
           const materialKey = getBatchMaterialKey(material);
+          const chunkKey = getVisibilityChunkKey(prop.position, 'treeFar');
           const bucket = this.getBucket(
             buckets,
             `treeFar:${chunkKey}:${materialKey}`,
@@ -503,6 +735,35 @@ export class WorldPropBatchActor {
           }
         });
         disposeObjectResources(farTree);
+      }
+
+      if (!GROUND_COVER_KINDS.has(prop.kind) && !TREE_LOD_KINDS.has(prop.kind) && !ALWAYS_RENDER_KINDS.has(prop.kind)) {
+        const farClutter = createFarClutterObject(prop);
+        farClutter.position.set(prop.position.x, prop.position.y, prop.position.z);
+        farClutter.rotation.y = prop.rotationY ?? 0;
+        farClutter.updateWorldMatrix(true, true);
+        farClutter.traverse((node: any) => {
+          if (!node.isMesh || !node.geometry) {
+            return;
+          }
+
+          const material = getMeshMaterial(node);
+          const materialKey = getBatchMaterialKey(material);
+          const chunkKey = getVisibilityChunkKey(prop.position, 'clutterFar');
+          const bucket = this.getBucket(
+            buckets,
+            `clutterFar:${chunkKey}:${materialKey}`,
+            () => createBatchMaterial(material),
+            chunkKey,
+            prop.position,
+            'clutterFar'
+          );
+          const geometry = normalizeGeometryForBatch(node, material);
+          if (geometry) {
+            bucket.geometries.push(geometry);
+          }
+        });
+        disposeObjectResources(farClutter);
       }
     }
 
@@ -529,7 +790,8 @@ export class WorldPropBatchActor {
         bucket.visibilityMode === 'groundFar' ||
         bucket.visibilityMode === 'clutterDetail' ||
         bucket.visibilityMode === 'treeDetail' ||
-        bucket.visibilityMode === 'treeFar'
+        bucket.visibilityMode === 'treeFar' ||
+        bucket.visibilityMode === 'clutterFar'
       ) {
         const record = this.getChunkRecord(bucket.chunkKey, bucket.position);
         this.addDistanceMesh(record, bucket.visibilityMode, mesh);
@@ -585,6 +847,9 @@ export class WorldPropBatchActor {
       }
       for (const mesh of record.clutterDetailMeshes) {
         mesh.visible = showClutterDetail;
+      }
+      for (const mesh of record.clutterFarMeshes) {
+        mesh.visible = !showClutterDetail;
       }
       for (const mesh of record.treeDetailMeshes) {
         mesh.visible = showTreeDetail;

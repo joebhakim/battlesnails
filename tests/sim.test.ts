@@ -135,6 +135,46 @@ test('powerup props mutate snail stats and leave the world snapshot', () => {
   assert(snapshot.events.some((event) => event.type === 'powerup' && event.powerupType === 'dew'));
 });
 
+test('removed world props leave spatial queries without rebuilding the full index', () => {
+  const simulation = new MatchSimulation({
+    players: [
+      { slot: 1, profile: 'human', connected: true, position: { x: 0, z: 6 }, rotationY: Math.PI }
+    ],
+    worldProps: [
+      {
+        id: 'wide-dew',
+        kind: 'dew_bead',
+        displayName: 'Wide Dew',
+        position: { x: 0, z: 6 },
+        bodyRadius: 20,
+        blocking: false,
+        climbable: false,
+        collisionShape: { type: 'sphere', radius: 20 },
+        powerup: { type: 'dew', amount: 5, label: 'Wide Dew' }
+      },
+      {
+        id: 'near-grit',
+        kind: 'sharp_grit',
+        displayName: 'Near Grit',
+        position: { x: 18, z: 6 },
+        bodyRadius: 1,
+        blocking: false,
+        climbable: false,
+        collisionShape: { type: 'sphere', radius: 1 },
+        powerup: { type: 'grit', amount: 3, label: 'Near Grit' }
+      }
+    ]
+  });
+
+  assert(simulation.getNearbyWorldProps({ x: 0, z: 6 }, 2).some((prop) => prop.id === 'wide-dew'));
+
+  const removed = simulation.removeWorldPropById('wide-dew');
+
+  assert.equal(removed?.id, 'wide-dew');
+  assert.equal(simulation.getNearbyWorldProps({ x: 0, z: 6 }, 40).some((prop) => prop.id === 'wide-dew'), false);
+  assert.equal(simulation.getNearbyWorldProps({ x: 18, z: 6 }, 4).some((prop) => prop.id === 'near-grit'), true);
+});
+
 test('jump raises the player above ground in the shared simulation', () => {
   const simulation = new MatchSimulation();
   settleSimulation(simulation);

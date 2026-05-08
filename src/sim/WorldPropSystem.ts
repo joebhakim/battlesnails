@@ -6,7 +6,7 @@ import {
 } from '../entities/VisualCollisionMesh.js';
 import { createTerrainPosition, getTerrainHeight, type TerrainConfig } from '../world/Terrain.js';
 import { estimateTerrainBodyClearance } from '../world/TerrainClearance.js';
-import { createSpatialIndex, querySpatialIndex } from './SpatialIndex.js';
+import { createSpatialIndex, querySpatialIndex, removeSpatialIndexItem } from './SpatialIndex.js';
 import {
   cloneCollisionShape,
   getCollisionShapeHalfHeight,
@@ -70,6 +70,19 @@ export function queryWorldPropSpatialIndex(
     cellSize,
     getId: (prop) => prop.id,
     getPosition: (prop) => prop.position,
+    getRadius: getWorldPropSpatialRadius
+  });
+}
+
+export function removeWorldPropFromSpatialIndex(
+  cells: Map<string, any[]> | null | undefined,
+  prop: any,
+  cellSize = WORLD_PROP_SPATIAL_CELL_SIZE
+) {
+  removeSpatialIndexItem(cells, prop, {
+    cellSize,
+    getId: (candidate) => candidate.id,
+    getPosition: (candidate) => candidate.position,
     getRadius: getWorldPropSpatialRadius
   });
 }

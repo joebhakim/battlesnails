@@ -97,3 +97,43 @@ export function querySpatialIndex<T>(
 
   return nearby;
 }
+
+export function removeSpatialIndexItem<T>(
+  cells: Map<string, T[]> | null | undefined,
+  item: T,
+  options: SpatialIndexOptions<T>
+) {
+  if (!cells || cells.size === 0 || !item) {
+    return;
+  }
+
+  const safeCellSize = Math.max(1, options.cellSize);
+  const position = options.getPosition(item);
+  const radius = Math.max(0, options.getRadius(item));
+  const id = options.getId(item);
+  const minCellX = quantizeSpatialCoord(position.x - radius, safeCellSize);
+  const maxCellX = quantizeSpatialCoord(position.x + radius, safeCellSize);
+  const minCellZ = quantizeSpatialCoord(position.z - radius, safeCellSize);
+  const maxCellZ = quantizeSpatialCoord(position.z + radius, safeCellSize);
+
+  for (let cellX = minCellX; cellX <= maxCellX; cellX += 1) {
+    for (let cellZ = minCellZ; cellZ <= maxCellZ; cellZ += 1) {
+      const key = createCellKey(cellX, cellZ);
+      const bucket = cells.get(key);
+      if (!bucket) {
+        continue;
+      }
+
+      for (let index = bucket.length - 1; index >= 0; index -= 1) {
+        const candidate = bucket[index];
+        if (candidate === item || options.getId(candidate) === id) {
+          bucket.splice(index, 1);
+        }
+      }
+
+      if (bucket.length === 0) {
+        cells.delete(key);
+      }
+    }
+  }
+}

@@ -35,7 +35,8 @@ import {
   createWorldPropObstacles,
   createWorldPropSpatialIndex,
   normalizeWorldProp,
-  queryWorldPropSpatialIndex
+  queryWorldPropSpatialIndex,
+  removeWorldPropFromSpatialIndex
 } from './WorldPropSystem.js';
 import {
   applySupportToPlayer,
@@ -1291,7 +1292,7 @@ export class MatchSimulation {
     }
 
     const [prop] = this.worldProps.splice(index, 1);
-    this.rebuildWorldPropSpatialIndex();
+    removeWorldPropFromSpatialIndex(this.worldPropSpatialIndex, prop, this.worldPropSpatialCellSize);
     return prop;
   }
 
